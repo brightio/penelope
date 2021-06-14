@@ -397,7 +397,7 @@ class MainMenu(cmd.Cmd):
 		#	print(thread)
 
 	def do_SET(self, line):
-		"""Set options. When invoked without paramaters it shows current options"""
+		"""Set option values. When invoked without parameters it shows current option values"""
 		if not line:
 			for k,v in options.__dict__.items():
 				spaces = 20 - len(k) # I know I can do it better
@@ -1535,8 +1535,8 @@ misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="st
 
 debug=parser.add_argument_group("Debug")
 debug.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
-debug.add_argument("-NP", "--no-python", help="Simulate python absense on target", action="store_true")
-debug.add_argument("-NB", "--no-bash", help="Simulate bash absense on target", action="store_true")
+debug.add_argument("-NP", "--no-python", help="Simulate python absence on target", action="store_true")
+debug.add_argument("-NB", "--no-bash", help="Simulate bash absence on target", action="store_true")
 
 args=[] if not __name__=="__main__" else None
 parser.parse_args(args,options)
