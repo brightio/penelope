@@ -1442,9 +1442,18 @@ class Interfaces:
 
 	@property
 	def list(self):
-		output=subprocess.check_output(['ip','a']).decode()
-		interfaces=re.findall(r'(?m)(?<=^ {4}inet )([^ /]*).* ([^ ]*)$',output)
-		return {i[1]:i[0] for i in interfaces}
+		if OS == 'Linux':
+			output=subprocess.check_output(['ip','a']).decode()
+			interfaces=re.findall(r'(?m)(?<=^ {4}inet )([^ /]*).* ([^ ]*)$',output)
+			return {i[1]:i[0] for i in interfaces}
+
+		elif OS == 'Darwin':
+			_list=dict()
+			output=re.sub('\n\s',' ',subprocess.check_output(['ifconfig']).decode())
+			for line in output.splitlines():
+				if result:=re.search('^([^:]*).*inet ([^ ]*)',line):
+					_list[result[1]]=result[2]
+			return _list
 
 	@property
 	def list_all(self):
