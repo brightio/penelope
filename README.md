@@ -12,8 +12,11 @@ Among the main features are:
 - Spawn backup shells
 - Multiple sessions
 - Multiple listeners
-- Can be imported by exploits and get shell on the same terminal.
+- Can be imported by exploits and get shell on the same terminal (see [extras](#extras))
 
+Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`  
+  
+It supports Windows shells but autoupgrade is not implemented yet. However it can accept PTY shells from the excellent project [ConPtyShell](https://github.com/antonioCoco/ConPtyShell) of [@antonioCoco](https://github.com/antonioCoco). Autoresize of PTY is implemented.
 ## Sample basic usage
 ```
 penelope.py                   # Listening for reverse shells on 0.0.0.0:4444
@@ -74,8 +77,8 @@ Misc:
 
 Debug:
   -d, --debug           Show debug messages
-  -NP, --no-python      Simulate python absense on target
-  -NB, --no-bash        Simulate bash absense on target
+  -NP, --no-python      Simulate python absence on target
+  -NB, --no-bash        Simulate bash absence on target
 ```
 
 ## Menu options
@@ -142,24 +145,25 @@ DEBUG
   Open debug console
 
 SET [<param> <value>]
-  Set options. When invoked without paramaters it shows current options
+  Set options. When invoked without parameters it shows current options
 
 exit|quit|q|Ctrl+D
   Exit penelope
 ```
 
-## Bonus
+## Extras
 
 There are also included two sample exploit simulation scripts to demonstrate how penelope can be imported and get shell on the same terminal. Furthermore, one bash script is included that automatically upgrades Unix shells to PTY using xdotool.
 
 ## TODO
 
 ### Features
-* currenly download/upload/spawn/upgrade commands are supported only on Unix shells.
+* currently download/upload/spawn/upgrade commands are supported only on Unix shells. Will implement those commands for Windows shells too.
 * port forwarding
 * persistence
 * edit command: open the remote file locally, make changes and upon saving, upload it to target
 * ability to specify a list of commands to run automatically on target and/or the main menu
+* an option switch for disable all logging, not only sessions.
 * execute a local script on target and get the output on a local file
 * main menu autocompletion for short commands
 * download/upload progress bar
@@ -178,3 +182,6 @@ There are also included two sample exploit simulation scripts to demonstrate how
 * emojis don't appear on mate-terminal (parrot OS)
 * download command: path links are not clickable on qterminal (Kali Linux)
 * penelope menu commands and PTY autoresize operate on the same socket. This could be an advantage but it has a side effect that for example if nano is open on target, then detaching the session and attempt a download, penelope copes with that by sending Ctrl-Z -> Ctrl-E -> Ctrl-U. Then must run fg to get the process back. Maybe consider to spawn extra socket for controling the session in the future. However, if before executing a menu command, the target's terminal if left on a clear state, then there is no problem.
+### Thanks to
+* [Cristian Grigoriu - @crgr](https://github.com/crgr) for inspiring me to automate the PTY upgrade process. This is how this project was born.
+* [Paul Taylor - @bao7uo](https://github.com/bao7uo) for advising me that penelope should not be shipped without the ability to connect to a bind shell.
