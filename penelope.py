@@ -1156,7 +1156,7 @@ class Session:
             token = str(uuid.uuid4())
 
             cmd = (f'export TERM=xterm-256color PTY="import pty; pty.spawn(\'/bin/bash\')";'
-                   f'{{ python3 -c "$PTY" || python -c "$PTY"; }} 2>/dev/null ; if [ $? -eq 127 ];'
+                   f'{{ script -q /dev/null || python3 -c "$PTY" || python -c "$PTY"; }} 2>/dev/null ; if [ $? -eq 127 ];'
                    f'then echo {token}; else exit 0; fi')
 
             if options.no_python:
