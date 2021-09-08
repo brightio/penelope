@@ -1,5 +1,7 @@
 # penelope
 
+Compatible with Python>=3.6
+
 Penelope is an advanced shell handler. Its main aim is to replace netcat as shell catcher during exploiting RCE vulnerabilities.
 It works on Linux and macOS and the only requirement is Python3. It is one script without 3rd party dependencies and hopefully it will stay that way.
 
