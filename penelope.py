@@ -881,10 +881,10 @@ class Session:
 
 	def determine(self):
 		history=' export HISTFILE=/dev/null;' if options.no_history else ''
-		cmd=f' export HISTCONTROL=ignoreboth;{history} echo $((1*1000+3*100+3*10+7))`tty`\n'
+		cmd=f' export HISTCONTROL=ignoreboth;{history} echo $((1*1000+3*100+3*10+7))`tty`'
 		outcome=b'1337'
 
-		response=self.exec(cmd, expect=(cmd.encode(),outcome,b"Windows PowerShell"))
+		response=self.exec(cmd+'\n', expect=(cmd.encode(),outcome,b"Windows PowerShell"))
 
 		if r:=re.match(rf"(Microsoft Windows \[Version (.*)\].*){re.escape(cmd)}".encode(),
 				response,re.DOTALL): #cmd
