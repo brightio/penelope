@@ -146,6 +146,8 @@ class MainMenu(cmd.Cmd):
 
 	def do_help(self, line):
 		"""Show menu help or help about specific command"""
+		commands=[]
+
 		if line:
 			for command in self.commands:
 				if re.split(' |\|',command)[0]==line:
@@ -156,7 +158,7 @@ class MainMenu(cmd.Cmd):
 		else:
 			commands=self.commands
 
-		for command in self.commands:
+		for command in commands:
 			print('\n'+paint(command,'green'))
 			command=re.split(' |\|',command)[0]
 			help_text=getattr(self, f"do_{command}").__doc__
