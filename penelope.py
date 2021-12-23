@@ -782,16 +782,6 @@ class Session:
 		self.lock=threading.Lock()
 		self.control=ControlPipe()
 
-		self.directory=options.BASEDIR/self.name
-
-		if not options.no_log:
-			self.directory.mkdir(parents=True,exist_ok=True)
-			self.logpath=self.directory/f"{self.name}.log"
-			newlog=not self.logpath.exists()
-			self.logfile=open(self.logpath,'ab',buffering=0)
-			if not options.no_timestamps and newlog:
-				self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ",'magenta')).encode())
-
 		self.determine()
 
 		if self:
@@ -803,6 +793,14 @@ class Session:
 			core.checkables.add(self)
 
 			logger.info(f"Got {self.source} shell from {OSes[self.OS]} {paint(self.name,'white','RED')}{paint('','green',reset=False)} 💀 - Assigned SessionID {paint('<'+str(self.id)+'>','yellow')}")
+
+			self.directory=options.BASEDIR/self.name
+			if not options.no_log:
+				self.directory.mkdir(parents=True,exist_ok=True)
+				self.logpath=self.directory/f"{self.name}.log"
+				self.logfile=open(self.logpath,'ab',buffering=0)
+				if not options.no_timestamps and not self.logpath.exists():
+					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ",'magenta')).encode())
 
 			if options.single_session and self.listener:
 				self.listener.stop()
