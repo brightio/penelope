@@ -886,7 +886,7 @@ class Session:
 
 		response=self.exec(cmd+'\n', expect=(cmd.encode(),outcome,b"Windows PowerShell"))
 
-		if r:=re.match(rf"(Microsoft Windows \[Version (.*)\].*){re.escape(cmd)}".encode(),
+		if r:=re.search(rf"(Microsoft Windows \[Version (.*)\].*){re.escape(cmd)}".encode(),
 				response,re.DOTALL): #cmd
 			self.OS='Windows'
 			self.type='Basic'
