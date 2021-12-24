@@ -76,7 +76,7 @@ class MainMenu(cmd.Cmd):
 			"history",
 			"help [command]",
 			"DEBUG",
-			"SET [param, [value]]",
+			"SET [option, [value]]",
 			"exit|quit|q|Ctrl+D"
 		]
 
@@ -1558,7 +1558,7 @@ log.add_argument("-T", "--no-timestamps", help="Do not include timestamps on log
 
 misc=parser.add_argument_group("Misc")
 misc.add_argument("-H", "--no-history", help="Disable shell history on target", action="store_true")
-misc.add_argument("-P", "--plain", help="Just land to the menu", action="store_true")
+misc.add_argument("-P", "--plain", help="Just land to the main menu", action="store_true")
 misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
 misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
 misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")

@@ -70,7 +70,7 @@ Logging:
 
 Misc:
   -H, --no-history      Disable shell history on target
-  -P, --plain           Just land to the menu
+  -P, --plain           Just land to the main menu
   -S, --single-session  Accommodate only the first created session
   -C, --no-attach       Disable auto attaching sessions upon creation
   -U, --no-upgrade      Do not upgrade shells
@@ -144,8 +144,8 @@ help [command]
 DEBUG
   Open debug console
 
-SET [<param> <value>]
-  Set options. When invoked without parameters it shows current options
+SET [option, [value]]
+  Set option values. When invoked without parameters it shows current option values
 
 exit|quit|q|Ctrl+D
   Exit penelope
