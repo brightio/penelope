@@ -27,6 +27,7 @@ import cmd
 import code
 import uuid
 import time
+import json
 import errno
 import shlex
 import select
@@ -75,7 +76,7 @@ class MainMenu(cmd.Cmd):
 			"history",
 			"help [command]",
 			"DEBUG",
-			"SET [<param> <value>]",
+			"SET [param, [value]]",
 			"exit|quit|q|Ctrl+D"
 		]
 
@@ -401,20 +402,37 @@ class MainMenu(cmd.Cmd):
 	def do_SET(self, line):
 		"""Set option values. When invoked without parameters it shows current option values"""
 		if not line:
+			column1_length = len(max(options.__dict__, key=len)) + 4
 			for k,v in options.__dict__.items():
-				spaces = 20 - len(k) # I know I can do it better
-				print(f"{paint(k,'cyan')}{' '*spaces}{paint(v,'yellow')}")
+				if isinstance(v, (list, dict)):
+					print(f"{paint(k, 'cyan')}\n{paint(json.dumps(v, indent=4), 'yellow')}")
+				else:
+					spaces = column1_length - len(k)
+					print(f"{paint(k, 'cyan')}{' '*spaces}{paint(v, 'yellow')}")
 		else:
 			try:
-				key,value=line.split(" ")
-				cmd=f'options.{key}={value}'
-				exec(cmd)
-			except (ValueError,NameError,SyntaxError):
-				cmdlogger.error("Invalid OPTION - VALUE pair")
-				self.onecmd("help set")
-				return False
-			else:
-				cmdlogger.info(f"{key} set to {value}")
+				args=line.split(" ", 1)
+				param=args[0]
+				if len(args) == 1:
+					value = getattr(options, param)
+					if isinstance(value, (list, dict)):
+						value = json.dumps(value, indent=4)
+					print(f"{paint(value, 'yellow')}")
+				else:
+					new_value=args[1]
+					orig_var_type = type(getattr(options, param)).__name__
+					new_var_type = type(eval(new_value)).__name__
+					if orig_var_type == new_var_type:
+						exec(f'options.{param}={new_value}')
+						cmdlogger.info(f"'{param}' option set to: {paint(getattr(options, param), 'yellow')}")
+					else:
+						cmdlogger.error(f"Wrong value type: Expect <{orig_var_type}>, not <{new_var_type}>")
+
+			except AttributeError:
+				cmdlogger.error("No such option")
+
+			except Exception as e:
+				cmdlogger.error(f"{type(e).__name__}: {e}")
 
 	def default(self, line):
 		if line in ['q','quit']:
