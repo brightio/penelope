@@ -1477,6 +1477,7 @@ class Interfaces:
 	def list_all(self):
 		return [item for item in list(self.list.keys())+list(self.list.values())]
 
+
 class Color:
 	colors=('black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white')
 	codes={'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
@@ -1491,6 +1492,7 @@ class Color:
 		prefix=__class__.escape(code_sequence) if code_sequence else ''
 		suffix=__class__.escape(__class__.codes['RESET']) if prefix and reset else ''
 		return f"{prefix}{text}{suffix}"
+
 
 class CustomFormatter(logging.Formatter):
 	TEMPLATES={
@@ -1521,13 +1523,14 @@ def ControlC(num, stack):
 
 
 class Options:
-	log_levels={"silent":logging.WARNING,"extra_silent":logging.CRITICAL,"debug":logging.DEBUG}
+	log_levels={"silent":'WARNING', "extra_silent":'CRITICAL', "debug":'DEBUG'}
 
 	def __setattr__(self, name, value):
 		if level:=__class__.log_levels.get(name):
-			level=level if value else logging.INFO
-			logging.getLogger(__program__).setLevel(level)
+			level = level if value else 'INFO'
+			logging.getLogger(__program__).setLevel(getattr(logging, level))
 		self.__dict__[name] = value
+
 
 options=Options()
 
@@ -1616,6 +1619,7 @@ options.BASEDIR.mkdir(parents=True,exist_ok=True)
 # LOGGING
 logger=logging.getLogger(__program__)
 cmdlogger=logging.getLogger(f"{__program__}_cmd")
+cmdlogger.setLevel(logging.INFO)
 
 stdout_handler=logging.StreamHandler()
 stdout_handler.setFormatter(CustomFormatter())
