@@ -1564,6 +1564,7 @@ misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upo
 misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
 
 debug=parser.add_argument_group("Debug")
+debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
 debug.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
 debug.add_argument("-NP", "--no-python", help="Simulate python absence on target", action="store_true")
 debug.add_argument("-NB", "--no-bash", help="Simulate bash absence on target", action="store_true")
@@ -1634,7 +1635,9 @@ cmdlogger.addHandler(file_handler)
 
 # MAIN
 if __name__=="__main__":
-	if options.interfaces:
+	if options.version:
+		print(__version__)
+	elif options.interfaces:
 		print(Interfaces())
 	elif options.plain:
 		menu.show()
