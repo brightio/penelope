@@ -45,12 +45,12 @@ import argparse
 import platform
 import threading
 import subprocess
+import urllib.request
 
 from pathlib import Path
 from itertools import islice
 from datetime import datetime
 from collections import deque
-from urllib.request import urlopen
 
 class MainMenu(cmd.Cmd):
 
@@ -257,7 +257,7 @@ class MainMenu(cmd.Cmd):
 
 	def do_upload(self, local_globs):
 		"""\
-		Upload files and folders to the target. If URL is specified then it is downloaded
+		Upload files/folders to the target. If HTTP(S)/FTP(S) URL is specified then it is downloaded
 		locally and then uploaded to the target
 		"""
 		if self.sid:
@@ -1328,8 +1328,16 @@ class Session:
 			data=io.BytesIO()
 			tar=tarfile.open(mode='w:gz',fileobj=data)
 
-			if local_item_path.startswith('http'):
-				items=[urlopen(local_item_path, timeout=options.SHORT_TIMEOUT).read()]
+			if re.match('(http|ftp)s?://', local_item_path, re.IGNORECASE):
+				logger.info(paint(f"... ⇣  Downloading {local_item_path}", 'blue'))
+				req = urllib.request.Request(local_item_path, headers={'User-Agent':options.useragent})
+				try:
+					items=[urllib.request.urlopen(req, timeout=options.SHORT_TIMEOUT).read()]
+				except Exception as e:
+					logger.error(f"Cannot download: {e}")
+					return False
+				else:
+					logger.info(paint("... ⇥  Download completed. Pushing it to the target", 'blue'))
 
 			elif local_item_path.startswith(os.path.sep):
 				items=list(Path(os.path.sep).glob(local_item_path.lstrip(os.path.sep)))
@@ -1583,6 +1591,7 @@ options.BASEDIR=Path.home()/f'.{__program__}'
 options.cmd_histfile=options.BASEDIR/'cmd_history.log'
 options.debug_histfile=options.BASEDIR/'cmd_debug.log'
 options.histlength=1000
+options.useragent="Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0"
 
 # EXTRAS
 options.recon_scripts={
