@@ -17,7 +17,7 @@ Among the main features are:
 Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`  
   
 It supports Windows shells but autoupgrade is not implemented yet. However it can accept PTY shells from the excellent project [ConPtyShell](https://github.com/antonioCoco/ConPtyShell) of [@antonioCoco](https://github.com/antonioCoco). Autoresize of PTY is implemented.
-## Sample basic usage
+## Sample Basic Usage
 ```
 penelope.py                   # Listening for reverse shells on 0.0.0.0:4444
 penelope.py 5555              # Listening for reverse shells on 0.0.0.0:5555
@@ -25,7 +25,7 @@ penelope.py 5555 -i eth0      # Listening for reverse shells on eth0:5555
 
 penelope.py -c target 3333    # Connect to a bind shell on target:3333
 ```
-### Demonstrating random usage (1)
+### Demonstrating Random Usage (1)
 
 1. Executing penelope without parameters and getting a reverse shell
 2. Pressing F12 to detach the session and go to the main menu
@@ -36,7 +36,7 @@ penelope.py -c target 3333    # Connect to a bind shell on target:3333
 
 ![sample_usage](https://user-images.githubusercontent.com/65655412/120901583-35ed1780-c63c-11eb-845d-690bb3bbf112.png)
 
-### Demonstrating random usage (2)
+### Demonstrating Random Usage (2)
 
 1. Adding an extra listener and show all listeners
 2. Interacting with session 1
@@ -46,7 +46,7 @@ penelope.py -c target 3333    # Connect to a bind shell on target:3333
 ![sample_usage2](https://user-images.githubusercontent.com/65655412/120902895-2d4c0f80-c643-11eb-9d3a-ebcce5814566.png)
 
 
-## Command line options
+## Command Line Options
 ```
 positional arguments:
   PORT                  Port to listen/connect to depending on -i/-c options. Default: 4444
@@ -76,12 +76,13 @@ Misc:
   -U, --no-upgrade      Do not upgrade shells
 
 Debug:
+  -v, --version         Show Penelope version
   -d, --debug           Show debug messages
   -NP, --no-python      Simulate python absence on target
   -NB, --no-bash        Simulate bash absence on target
 ```
 
-## Menu options
+## Penelope Menu Options
 ```
 use [sessionID|none]
   Select a session
@@ -97,21 +98,22 @@ kill [sessionID|all]
   Kill a session
 
 download <glob>...
-  Download files and folders from the target
+  Download files/folders from the target
 
 open <glob>...
-  Download files and folders from the target and open them locally
+  Download files/folders from the target and open them locally
 
 upload <glob|URL>...
-  Upload files and folders to the target. If URL is specified then it is
-  downloaded locally and then uploaded to the target
+  Upload files/folders to the target. If HTTP(S)/FTP(S) URL is specified
+  then it is downloaded locally and then uploaded to the target
 
 recon [sessionID]
   Upload preset reconnaissance scripts to the target
 
-spawn [sessionID]
-  Spawn a new session. Whether it will be reverse or bind, depends on
-  the current session.
+spawn [Port] [Host]
+  Spawn a new shell. If the current shell is reverse, or a port or host
+  is specified, then will spawn a reverse shell. If the currert shell is
+  bind, then will spawn a bind shell
 
 upgrade [sessionID]
   Upgrade the session's shell to "PTY". If it fails attempts to upgrade
@@ -145,7 +147,8 @@ DEBUG
   Open debug console
 
 SET [option, [value]]
-  Set option values. When invoked without parameters it shows current option values
+  Set option values. When invoked without parameters it shows current
+  option values
 
 exit|quit|q|Ctrl+D
   Exit penelope
@@ -171,10 +174,11 @@ There are also included two sample exploit simulation scripts to demonstrate how
 * IPv6
 * encryption
 * UDP
-### Bugs
-* Ctrl-C on main menu has not the expected behaviour yet. However can still stop commands like 'download'.
-* Session logging: when executing commands with alternate buffers like nano on target, then when cat the log it seems corrupted. However the data are still there.
+### Known Issues
+* Ctrl-C on main menu has not the expected behavior yet. However can still stop commands like 'download'.
+* Session logging: when executing commands on the target that feature alternate buffers like nano and they are abnormally terminated, then when 'catting' the logfile it seems corrupted. However the data are still there. Also for example when resetting the remote terminal, these escape sequences are reflected in the logs. I will need to filter specific escape sequences so as to ensure that when 'catting' the logfile, a smooth log is presented.
 ### Misc
+* Put comments in the code
 * apply some PEP8
 * consider autorunning bash -l on new shells
 * better way to handle duplicate downloads
@@ -182,6 +186,6 @@ There are also included two sample exploit simulation scripts to demonstrate how
 * emojis don't appear on mate-terminal (parrot OS)
 * download command: path links are not clickable on qterminal (Kali Linux)
 * penelope menu commands and PTY autoresize operate on the same socket. This could be an advantage but it has a side effect that for example if nano is open on target, then detaching the session and attempt a download, penelope copes with that by sending Ctrl-Z -> Ctrl-E -> Ctrl-U. Then must run fg to get the process back. Maybe consider to spawn extra socket for controling the session in the future. However, if before executing a menu command, the target's terminal if left on a clear state, then there is no problem.
-### Thanks to
+## Thanks to
 * [Cristian Grigoriu - @crgr](https://github.com/crgr) for inspiring me to automate the PTY upgrade process. This is how this project was born.
 * [Paul Taylor - @bao7uo](https://github.com/bao7uo) for advising me that penelope should not be shipped without the ability to connect to a bind shell.

@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.8"
+__version__ = "0.8c"
 
 import os
 import io
@@ -66,7 +66,7 @@ class MainMenu(cmd.Cmd):
 			"open <glob>...",
 			"upload <glob|URL>...",
 			"recon [sessionID]",
-			"spawn [sessionID]",
+			"spawn [Port] [Host]",
 			"upgrade [sessionID]",
 			"dir|. [sessionID]",
 			"listeners [<add|stop> <Interface|IP> <Port>]",
@@ -90,10 +90,10 @@ class MainMenu(cmd.Cmd):
 		options.extend(extra)
 		return [option for option in options if option.startswith(text)]
 
-	@staticmethod
-	def options(text):
-		_options=(option for option in dir(options) if not option.startswith('_'))
-		return [option for option in _options if option.startswith(text)]
+	#@staticmethod
+	#def options(text):
+	#	_options=(option for option in dir(options) if not option.startswith('_'))
+	#	return [option for option in _options if option.startswith(text)]
 
 	@staticmethod
 	def load_history(histfile):
@@ -225,7 +225,7 @@ class MainMenu(cmd.Cmd):
 					return True
 
 	def do_download(self, remote_path):
-		"""Download files and folders from the target"""
+		"""Download files/folders from the target"""
 		if self.sid:
 			if remote_path:
 				core.sessions[self.sid].download(remote_path)
@@ -235,7 +235,7 @@ class MainMenu(cmd.Cmd):
 			cmdlogger.warning("No session ID selected. Select one with \"use [ID]\"")
 
 	def do_open(self, remote_path):
-		"""Download files and folders from the target and open them locally"""
+		"""Download files/folders from the target and open them locally"""
 		if self.sid:
 			if remote_path:
 				items=[]
@@ -336,8 +336,9 @@ class MainMenu(cmd.Cmd):
 				except ValueError:
 					pass
 
+				print()
 				cmdlogger.error("Invalid HOST - PORT combination")
-				cmdlogger.warning('listeners [<add|stop> <Interface|IP> <Port>]')
+				self.onecmd("help listeners")
 				return False
 
 			if subcommand=="add":
@@ -351,6 +352,7 @@ class MainMenu(cmd.Cmd):
 				else:
 					cmdlogger.warning("No such listener...")
 			else:
+				print()
 				cmdlogger.error("Invalid subcommand")
 				self.onecmd("help listeners")
 				return False
@@ -391,7 +393,7 @@ class MainMenu(cmd.Cmd):
 		"""Exit penelope"""
 		try:
 			readline.set_auto_history(False)
-			answer=input(f"\r{paint('[?] Are you sure you want to exit? (y/N): ','yellow')}")
+			answer=input(f"\r{paint('[?] Exit Penelope? (y/N): ','yellow')}")
 			readline.set_auto_history(True)
 		except EOFError:
 			#print('\r')
@@ -403,6 +405,13 @@ class MainMenu(cmd.Cmd):
 			return False
 
 	def do_EOF(self, line):
+		#Unselect session when one is selected
+		#if self.sid:
+		#	self.set_id(None)
+		#	print()
+		#else:
+		#	return self.do_exit(line)
+		print("exit")
 		return self.do_exit(line)
 
 	def do_DEBUG(self, line):
