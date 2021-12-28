@@ -53,7 +53,6 @@ from functools import wraps
 from itertools import islice
 from collections import deque
 
-
 class MainMenu(cmd.Cmd):
 
 	def __init__(self):
@@ -1431,6 +1430,8 @@ class Session:
 
 					file = tarfile.TarInfo(name=altname)
 					file.size = len(item)
+					file.mode = 0o770
+					file.mtime = int(time.time())
 
 					tar.addfile(file,io.BytesIO(item))
 
