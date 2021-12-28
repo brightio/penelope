@@ -312,10 +312,8 @@ class MainMenu(cmd.Cmd):
 
 	def do_dir(self, ID):
 		"""Open the session's local folder. If no session is selected, opens the base folder."""
-		if self.sid:
-			Open(core.sessions[self.sid].directory)
-		else:
-			Open(options.BASEDIR)
+		folder = core.sessions[self.sid].directory if self.sid else options.BASEDIR
+		Open(folder)
 
 	def do_listeners(self, line):
 		"""Add or stop a Listener. When invoked without parameters, it shows the active Listeners."""
@@ -1690,8 +1688,11 @@ TTY_NORMAL=termios.tcgetattr(sys.stdin)
 pathlink = lambda filepath: (f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
 				f'/\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07')
 
-Open = lambda item: subprocess.Popen(({'Linux':'xdg-open','Darwin':'open'}\
-	[OS],item),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+Open =	lambda item:\
+	True if not re.search(b"(Cannot open display:|Error:)",
+	subprocess.Popen(({'Linux':'xdg-open','Darwin':'open'}[OS], item),
+	stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE).stderr.read())\
+	else logger.error("Cannot open the item locally; If on SSH, use X11Forwarding")
 
 rand = lambda: ''.join(random.choice(string.ascii_letters) for i in range(8))
 
