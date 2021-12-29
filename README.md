@@ -1,7 +1,7 @@
 # penelope
 
 Penelope is an advanced shell handler. Its main aim is to replace netcat as shell catcher during exploiting RCE vulnerabilities.
-It works on Linux and macOS and the only requirement is Python3. It is one script without 3rd party dependencies and hopefully it will stay that way.
+It works on Linux and macOS and the only requirement is Python >= 3.6. It is a single script without 3rd party dependencies and hopefully it will stay this way.
 
 Among the main features are:
 - Auto-upgrade shells to PTY (auto-resize included)
@@ -19,11 +19,11 @@ Penelope can work in conjunction with metasploit exploits by disabling the defau
 It supports Windows shells but autoupgrade is not implemented yet. However it can accept PTY shells from the excellent project [ConPtyShell](https://github.com/antonioCoco/ConPtyShell) of [@antonioCoco](https://github.com/antonioCoco). Autoresize of PTY is implemented.
 ## Sample Basic Usage
 ```
-penelope.py                   # Listening for reverse shells on 0.0.0.0:4444
-penelope.py 5555              # Listening for reverse shells on 0.0.0.0:5555
-penelope.py 5555 -i eth0      # Listening for reverse shells on eth0:5555
+./penelope.py                   # Listening for reverse shells on 0.0.0.0:4444
+./penelope.py 5555              # Listening for reverse shells on 0.0.0.0:5555
+./penelope.py 5555 -i eth0      # Listening for reverse shells on eth0:5555
 
-penelope.py -c target 3333    # Connect to a bind shell on target:3333
+./penelope.py -c target 3333    # Connect to a bind shell on target:3333
 ```
 ### Demonstrating Random Usage (1)
 
@@ -183,8 +183,8 @@ There are also included two sample exploit simulation scripts to demonstrate how
 * consider autorunning bash -l on new shells
 * better way to handle duplicate downloads
 ### Limitations
-* emojis don't appear on mate-terminal (parrot OS)
-* download command: path links are not clickable on qterminal (Kali Linux)
+* For the emojis to be shown correctly, the fonts-noto-color-emoji package should be installed. It is installed by default on many distros but not on parrot OS. May consider removing emojis altogether.
+* When downloading files via the download menu command, clickable links with the downloaded files are presented. However the links are not clickable on the qterminal (Kali Linux).
 * penelope menu commands and PTY autoresize operate on the same socket. This could be an advantage but it has a side effect that for example if nano is open on target, then detaching the session and attempt a download, penelope copes with that by sending Ctrl-Z -> Ctrl-E -> Ctrl-U. Then must run fg to get the process back. Maybe consider to spawn extra socket for controling the session in the future. However, if before executing a menu command, the target's terminal if left on a clear state, then there is no problem.
 ## Thanks to
 * [Cristian Grigoriu - @crgr](https://github.com/crgr) for inspiring me to automate the PTY upgrade process. This is how this project was born.

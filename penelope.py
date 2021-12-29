@@ -619,6 +619,8 @@ class Core:
 								session.socket.sendall(data)
 							except (ConnectionResetError, BrokenPipeError):
 								session.exit()
+					else:
+						logger.error("You shouldn't see this error; Please take a screenshot and report it")
 
 				# The sessions
 				else:
@@ -1673,7 +1675,7 @@ options.useragent="Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/201001
 # EXTRAS
 options.recon_scripts={
 'Unix':[
-	'https://raw.githubusercontent.com/carlospolop/privilege-escalation-awesome-scripts-suite/master/linPEAS/linpeas.sh',
+	'https://github.com/carlospolop/PEASS-ng/releases/download/refs/heads/master/linpeas.sh',
 	'https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh'
 ],
 'Windows':[
