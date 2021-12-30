@@ -39,7 +39,6 @@ import random
 import termios
 import tarfile
 import logging
-import readline
 import textwrap
 import argparse
 import platform
@@ -52,6 +51,11 @@ from datetime import datetime
 from functools import wraps
 from itertools import islice
 from collections import deque
+
+try:
+	import readline
+except ImportError:
+	readline = None
 
 class MainMenu(cmd.Cmd):
 
@@ -95,21 +99,26 @@ class MainMenu(cmd.Cmd):
 	#def options(text):
 	#	_options = (option for option in dir(options) if not option.startswith('_'))
 	#	return [option for option in _options if option.startswith(text)]
+	@staticmethod
+	def set_auto_history(state):
+		if readline:
+			readline.set_auto_history(state)
 
 	@staticmethod
 	def load_history(histfile):
-		readline.clear_history()
-		if histfile.exists():
-			readline.read_history_file(histfile)
+		if readline:
+			readline.clear_history()
+			if histfile.exists():
+				readline.read_history_file(histfile)
 
 	@staticmethod
 	def write_history(histfile):
-		readline.set_history_length(options.histlength)
-
-		try:
-			readline.write_history_file(histfile)
-		except FileNotFoundError:
-			cmdlogger.debug(f"History file '{histfile}' does not exist")
+		if readline:
+			readline.set_history_length(options.histlength)
+			try:
+				readline.write_history_file(histfile)
+			except FileNotFoundError:
+				cmdlogger.debug(f"History file '{histfile}' does not exist")
 
 	def show(self):
 		threading.Thread(target=self.cmdloop, name='Menu').start()
@@ -147,10 +156,10 @@ class MainMenu(cmd.Cmd):
 		return inner
 
 	def preloop(self):
-		self.load_history(options.cmd_histfile)
+		__class__.load_history(options.cmd_histfile)
 
 	def postloop(self):
-		self.write_history(options.cmd_histfile)
+		__class__.write_history(options.cmd_histfile)
 
 	def emptyline(self):
 		self.lastcmd=None
@@ -214,9 +223,9 @@ class MainMenu(cmd.Cmd):
 				return False
 			try:
 				if session_count > 1:
-					readline.set_auto_history(False)
+					__class__.set_auto_history(False)
 					answer=input(f"\r{paint(f'[?] Kill all ({session_count}) sessions? (y/N): ','yellow')}")
-					readline.set_auto_history(True)
+					__class__.set_auto_history(True)
 				else:
 					answer='y'
 			except EOFError:
@@ -294,7 +303,7 @@ class MainMenu(cmd.Cmd):
 				host = args[1]
 			elif arg_num > 2:
 				print()
-				logger.error("Invalid PORT - HOST combination")
+				cmdlogger.error("Invalid PORT - HOST combination")
 				self.onecmd("help spawn")
 				return False
 		#if core.sessions[ID].spawn():
@@ -385,14 +394,17 @@ class MainMenu(cmd.Cmd):
 
 	def do_history(self, line):
 		"""Show menu history"""
-		self.write_history(options.cmd_histfile)
-		if options.cmd_histfile.exists():
-			print(open(options.cmd_histfile).read())
+		if readline:
+			self.write_history(options.cmd_histfile)
+			if options.cmd_histfile.exists():
+				print(open(options.cmd_histfile).read())
+		else:
+			cmdlogger.error("Python is not compiled with readline support")
 
 	def do_exit(self, line):
 		"""Exit penelope"""
 		try:
-			readline.set_auto_history(False)
+			__class__.set_auto_history(False)
 
 			active_sessions = len(core.sessions)
 			warning = paint(f"({active_sessions} active session{'s' if active_sessions > 1 else ''}) ",
@@ -400,7 +412,7 @@ class MainMenu(cmd.Cmd):
 
 			answer = input(f"\r{paint(f'[?] Exit Penelope? {warning}(y/N): ','yellow')}")
 
-			readline.set_auto_history(True)
+			__class__.set_auto_history(True)
 		except EOFError:
 			#print('\r')
 			return self.do_exit(line)
@@ -422,12 +434,12 @@ class MainMenu(cmd.Cmd):
 
 	def do_DEBUG(self, line):
 		"""Open debug console"""
-		self.write_history(options.cmd_histfile)
-		self.load_history(options.debug_histfile)
+		__class__.write_history(options.cmd_histfile)
+		__class__.load_history(options.debug_histfile)
 		code.interact(banner=paint("===> Entering debugging console...",'CYAN'), local=globals(),
 			exitmsg=paint("<=== Leaving debugging console...",'CYAN'))
-		self.write_history(options.debug_histfile)
-		self.load_history(options.cmd_histfile)
+		__class__.write_history(options.debug_histfile)
+		__class__.load_history(options.cmd_histfile)
 
 		#for thread in threading.enumerate():
 		#	print(thread)
