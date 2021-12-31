@@ -118,7 +118,6 @@ class MainMenu(cmd.Cmd):
 
 	def show(self):
 		threading.Thread(target=self.cmdloop, name='Menu').start()
-		core.threads.append("Menu")
 
 	def set_id(self, ID):
 		self.sid = ID
@@ -413,6 +412,7 @@ class MainMenu(cmd.Cmd):
 		else:
 			if answer.lower() == 'y':
 				core.stop()
+				logger.info("Exited!")
 				return True
 			return False
 
@@ -556,22 +556,24 @@ class Core:
 		self.attached_session = None
 		self.ID = 0
 		self.started = False
-		self.threads = []
 
 	def __getattr__(self, name):
 		if name == 'newID':
 			self.ID += 1
 			return self.ID
 
+	@property
+	def threads(self):
+		return (thread.name for thread in threading.enumerate())
+
 	def start(self):
 		if not self.started:
 			self.started=True
-			threading.Thread(target=self._start, name="Core").start()
-			self.threads.append("Core")
+			threading.Thread(target=self.loop, name="Core").start()
 
 			if options.no_attach and not options.plain:
 				menu.show()
-	def _start(self):
+	def loop(self):
 		while True:
 			try:
 				readables, _, _ = select.select(self.checkables, [], [])
@@ -585,7 +587,6 @@ class Core:
 					for command in self.control.read():
 						logger.debug(f"Control pipe: {command}")
 						if command == b'stop':
-							self.terminate()
 							return
 						elif command == b'+stdin':
 							self.checkables.add(sys.stdin)
@@ -597,7 +598,6 @@ class Core:
 					logger.debug("New connection came")
 					socket, endpoint = readable.socket.accept()
 					threading.Thread(target=Session, args=(socket,*endpoint,readable)).start()
-					#session=Session(socket,*endpoint,readable)
 
 				# STDIN
 				elif readable is sys.stdin:
@@ -655,11 +655,6 @@ class Core:
 							pass
 
 	def stop(self):
-		self.control << b'stop'
-
-	def terminate(self):
-		self.started = False
-
 		sessions = self.sessions.copy().values()
 		if sessions:
 			logger.warning(f"Killing sessions...")
@@ -669,8 +664,8 @@ class Core:
 		for listener in self.listeners.copy():
 			listener.stop()
 
-		logger.info("Exited!")
-
+		self.control << b'stop'
+		self.started = False
 
 def Connect(host, port):
 	try:
@@ -810,7 +805,7 @@ class Session:
 
 		self.socket = _socket
 		self.socket.setblocking(False)
-		self.target, self.port = target,port
+		self.target, self.port = target, port
 		self.ip = _socket.getpeername()[0]
 
 		if target == self.ip:
@@ -860,10 +855,10 @@ class Session:
 				f"Assigned SessionID {paint('<'+str(self.id)+'>','yellow')}"
 			)
 
-			self.directory = options.BASEDIR/self.name
+			self.directory = options.BASEDIR / self.name
 			if not options.no_log:
 				self.directory.mkdir(parents=True, exist_ok=True)
-				self.logpath = self.directory/f"{self.name}.log"
+				self.logpath = self.directory / f"{self.name}.log"
 				self.logfile = open(self.logpath,'ab',buffering=0)
 				if not options.no_timestamps and not self.logpath.exists():
 					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ",'magenta')).encode())
@@ -1347,7 +1342,7 @@ class Session:
 		if self.OS == 'Unix':
 			try:
 				remote_globs = [glob for glob in shlex.split(remote_item_path)]
-				local_download_folder = self.directory/"downloads"
+				local_download_folder = self.directory / "downloads"
 				local_download_folder.mkdir(parents=True, exist_ok=True)
 
 				cmd=f"tar cz {remote_item_path} 2>/dev/null|base64 -w0"
@@ -1668,9 +1663,9 @@ options.SHORT_TIMEOUT = 5
 options.LATENCY = .01
 options.max_open_files = 5
 options.upload_chunk_size = 10240
-options.BASEDIR = Path.home()/f'.{__program__}'
-options.cmd_histfile = options.BASEDIR/'cmd_history.log'
-options.debug_histfile = options.BASEDIR/'cmd_debug.log'
+options.BASEDIR = Path.home() / f'.{__program__}'
+options.cmd_histfile = options.BASEDIR / 'cmd_history.log'
+options.debug_histfile = options.BASEDIR / 'cmd_debug.log'
 options.histlength = 1000
 options.useragent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0"
 
@@ -1717,7 +1712,7 @@ cmdlogger.setLevel(logging.INFO)
 stdout_handler = logging.StreamHandler()
 stdout_handler.setFormatter(CustomFormatter())
 
-file_handler = logging.FileHandler(options.BASEDIR/f"{__program__}.log")
+file_handler = logging.FileHandler(options.BASEDIR / f"{__program__}.log")
 file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
 
 logger.addHandler(stdout_handler)
