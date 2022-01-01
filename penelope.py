@@ -45,6 +45,7 @@ import platform
 import threading
 import subprocess
 import urllib.request
+import multiprocessing
 
 from pathlib import Path
 from datetime import datetime
@@ -535,32 +536,25 @@ class MainMenu(cmd.Cmd):
 		return self.sessions(text)
 
 
-class ControlPipe:
-
+class ControlQueue:
 	def __init__(self):
-		self._out,self._in = os.pipe()
-		self.empty = True
+		self.queue = multiprocessing.SimpleQueue()
 
 	def fileno(self):
-		return self._out
+		return self.queue._reader.fileno()
 
 	def __lshift__(self, command):
-		if self.empty:
-			os.write(self._in, command)
-			self.empty = False
-		else:
-			os.write(self._in, b'|')
-			os.write(self._in, command)
+		self.queue.put(command)
 
-	def read(self):
-		self.empty=True
-		return os.read(self._out, 10240).split(b'|')
+	def get(self):
+		while not self.queue.empty():
+			yield self.queue.get()
 
 
 class Core:
 
 	def __init__(self):
-		self.control = ControlPipe()
+		self.control = ControlQueue()
 		self.checkables = {self.control}
 		self.listeners = set()
 		self.sessions = dict()
@@ -596,13 +590,13 @@ class Core:
 
 				# The control pipe
 				if readable is self.control:
-					for command in self.control.read():
-						logger.debug(f"Control pipe: {command}")
-						if command == b'stop':
+					for command in self.control.get():
+						logger.debug(f"Control Queue: {command}")
+						if command == 'stop':
 							return
-						elif command == b'+stdin':
+						elif command == '+stdin':
 							self.checkables.add(sys.stdin)
-						elif command == b'-stdin':
+						elif command == '-stdin':
 							self.checkables.discard(sys.stdin)
 
 				# The listeners
@@ -677,8 +671,9 @@ class Core:
 		for listener in self.listeners.copy():
 			listener.stop()
 
-		self.control << b'stop'
+		self.control << 'stop'
 		self.started = False
+
 
 def Connect(host, port):
 	try:
@@ -752,7 +747,7 @@ class Listener:
 			core.start()
 			core.listeners.add(self)
 			core.checkables.add(self)
-			core.control << b"break"
+			core.control << "break"
 
 			if options.hints:
 				print(self.hints)
@@ -779,7 +774,7 @@ class Listener:
 		try:
 			core.listeners.discard(self)
 			core.checkables.discard(self)
-			core.control << b"break"
+			core.control << "break"
 
 		except (ValueError,OSError):
 			logger.debug("The {self} is already destroyed")
@@ -803,6 +798,7 @@ class Listener:
 
 		output[-1] = paint("[/Hints] ==========---",'yellow')
 		return '\n'.join(output)
+
 
 class LineBuffer:
 	def __init__(self):
@@ -855,7 +851,7 @@ class Session:
 
 		self.last_lines = LineBuffer()
 		self.lock = threading.Lock()
-		self.control = ControlPipe()
+		self.control = ControlQueue()
 
 		if self.determine():
 
@@ -1058,8 +1054,8 @@ class Session:
 	def exec(self, cmd=None, raw=True, timeout=None, expect=[], clear=True):
 		try:
 			self.lock.acquire()
-			if not self.control.empty:
-				self.control.read()
+#			if not self.control.empty:
+#				self.control.read()
 			start = None
 			output = b''
 
@@ -1128,9 +1124,9 @@ class Session:
 					start = time.perf_counter()
 
 					if self.control in readables:
-						for command in self.control.read():
-							logger.debug(f"Control pipe ID {self.id}: {command}")
-							if command == b'stop':
+						for command in self.control.get():
+							logger.debug(f"Control Queue ID {self.id}: {command}")
+							if command == 'stop':
 								break
 
 					if self.socket in readables:
@@ -1333,11 +1329,11 @@ class Session:
 		os.write(sys.stdout.fileno(), bytes(self.last_lines))
 
 		core.attached_session = self
-		core.control << b'+stdin'
+		core.control << '+stdin'
 
 	def detach(self, killed=False):
 
-		core.control << b'-stdin'
+		core.control << '-stdin'
 		core.attached_session = None
 
 		if not self.type == 'Basic':
@@ -1511,7 +1507,7 @@ class Session:
 
 	def kill(self):
 
-		self.control << b'stop'
+		self.control << 'stop'
 
 		if hasattr(menu,'sid') and hasattr(self,'id') and menu.sid == self.id:
 			menu.set_id(None)
@@ -1626,7 +1622,7 @@ def ControlC(num, stack):
 		#os.write(sys.stdout.fileno(),b'^C\n')
 		#os.write(sys.stdout.fileno(),menu.prompt.encode())
 		if menu.sid:
-			core.sessions[menu.sid].control << b'stop'
+			core.sessions[menu.sid].control << 'stop'
 	else:
 		core.stop()
 
