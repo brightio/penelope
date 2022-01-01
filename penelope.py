@@ -1455,7 +1455,13 @@ class Session:
 
 				else:
 					altname = f"{item.stem}-{rand()}{item.suffix}"
-					tar.add(item, arcname=altname)
+
+					try:
+						tar.add(item, arcname=altname)
+
+					except Exception as e:
+						logger.warning(f"{e}")
+						return False
 
 				altnames.append(altname)
 				logger.debug(f"Added {altname} to archive")
