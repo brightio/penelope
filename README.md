@@ -61,8 +61,8 @@ Hints:
   -h, --help            show this help message and exit
 
 Verbosity:
-  -Q, --silent          Show only errors and warnings
-  -X, --extra-silent    Suppress all logging messages
+  -Q, --silent          Be a bit less verbose
+  -d, --debug           Show debug messages
 
 Logging:
   -L, --no-log          Do not create session log files
@@ -76,10 +76,9 @@ Misc:
   -U, --no-upgrade      Do not upgrade shells
 
 Debug:
-  -v, --version         Show Penelope version
-  -d, --debug           Show debug messages
   -NP, --no-python      Simulate python absence on target
   -NB, --no-bash        Simulate bash absence on target
+  -v, --version         Show Penelope version
 ```
 
 ## Penelope Menu Options

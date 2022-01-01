@@ -111,8 +111,10 @@ class MainMenu(cmd.Cmd):
 	def write_history(histfile):
 		if readline:
 			readline.set_history_length(options.histlength)
+
 			try:
 				readline.write_history_file(histfile)
+
 			except FileNotFoundError:
 				cmdlogger.debug(f"History file '{histfile}' does not exist")
 
@@ -216,6 +218,7 @@ class MainMenu(cmd.Cmd):
 			if not session_count:
 				cmdlogger.warning("No sessions to kill")
 				return False
+
 			try:
 				if session_count > 1:
 					__class__.set_auto_history(False)
@@ -223,8 +226,10 @@ class MainMenu(cmd.Cmd):
 					__class__.set_auto_history(True)
 				else:
 					answer='y'
+
 			except EOFError:
 				return self.do_kill(line)
+
 			else:
 				if answer.lower() == 'y':
 					for session in core.sessions.copy().values():
@@ -323,6 +328,7 @@ class MainMenu(cmd.Cmd):
 			try:
 				subcommand, host, port = line.split(" ")
 				port=int(port)
+
 			except ValueError:
 				try:
 					subcommand, host = line.split(" ")
@@ -335,6 +341,7 @@ class MainMenu(cmd.Cmd):
 							cmdlogger.warning("No listeners to stop...")
 							return False
 						return
+
 				except ValueError:
 					pass
 
@@ -369,8 +376,10 @@ class MainMenu(cmd.Cmd):
 		"""Connect to a bind shell"""
 		try:
 			address, port = line.split(' ')
+
 		except ValueError:
 			cmdlogger.error("Invalid Host-Port combination")
+
 		else:
 			if Connect(address,port) and not options.no_attach:
 				return True
@@ -406,9 +415,11 @@ class MainMenu(cmd.Cmd):
 			answer = input(f"\r{paint(f'[?] Exit Penelope? {warning}(y/N): ','yellow')}")
 
 			__class__.set_auto_history(True)
+
 		except EOFError:
 			#print('\r')
 			return self.do_exit(line)
+
 		else:
 			if answer.lower() == 'y':
 				core.stop()
@@ -577,6 +588,7 @@ class Core:
 		while True:
 			try:
 				readables, _, _ = select.select(self.checkables, [], [])
+
 			except ValueError:
 				pass
 
@@ -620,6 +632,7 @@ class Core:
 									_input=not session.interactive)
 							try:
 								session.socket.sendall(data)
+
 							except (ConnectionResetError, BrokenPipeError):
 								session.exit()
 					else:
@@ -686,6 +699,7 @@ def Connect(host, port):
 
 	except ValueError as e:
 		logger.error(f"Port number must be numeric")
+
 	else:
 		core.start()
 		logger.info(f"Connected to {paint(host,'blue')}:{paint(port,'red')} 🎯")
@@ -715,17 +729,22 @@ class Listener:
 
 		except PermissionError:
 			logger.error(f"Cannot bind to port {self.port}: Insufficient privileges")
+
 		except socket.gaierror:
 			logger.error(f"Cannot resolve hostname")
+
 		except OSError as e:
 			if e.errno == errno.EADDRINUSE:
 				logger.error(f"The port {self.port} is currently in use")
 			elif e.errno == errno.EADDRNOTAVAIL:
 				logger.error(f"Cannot listen on the requested address")
+
 		except OverflowError:
 			logger.error(f"Invalid port number. Valid numbers: 1-65535")
+
 		except ValueError as e:
 			logger.error(f"Port number must be numeric")
+
 		else:
 			logger.info(f"Listening for reverse shells on {paint(self.host,'blue')}"
 				f" 🚪{paint(self.port,'red')} ")
@@ -752,9 +771,10 @@ class Listener:
 
 	def stop(self):
 
-		reason = "Single session mode: " if options.single_session else ''
-
-		logger.warning(f"{reason}Stopping {self}")
+		if options.single_session:
+			logger.info(f"Stopping {self} due to Single Session mode")
+		else:
+			logger.warning(f"Stopping {self}")
 
 		try:
 			core.listeners.discard(self)
@@ -762,7 +782,7 @@ class Listener:
 			core.control << b"break"
 
 		except (ValueError,OSError):
-			logger.debug("Listener is already destroyed")
+			logger.debug("The {self} is already destroyed")
 
 		self.socket.close()
 
@@ -811,6 +831,7 @@ class Session:
 		if target == self.ip:
 			try:
 				self.hostname = socket.gethostbyaddr(target)[0]
+
 			except socket.herror:
 				self.hostname = None
 				logger.debug(f"Cannot resolve hostname")
@@ -938,6 +959,7 @@ class Session:
 				self.logfile.write(bytes(paint('ISSUED ==>','GREEN')+' ', encoding='utf8'))
 
 			self.logfile.write(data)
+
 		except ValueError:
 			logger.debug("The session killed abnormally")
 
@@ -1401,11 +1423,14 @@ class Session:
 			if re.match('(http|ftp)s?://', local_item_path, re.IGNORECASE):
 				logger.info(paint(f"... ⇣  Downloading {local_item_path}", 'blue', 'DIM'))
 				req = urllib.request.Request(local_item_path, headers={'User-Agent':options.useragent})
+
 				try:
 					items = [urllib.request.urlopen(req, timeout=options.SHORT_TIMEOUT).read()]
+
 				except Exception as e:
 					logger.error(f"Cannot download: {e}")
 					return False
+
 				else:
 					logger.info(paint("... ⇥  Download completed. Pushing it to the target", 'blue', 'DIM'))
 
@@ -1508,6 +1533,7 @@ class Session:
 		except (KeyError, AttributeError):
 			# The shutdown happened before object creation completed
 			self.is_invalid = True
+
 		finally:
 			self.socket.close()
 			self.lock.release()
@@ -1606,14 +1632,13 @@ def ControlC(num, stack):
 
 
 class Options:
-	log_levels = {"silent":'WARNING', "extra_silent":'CRITICAL', "debug":'DEBUG'}
-
-	def __setattr__(self, name, value):
-		level = __class__.log_levels.get(name)
+	log_levels = {"silent":'WARNING', "debug":'DEBUG'}
+	def __setattr__(self, option, value):
+		level = __class__.log_levels.get(option)
 		if level:
 			level = level if value else 'INFO'
 			logging.getLogger(__program__).setLevel(getattr(logging, level))
-		self.__dict__[name] = value
+		self.__dict__[option] = value
 
 
 options = Options()
@@ -1633,8 +1658,8 @@ hints.add_argument("-l", "--interfaces", help="Show the available network interf
 hints.add_argument("-h", "--help", action="help", help="show this help message and exit")
 
 verbosity = parser.add_argument_group("Verbosity")
-verbosity.add_argument("-Q", "--silent", help="Show only errors and warnings", action="store_true")
-verbosity.add_argument("-X", "--extra-silent", help="Suppress all logging messages", action="store_true")
+verbosity.add_argument("-Q", "--silent", help="Be a bit less verbose", action="store_true")
+verbosity.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
 
 log = parser.add_argument_group("Logging")
 log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
@@ -1648,10 +1673,9 @@ misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upo
 misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
 
 debug = parser.add_argument_group("Debug")
-debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
-debug.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
 debug.add_argument("-NP", "--no-python", help="Simulate python absence on target", action="store_true")
 debug.add_argument("-NB", "--no-bash", help="Simulate bash absence on target", action="store_true")
+debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
 
 args = [] if not __name__ == "__main__" else None
 parser.parse_args(args, options)
@@ -1664,8 +1688,8 @@ options.LATENCY = .01
 options.max_open_files = 5
 options.upload_chunk_size = 10240
 options.BASEDIR = Path.home() / f'.{__program__}'
-options.cmd_histfile = options.BASEDIR / 'cmd_history.log'
-options.debug_histfile = options.BASEDIR / 'cmd_debug.log'
+options.cmd_histfile = options.BASEDIR / 'cmd_history'
+options.debug_histfile = options.BASEDIR / 'cmd_debug_history'
 options.histlength = 1000
 options.useragent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0"
 
@@ -1705,20 +1729,25 @@ signal.signal(signal.SIGINT, ControlC)
 options.BASEDIR.mkdir(parents=True, exist_ok=True)
 
 # LOGGING
-logger = logging.getLogger(__program__)
-cmdlogger = logging.getLogger(f"{__program__}_cmd")
-cmdlogger.setLevel(logging.INFO)
-
 stdout_handler = logging.StreamHandler()
 stdout_handler.setFormatter(CustomFormatter())
 
 file_handler = logging.FileHandler(options.BASEDIR / f"{__program__}.log")
-file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
+file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
+file_handler.setLevel('INFO')
 
+debug_file_handler = logging.FileHandler(options.BASEDIR / f"debug.log")
+debug_file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
+debug_file_handler.addFilter(lambda record: True if record.levelno == logging.DEBUG else False)
+
+logger = logging.getLogger(__program__)
 logger.addHandler(stdout_handler)
 logger.addHandler(file_handler)
+logger.addHandler(debug_file_handler)
+
+cmdlogger = logging.getLogger(f"{__program__}_cmd")
+cmdlogger.setLevel(logging.INFO)
 cmdlogger.addHandler(stdout_handler)
-cmdlogger.addHandler(file_handler)
 
 # MAIN
 if __name__ == "__main__":
