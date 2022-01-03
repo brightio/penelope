@@ -518,7 +518,7 @@ class MainMenu(cmd.Cmd):
 			...#print(line,text)
 
 	def complete_use(self, text, line, begidx, endidx):
-		return self.sessions(text,"none")
+		return self.sessions(text, "none")
 
 	def complete_sessions(self, text, line, begidx, endidx):
 		return self.sessions(text)
@@ -527,7 +527,7 @@ class MainMenu(cmd.Cmd):
 		return self.sessions(text)
 
 	def complete_kill(self, text, line, begidx, endidx):
-		return self.sessions(text,"all")
+		return self.sessions(text, "all")
 
 	def complete_upgrade(self, text, line, begidx, endidx):
 		return self.sessions(text)
@@ -603,14 +603,15 @@ class Core:
 				elif readable.__class__ is Listener:
 					logger.debug("New connection came")
 					socket, endpoint = readable.socket.accept()
-					threading.Thread(target=Session, args=(socket,*endpoint,readable)).start()
+					threading.Thread(target=Session, args=(socket,*endpoint,readable),
+							name="IncomingConnection").start()
 
 				# STDIN
 				elif readable is sys.stdin:
 					if self.attached_session:
 						session = self.attached_session
 
-						data = os.read(sys.stdin.fileno(), 409600)
+						data = os.read(sys.stdin.fileno(), 1024)
 
 						if session.type == 'PTY':
 							session.update_pty_size()
@@ -619,7 +620,13 @@ class Core:
 							self._cmd=data
 
 						if data == options.ESCAPE:
-							session.detach()
+							if session.alternate_buffer:
+								logger.error(
+							"Please exit the current alternate buffer program "
+							"to enter Penelope menu..."
+								)
+							else:
+								session.detach()
 						else:
 							if session.type == 'Basic': # need to see
 								session.record(data,
@@ -636,10 +643,18 @@ class Core:
 				else:
 					try:
 						with readable.lock:
-							data = readable.socket.recv(409600)
+							data = readable.socket.recv(1024)
 
 							if not data:
 								raise BrokenPipeError
+
+							if b'\x1b[?1049h' in data:
+#								if readable.type != 'PTY':
+#									data = data.replace(b'\x1b[?1049h', b'')
+								readable.alternate_buffer=True
+
+							if b'\x1b[?1049l' in data:
+								readable.alternate_buffer=False
 
 							if readable.is_cmd and self._cmd == data:
 								data, self._cmd = b'', b''
@@ -852,6 +867,9 @@ class Session:
 		self.last_lines = LineBuffer()
 		self.lock = threading.Lock()
 		self.control = ControlQueue()
+
+		self.alternate_buffer = False
+		self.need_resize = False
 
 		if self.determine():
 
@@ -1130,7 +1148,7 @@ class Session:
 								break
 
 					if self.socket in readables:
-						data = self.socket.recv(409600)
+						data = self.socket.recv(1024)
 
 						if not data:
 							raise BrokenPipeError
@@ -1283,12 +1301,21 @@ class Session:
 
 	def update_pty_size(self):
 		#return False
+		#Will change it to SIGWINCH
 		current_dimensions = os.get_terminal_size()
-		if self.dimensions != current_dimensions:
+		if self.dimensions != current_dimensions or self.need_resize:
 			self.dimensions = current_dimensions
 			if self.OS == 'Unix':
-				cmd = f"stty rows {self.dimensions.lines} columns {self.dimensions.columns}"
-				self.exec(cmd, raw=False)
+				if self.alternate_buffer:
+					logger.error(
+						"Please exit the current alternate buffer program "
+						"to resize the terminal..."
+					)
+					self.need_resize = True
+				else:
+					cmd = f"stty rows {self.dimensions.lines} columns {self.dimensions.columns}"
+					self.exec(cmd, raw=False)
+					self.need_resize = False
 			elif self.OS == 'Windows':
 				#return False
 				cmd = (
@@ -1298,6 +1325,7 @@ class Session:
 					f"System.Management.Automation.Host.Size -ArgumentList ($width, $height)\r"
 				)
 				self.exec(cmd)
+				self.need_resize = False
 
 	def attach(self):
 
@@ -1321,12 +1349,12 @@ class Session:
 		if not options.no_log:
 			logger.info(f"{paint('Logging to ','green')}{paint(self.logpath,'yellow','DIM')} 📜")
 
+		os.write(sys.stdout.fileno(), bytes(self.last_lines))
+
 		if self.type == 'PTY':
 			tty.setraw(sys.stdin)
 		elif self.type == 'Advanced':
 			tty.setcbreak(sys.stdin)
-
-		os.write(sys.stdout.fileno(), bytes(self.last_lines))
 
 		core.attached_session = self
 		core.control << '+stdin'
@@ -1417,11 +1445,17 @@ class Session:
 			tar = tarfile.open(mode='w:gz', fileobj=data)
 
 			if re.match('(http|ftp)s?://', local_item_path, re.IGNORECASE):
-				logger.info(paint(f"... ⇣  Downloading {local_item_path}", 'blue', 'DIM'))
+
+				local_item_path = re.sub("https://www.exploit-db.com/exploits/",
+						"https://www.exploit-db.com/download/", local_item_path)
+
 				req = urllib.request.Request(local_item_path, headers={'User-Agent':options.useragent})
 
 				try:
-					items = [urllib.request.urlopen(req, timeout=options.SHORT_TIMEOUT).read()]
+					logger.info(paint(f"... ⇣  Downloading {local_item_path}", 'blue', 'DIM'))
+					response = urllib.request.urlopen(req, timeout=options.SHORT_TIMEOUT)
+					filename = response.headers.get_filename()
+					items = [response.read()]
 
 				except Exception as e:
 					logger.error(f"Cannot download: {e}")
@@ -1443,7 +1477,7 @@ class Session:
 			for item in items:
 
 				if isinstance(item,bytes):
-					name = Path(local_item_path.split('/')[-1])
+					name = Path(filename.strip('"')) if filename else Path(local_item_path.split('/')[-1])
 					altname = f"{name.stem}-{rand()}{name.suffix}"
 
 					file = tarfile.TarInfo(name=altname)
@@ -1590,13 +1624,13 @@ class Interfaces:
 
 
 class Color:
-	colors=('black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white')
-	codes={'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	escape=lambda codes: f"\x1b[{codes}m"
+	codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
+	colors = ('black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white')
+	escape = lambda codes: f"\x1b[{codes}m"
 
 	def __init__(self):
-		__class__.codes.update({color:code for code,color in enumerate(__class__.colors,30)})
-		__class__.codes.update({color.upper():code for code,color in enumerate(__class__.colors,40)})
+		__class__.codes.update({color:code for code, color in enumerate(__class__.colors,30)})
+		__class__.codes.update({color.upper():code for code, color in enumerate(__class__.colors,40)})
 
 	def __call__(self, text, *colors, reset=True):
 		code_sequence=';'.join([str(__class__.codes[color]) for color in colors])
@@ -1606,7 +1640,7 @@ class Color:
 
 
 class CustomFormatter(logging.Formatter):
-	TEMPLATES={
+	TEMPLATES = {
 		logging.CRITICAL:	{'color':"RED",		'prefix':'[!!!]'},
 		logging.ERROR:		{'color':"red",		'prefix':'[-]'},
 		logging.WARNING:	{'color':"yellow",	'prefix':'[!]'},
@@ -1683,7 +1717,7 @@ args = [] if not __name__ == "__main__" else None
 parser.parse_args(args, options)
 
 # SEMICONSTANT OPTIONS
-options.ESCAPE = b'\x1b\x5b\x32\x34\x7e' # F12
+options.ESCAPE = b'\x1b[24~' # F12
 options.LONG_TIMEOUT = 60
 options.SHORT_TIMEOUT = 5
 options.LATENCY = .01
