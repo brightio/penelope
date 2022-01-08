@@ -67,7 +67,7 @@ class MainMenu(cmd.Cmd):
 			"use [sessionID|none]",
 			"sessions [sessionID]",
 			"interact [sessionID]",
-			"kill [sessionID|all]",
+			"kill [sessionID|*]",
 			"download <glob>...",
 			"open <glob>...",
 			"upload <glob|URL>...",
@@ -232,17 +232,17 @@ class MainMenu(cmd.Cmd):
 		core.sessions[ID].attach()
 		return True
 
-	@session(extra=['all'])
+	@session(extra=['*'])
 	def do_kill(self, ID):
 		"Kill a session"
-		if ID == 'all':
+		if ID == '*':
 			session_count = len(core.sessions)
 
 			if not session_count:
 				cmdlogger.warning("No sessions to kill")
 				return False
 			else:
-				if __class__.confirm(f"Kill all sessions {self.active_sessions}"):
+				if __class__.confirm(f"Kill all sessions{self.active_sessions}"):
 					for session in core.sessions.copy().values():
 						session.kill()
 				return
@@ -364,7 +364,7 @@ class MainMenu(cmd.Cmd):
 			except ValueError:
 				try:
 					subcommand, host = line.split(" ")
-					if subcommand == "stop" and host == "all":
+					if subcommand == "stop" and host == "*":
 						listeners = core.listeners.copy()
 						if listeners:
 							for listener in listeners:
@@ -527,7 +527,7 @@ class MainMenu(cmd.Cmd):
 		if begidx == 15:
 			listeners = [re.search(r'\((.*)\)', str(listener))[1].replace(':',' ') for listener in core.listeners]
 			if len(listeners) > 1:
-				listeners.append('all')
+				listeners.append('*')
 			return [listener for listener in listeners if listener.startswith(text)]
 		if begidx > 15:
 			...#print(line,text)
@@ -542,7 +542,7 @@ class MainMenu(cmd.Cmd):
 		return self.sessions(text)
 
 	def complete_kill(self, text, line, begidx, endidx):
-		return self.sessions(text, "all")
+		return self.sessions(text, "*")
 
 	def complete_upgrade(self, text, line, begidx, endidx):
 		return self.sessions(text)
@@ -928,8 +928,7 @@ class Session:
 
 			self.maintain()
 
-			if options.single_session and self.listener in core.listeners:
-				self.listener.stop()
+			if options.single_session and self.listener: self.listener.stop()
 
 			# If auto-attach is enabled and no other session is attached
 			if not options.no_attach and core.attached_session is None:
@@ -1351,7 +1350,6 @@ class Session:
 					self.exec(cmd, raw=False)
 					self.need_resize = False
 			elif self.OS == 'Windows':
-				#return False
 				cmd = (
 					f"$width={self.dimensions.columns};$height={self.dimensions.lines};"
 					f"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size "
@@ -1425,7 +1423,7 @@ class Session:
 
 				cmd = f"tar cz {remote_item_path} 2>/dev/null|base64 -w0"
 				data = self.exec(cmd, raw=False, timeout=options.LONG_TIMEOUT)
-				#print(data)
+
 				if not data:
 					logger.error("Corrupted response")
 					return []
@@ -1463,7 +1461,6 @@ class Session:
 
 			except Exception as e:
 				logger.error(e)
-				logger.error("Corrupted response")
 				return []
 
 		elif self.OS == 'Windows':
@@ -1583,9 +1580,7 @@ class Session:
 		if current_num < options.maintain > 1:
 			try:
 				logger.warning(paint(f" * Trying to maintain {options.maintain} "
-						f"active shells on {self.name} * |current->{current_num}|",'blue')
-				)
-				logger.warning(f"spawning from session {core.hosts[self.name][-1].id}")
+						f"active shells on {self.name} * |current->{current_num}|",'blue'))
 				core.hosts[self.name][-1].spawn()
 			except IndexError:
 				logger.error("No alive shell left. Cannot spawn another")
@@ -1619,12 +1614,12 @@ class Session:
 		finally:
 			self.socket.close()
 			self.lock.release()
+			core.lock.release()
 			if not hasattr(self,'is_invalid'):
 				logger.error(f"{paint(self.name,'RED','white')}"
 				f"{paint('','red',reset=False)} disconnected 💔\r")
 
-		core.lock.release()
-		self.maintain()
+				self.maintain()
 
 	def exit(self):
 		self.kill()
@@ -1728,9 +1723,17 @@ class Options:
 			level = level if value else 'INFO'
 			logging.getLogger(__program__).setLevel(getattr(logging, level))
 		if option == 'maintain':
-			if value > options.max_maintain:
-				logger.warning(f"Maintain value decreased to the max ({options.max_maintain})")
-				value = options.max_maintain
+			if value > self.max_maintain:
+				logger.warning(f"Maintain value decreased to the max ({self.max_maintain})")
+				value = self.max_maintain
+			if value < 1: value = 1
+			if value > 1 and self.single_session:
+				logger.warning(f"Single Session mode disabled because Maintain is enabled")
+				self.single_session = False
+		if option == 'single_session':
+			if self.maintain > 1 and value:
+				logger.warning(f"Single Session mode disabled because Maintain is enabled")
+				value = False
 		self.__dict__[option] = value
 
 
