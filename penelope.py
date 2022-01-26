@@ -59,6 +59,10 @@ try:
 except ImportError:
 	readline = None
 
+if not sys.version_info >= (3, 6):
+	print("(!) Penelope requires Python version 3.6 or higher (!)")
+	sys.exit()
+
 class MainMenu(cmd.Cmd):
 
 	def __init__(self):
@@ -2049,7 +2053,7 @@ class Options:
 		elif option == 'configfile':
 			self.__dict__[option] = value
 			config = ConfigParser(interpolation=None)
-			config.read(self.configfile)
+			config.read(str(self.configfile))
 			if "options" in config.sections():
 				for _option, _value in config['options'].items():
 					setattr(self, _option, eval(_value))
