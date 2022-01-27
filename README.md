@@ -1,7 +1,7 @@
 # penelope
 
 Penelope is an advanced shell handler. Its main aim is to replace netcat as shell catcher during exploiting RCE vulnerabilities.
-It works on Linux and macOS and the only requirement is Python >= 3.6. It is a single script without 3rd party dependencies and hopefully it will stay this way.
+It works on Linux and macOS and the only requirement is Python >= 3.6. It is a single script, it needs no installation or any 3rd party dependency and hopefully it will stay that way.
 
 Among the main features are:
 - Auto-upgrade shells to PTY (auto-resize included)
@@ -9,54 +9,56 @@ Among the main features are:
 - Download files from targets
 - Upload files to targets
 - Upload preset scripts to targets
-- Spawn backup shells
+- Spawn shells on multiple tabs and/or hosts
+- Maintain X amount of active shells per host no matter what
 - Multiple sessions
 - Multiple listeners
-- Can be imported by exploits and get shell on the same terminal (see [extras](#extras))
+- Can be imported by python3 exploits and get shell on the same terminal (see [Extras](#Extras))
 
-Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`  
-  
+Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
+
 It supports Windows shells but autoupgrade is not implemented yet. However it can accept PTY shells from the excellent project [ConPtyShell](https://github.com/antonioCoco/ConPtyShell) of [@antonioCoco](https://github.com/antonioCoco). Autoresize of PTY is implemented.
-## Sample Basic Usage
+
+## Usage
+### Sample Typical Usage
 ```
 ./penelope.py                   # Listening for reverse shells on 0.0.0.0:4444
 ./penelope.py 5555              # Listening for reverse shells on 0.0.0.0:5555
 ./penelope.py 5555 -i eth0      # Listening for reverse shells on eth0:5555
-
 ./penelope.py -c target 3333    # Connect to a bind shell on target:3333
 ```
-### Demonstrating Random Usage (1)
 
-1. Executing penelope without parameters and getting a reverse shell
-2. Pressing F12 to detach the session and go to the main menu
-3. Run 'recon' command to upload preset privesc scripts to the target
-4. Interacting again with the session, confirming that scripts are uploaded
-5. Detaching again with F12 and downloading /etc directory from the target
-6. Kill the session and exiting with Ctrl-D
+### Demonstrating Random Usage
 
-![sample_usage](https://user-images.githubusercontent.com/65655412/120901583-35ed1780-c63c-11eb-845d-690bb3bbf112.png)
+As shown in the below video, within only a few seconds we have easily:
+1. A fully functional auto-resizable PTY shell
+2. One more such shell in another tab
+3. Logging every interaction with the target
+4. Uploaded the latest versions of LinPEAS and linux-smart-enumeration
+5. Downloaded the whole /etc directory
+6. For every shell that may be killed for some reason, automatically a new one is spawned. This gives us a kind of persistence with the target
 
-### Demonstrating Random Usage (2)
+https://user-images.githubusercontent.com/65655412/151394465-9eb4937d-bfad-45df-b058-3b74164be517.mp4
 
-1. Adding an extra listener and show all listeners
-2. Interacting with session 1
-3. Spawning 2 extra backup sessions
-4. Showing all sessions
+### Penelope Main Menu Commands
+Some Notes:
+- *By default you need to press F12 to detach the PTY shell and go to the Main Menu. If the upgrade was not possible the you ended up with a basic shell, you can detach it with Ctrl+C. This also prevents the accidental killing of the shell.*
+- *The menu supports TAB completion and also short commands. For example instead of "interact 1" you can just type "i 1".*
+- *The batch command by default uploads predefined privilege escalation scripts. You can modify this behaviour by using a configuration file (See extras/penelope.conf). This file can be speficied with -r in the command line or be placed in ~/.penelope/penelope.conf*
 
-![sample_usage2](https://user-images.githubusercontent.com/65655412/120902895-2d4c0f80-c643-11eb-9d3a-ebcce5814566.png)
+![help](https://user-images.githubusercontent.com/65655412/150849045-110d4bf6-a86d-4b77-a290-075abeee62d4.png)
 
-
-## Command Line Options
+### Command Line Options
 ```
 positional arguments:
-  PORT                  Port to listen/connect to depending on -i/-c options. Default: 4444
+  ports                 Ports to listen/connect to, depending on -i/-c options. Default: 4444
 
 Reverse or Bind shell?:
-  -i , --address        IP Address or Interface to listen on. Default: 0.0.0.0
+  -i , --interface      Interface or IP address to listen on. Default: 0.0.0.0
   -c , --connect        Bind shell Host
 
 Hints:
-  -a, --hints           Show sample payloads for reverse shell based on the registered listeners
+  -a, --hints           Show sample payloads for reverse shell based on the registered Listeners
   -l, --interfaces      Show the available network interfaces
   -h, --help            show this help message and exit
 
@@ -69,6 +71,8 @@ Logging:
   -T, --no-timestamps   Do not include timestamps on logs
 
 Misc:
+  -r , --configfile     Configuration file location
+  -m , --maintain       Maintain NUM total shells per target
   -H, --no-history      Disable shell history on target
   -P, --plain           Just land to the main menu
   -S, --single-session  Accommodate only the first created session
@@ -81,110 +85,46 @@ Debug:
   -v, --version         Show Penelope version
 ```
 
-## Penelope Menu Options
-```
-use [sessionID|none]
-  Select a session
-
-sessions [sessionID]
-  Show active sessions. When followed by <sessionID>, interact with that
-  session
-
-interact [sessionID]
-  Interact with a session
-
-kill [sessionID|all]
-  Kill a session
-
-download <glob>...
-  Download files/folders from the target
-
-open <glob>...
-  Download files/folders from the target and open them locally
-
-upload <glob|URL>...
-  Upload files/folders to the target. If HTTP(S)/FTP(S) URL is specified
-  then it is downloaded locally and then uploaded to the target
-
-recon [sessionID]
-  Upload preset reconnaissance scripts to the target
-
-spawn [Port] [Host]
-  Spawn a new shell. If the current shell is reverse, or a port or host
-  is specified, then will spawn a reverse shell. If the currert shell is
-  bind, then will spawn a bind shell
-
-upgrade [sessionID]
-  Upgrade the session's shell to "PTY". If it fails attempts to upgrade
-  it to "Advanced". If this fail too, then falls back to "Basic" shell.
-
-dir|. [sessionID]
-  Open the session's local folder. If no session is selected, opens the
-  base folder.
-
-listeners [<add|stop> <Interface|IP> <Port>]
-  Add or stop a Listener. When invoked without parameters, it shows the
-  active Listeners.
-
-connect <Host> <Port>
-  Connect to a bind shell
-
-hints
-  Show sample commands to run on the targets to get reverse shell, based
-  on the registered listeners
-
-reset
-  Reset the local terminal
-
-history
-  Show menu history
-
-help [command]
-  Show menu help or help about specific command
-
-DEBUG
-  Open debug console
-
-SET [option, [value]]
-  Set option values. When invoked without parameters it shows current
-  option values
-
-exit|quit|q|Ctrl+D
-  Exit penelope
-```
-
 ## Extras
+There are also included two sample exploit simulation scripts in the extras folder to demonstrate how penelope can be imported and get shell on the same terminal. The illustration below shows how Penelope is imported in a python3 exploit for the Quick machine of Hack The Box.
 
-There are also included two sample exploit simulation scripts to demonstrate how penelope can be imported and get shell on the same terminal. Furthermore, one bash script is included that automatically upgrades Unix shells to PTY using xdotool.
+![exploit](https://user-images.githubusercontent.com/65655412/151350244-3d0b4e60-04a6-494b-8eab-2498cfb8b809.gif)
+
+Furthermore, one bash script is included which automatically upgrades Unix shells to PTY using the xdotool.
+
+![tty](https://user-images.githubusercontent.com/65655412/151353020-8585e352-2037-41f1-94d6-4fd7d1cb7943.gif)
+
+## Contribution
+If you want to contribute to this project please report bugs, unexpected program behaviours and/or new ideas.
 
 ## TODO
 
 ### Features
-* currently download/upload/spawn/upgrade commands are supported only on Unix shells. Will implement those commands for Windows shells too.
-* port forwarding
+* ability to execute a local script on target and get the output on a local file
+* remote and local port forwarding
 * persistence
-* edit command: open the remote file locally, make changes and upon saving, upload it to target
-* ability to specify a list of commands to run automatically on target and/or the main menu
+* edit command: open the remote file locally, make changes and upon saving, upload it to the target
+* currently download/upload/spawn/upgrade commands are supported only on Unix shells. Will implement those commands for Windows shells too.
+* spawn meterpreter sessions
 * an option switch for disable all logging, not only sessions.
-* execute a local script on target and get the output on a local file
 * main menu autocompletion for short commands
 * download/upload progress bar
 * download/upload autocompletion
 * IPv6
 * encryption
-* UDP
+* UDP support
+
 ### Known Issues
 * Ctrl-C on main menu has not the expected behavior yet. However can still stop commands like 'download'.
 * Session logging: when executing commands on the target that feature alternate buffers like nano and they are abnormally terminated, then when 'catting' the logfile it seems corrupted. However the data are still there. Also for example when resetting the remote terminal, these escape sequences are reflected in the logs. I will need to filter specific escape sequences so as to ensure that when 'catting' the logfile, a smooth log is presented.
-### Misc
-* Put comments in the code
-* apply some PEP8
-* consider autorunning bash -l on new shells
-* better way to handle duplicate downloads
+
 ### Limitations
 * For the emojis to be shown correctly, the fonts-noto-color-emoji package should be installed. It is installed by default on many distros but not on parrot OS. May consider removing emojis altogether.
 * When downloading files via the download menu command, clickable links with the downloaded files are presented. However the links are not clickable on the qterminal (Kali Linux).
 * penelope menu commands and PTY autoresize operate on the same socket. This could be an advantage but it has a side effect that for example if nano is open on target, then detaching the session and attempt a download, penelope copes with that by sending Ctrl-Z -> Ctrl-E -> Ctrl-U. Then must run fg to get the process back. Maybe consider to spawn extra socket for controling the session in the future. However, if before executing a menu command, the target's terminal if left on a clear state, then there is no problem.
+
 ## Thanks to
 * [Cristian Grigoriu - @crgr](https://github.com/crgr) for inspiring me to automate the PTY upgrade process. This is how this project was born.
 * [Paul Taylor - @bao7uo](https://github.com/bao7uo) for advising me that penelope should not be shipped without the ability to connect to a bind shell.
+* [Longlone - @WAY29](https://github.com/WAY29) for indicating the need for compatibility with previous versions of Python (3.6)
+* [Carlos Polop - @carlospolop](https://github.com/carlospolop) for the idea to spawn shells on listeners on fellow systems
