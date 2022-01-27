@@ -42,9 +42,9 @@ https://user-images.githubusercontent.com/65655412/151394465-9eb4937d-bfad-45df-
 
 ### Penelope Main Menu Commands
 Some Notes:
-- *By default you need to press F12 to detach the PTY shell and go to the Main Menu. If the upgrade was not possible the you ended up with a basic shell, you can detach it with Ctrl+C. This also prevents the accidental killing of the shell.*
-- *The menu supports TAB completion and also short commands. For example instead of "interact 1" you can just type "i 1".*
-- *The batch command by default uploads predefined privilege escalation scripts. You can modify this behaviour by using a configuration file (See extras/penelope.conf). This file can be speficied with -r in the command line or be placed in ~/.penelope/penelope.conf*
+- By default you need to press `F12` to detach the PTY shell and go to the Main Menu. If the upgrade was not possible the you ended up with a basic shell, you can detach it with `Ctrl+C`. This also prevents the accidental killing of the shell.
+- The Main Menu supports TAB completion and also short commands. For example instead of `interact 1` you can just type `i 1`.
+- The batch command by default uploads predefined privilege escalation scripts. You can add more scripts or modify this and other default behaviours by using a configuration file (See extras/penelope.conf). This file can be speficied with -r in the command line or be placed in ~/.penelope/penelope.conf
 
 ![help](https://user-images.githubusercontent.com/65655412/150849045-110d4bf6-a86d-4b77-a290-075abeee62d4.png)
 
