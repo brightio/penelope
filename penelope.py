@@ -1082,21 +1082,25 @@ class Session:
 
 			if options.single_session and self.listener: self.listener.stop()
 
-			# If auto-attach is enabled and no other session is attached
-			if not options.no_attach and core.attached_session is None:
-				# If is reverse shell and the Menu is not active and reached the maintain value
-				if ((self.listener and not "Menu" in core.threads and len(core.hosts[self.name]) == options.maintain)
-				# Or is a bind shell and is not spawned from the Menu
-				or (not self.listener and not "Menu" in core.threads)
-				# Or is a bind shell and is spawned from the connect Menu command
-				or (not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect'))):
-					# Then attach the newly created session
-					self.attach()
+			# If no other session is attached
+			if core.attached_session is None:
+				# If auto-attach is enabled
+				if not options.no_attach:
+					# If is reverse shell and the Menu is not active and reached the maintain value
+					if ((self.listener and not "Menu" in core.threads
+						and len(core.hosts[self.name]) == options.maintain)
+					# Or is a bind shell and is not spawned from the Menu
+					or (not self.listener and not "Menu" in core.threads)
+					# Or is a bind shell and is spawned from the connect Menu command
+					or (not self.listener and "Menu" in core.threads
+						and menu.lastcmd.startswith('connect'))):
+						# Then attach the newly created session
+						self.attach()
 
-			# If auto-attach is disabled and the menu is not active
-			elif options.no_attach and not "Menu" in core.threads:
-				# Then show the menu
-				menu.show()
+				# If auto-attach is disabled and the menu is not active
+				elif not "Menu" in core.threads:
+					# Then show the menu
+					menu.show()
 		else:
 			logger.error(f"Invalid shell from {paint(self.name, 'RED', 'white')}{paint('', 'red')} 🙄\r")
 			self.kill()
