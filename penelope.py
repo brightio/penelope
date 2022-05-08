@@ -69,7 +69,7 @@ class MainMenu(cmd.Cmd):
 		super().__init__()
 		self.set_id(None)
 		self.commands = {
-			"Session Operations":['batch', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade'],
+			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
 			"Shell Management"  :['listeners', 'connect', 'hints', 'Interfaces'],
 			"Miscellaneous"     :['help', 'history', 'reset', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
@@ -368,13 +368,19 @@ class MainMenu(cmd.Cmd):
 			cmdlogger.warning("No files or directories specified")
 
 	@session(current=True)
-	def do_batch(self, line):
+	def do_run(self, module):
 		"""
-
-		Execute a predefined set of Main Menu commands on the target. Run 'SET batch' to view them
+		[module name]
+		Run a module. Without module name it lists all modules
 		"""
-
-		self.cmdqueue.extend(options.batch[core.sessions[self.sid].OS])
+		if module:
+			self.cmdqueue.extend(options.modules[module]['actions'][core.sessions[self.sid].OS])
+		else:
+			table = Table(joinchar=' <-> ')
+			table.header = [paint('NAME', 'cyan'), paint('DESCRIPTION', 'cyan')]
+			for name, info in options.modules.items():
+				table += [paint(name, 'red'), info['description']]
+			print("\n", table, "\n", sep="")
 
 	@session(current=True)
 	def do_spawn(self, line):
@@ -626,10 +632,10 @@ class MainMenu(cmd.Cmd):
 		"""
 		if not line:
 			rows = [ [paint(param, 'cyan'), paint(repr(getattr(options, param)), 'yellow')]
-					for param in options.__dict__ if param != 'batch' ]
+					for param in options.__dict__ if param != 'modules' ]
 			table = Table(rows, fillchar=[paint('.', 'green'), 0], joinchar=' => ')
 			print(table)
-			print(f"{paint('batch', 'cyan')}\n{paint(json.dumps(getattr(options, 'batch'), indent=4), 'yellow')}")
+			print(f"{paint('modules', 'cyan')}\n{paint(json.dumps(getattr(options, 'modules'), indent=4), 'yellow')}")
 		else:
 			try:
 				args = line.split(" ", 1)
@@ -657,6 +663,8 @@ class MainMenu(cmd.Cmd):
 			return self.onecmd('exit')
 		elif line == '.':
 			return self.onecmd('dir')
+		elif line in ('recon', 'batch'):
+			logger.warning("This command is deprecated. Check 'run' command")
 		else:
 			parts = line.split()
 			candidates = [command for command in self.raw_commands if command.startswith(parts[0])]
@@ -698,6 +706,10 @@ class MainMenu(cmd.Cmd):
 
 	def complete_kill(self, text, line, begidx, endidx):
 		return self.sessions(text, "*")
+
+	def complete_run(self, text, line, begidx, endidx):
+		return [module for module in options.modules if module.startswith(text)]
+
 
 class ControlQueue:
 	def __init__(self):
@@ -787,11 +799,16 @@ class Core:
 
 				# The listeners
 				elif readable.__class__ is Listener:
-					socket, endpoint = readable.socket.accept()
-					thread_name = f"IncomingConnection-{endpoint}"
-					logger.debug(f"New thread: {thread_name}")
-					threading.Thread(target=Session, args=(socket,*endpoint,readable),
+
+					try:
+						socket, endpoint = readable.socket.accept()
+						thread_name = f"IncomingConnection-{endpoint}"
+						logger.debug(f"New thread: {thread_name}")
+						threading.Thread(target=Session, args=(socket,*endpoint,readable),
 							name=thread_name).start()
+
+					except OSError:
+						logger.debug(f"{readable} socket is terminated")
 
 				# STDIN
 				elif readable is sys.stdin:
@@ -947,8 +964,6 @@ class Listener:
 				print(self.hints)
 
 			return
-
-#		self.socket = None
 
 	def __str__(self):
 		return f"Listener({self.host}:{self.port})"
@@ -2014,14 +2029,19 @@ class Options:
 		self.cmd_histfile = 'cmd_history'
 		self.debug_histfile = 'cmd_debug_history'
 		self.useragent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0"
-		self.batch = {
-			'Unix':[
-				'upload https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh',
-				'upload https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh'
-			],
-			'Windows':[
-				'upload https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1'
-			]
+		self.modules = {
+			'upload_privesc_scripts':{
+				'description':'Upload privilege escalation scripts to the target',
+				'actions':{
+					'Unix':[
+						'upload https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh',
+						'upload https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh'
+					],
+					'Windows':[
+						'upload https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1'
+					]
+				}
+			}
 		}
 		self.configfile = self.basedir / 'penelope.conf'
 
