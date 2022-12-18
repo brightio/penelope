@@ -31,14 +31,14 @@ Currently only Unix shells are fully supported. There is only basic support for 
 ### Demonstrating Random Usage
 
 As shown in the below video, within only a few seconds we have easily:
-1. A fully functional auto-resizable PTY shell
+1. A fully functional auto-resizable PTY shell while logging every interaction with the target
 2. Execute the lastest version of Linpeas on the target without touching the disk and get the output on a local file in realtime 
-3. One more such shell in another tab
-4. Logging every interaction with the target
-5. Uploaded the latest versions of LinPEAS and linux-smart-enumeration
-6. Uploaded a local folder with custom scripts
-7. Uploaded an exploit-db exploit directly from URL
-8. Downloaded the whole /etc directory
+3. One more PTY shell in another tab
+4. Uploaded the latest versions of LinPEAS and linux-smart-enumeration
+5. Uploaded a local folder with custom scripts
+6. Uploaded an exploit-db exploit directly from URL
+7. Downloaded and opened locally a remote file
+8. Downloaded the remote /etc directory
 9. For every shell that may be killed for some reason, automatically a new one is spawned. This gives us a kind of persistence with the target
 
 https://user-images.githubusercontent.com/65655412/208298446-fe2f11f6-d8bc-4e85-9f19-94e66593102b.mp4
