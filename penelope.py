@@ -748,7 +748,7 @@ class MainMenu(cmd.Cmd):
 		elif line == '.':
 			return self.onecmd('dir')
 		elif line in ('recon', 'batch'):
-			logger.warning("This command is deprecated. Check 'run' command")
+			logger.warning("This command is deprecated. Check the 'run' command")
 		else:
 			parts = line.split()
 			candidates = [command for command in self.raw_commands if command.startswith(parts[0])]
@@ -1430,7 +1430,7 @@ class Session:
 					if response:
 						self._bin.update(dict(zip(missing, response.decode().splitlines())))
 
-			for binary in options.black_list_bins:
+			for binary in options.no_bins:
 				self._bin[binary] = None
 
 			result = "\n".join([f"{b}: {self._bin[b]}" for b in binaries])
@@ -3255,7 +3255,7 @@ class Options:
 				show(f"Single Session mode disabled because Maintain is enabled")
 				value = False
 
-		elif option == 'black_list_bins':
+		elif option == 'no_bins':
 			if value is None:
 				value = []
 			elif type(value) is str:
@@ -3317,8 +3317,8 @@ misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upo
 misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
 
 debug = parser.add_argument_group("Debug")
-debug.add_argument("-N", "--black-list-bins", help="Simulate python absence on target")
-debug.add_argument("-v",  "--version", help="Show Penelope version", action="store_true")
+debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
+debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
 
 args = [] if not __name__ == "__main__" else None
 parser.parse_args(args, options)
@@ -3349,7 +3349,7 @@ if DEV_MODE:
 	stdout_handler.addFilter(lambda record: True if record.levelno != logging.DEBUG else False)
 	logger.setLevel('DEBUG')
 	options.max_maintain = 50
-	options.black_list_bins = 'python,python3,script'
+	options.no_bins = 'python,python3,script'
 
 # MAIN
 if __name__ == "__main__":
