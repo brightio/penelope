@@ -3091,33 +3091,37 @@ class PBar:
 		print("\x1b[?25h")
 
 class paint:
-	codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'white':7, 'orange':136}
-	escape = lambda codes: f"\x1b[{codes}m"
+	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
+	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'white':7, 'orange':136}
+	_escape = lambda codes: f"\x1b[{codes}m"
 
-	def __init__(self, text=None):
+	def __init__(self, text=None, colors=None):
 		self.text = str(text) if text is not None else None
-		self.colored_text = None
+		self.colors = colors if colors is not None else []
 
 	def __str__(self):
-		return self.colored_text
+		if self.colors:
+			content = self.text + __class__._escape(__class__._codes['RESET']) if self.text is not None else ''
+			return __class__._escape(';'.join(self.colors)) + content
+		return self.text
 
 	def __len__(self):
 		return len(self.text)
 
-	def __add__(self, text): #TODO
+	def __add__(self, text):
 		return str(self) + str(text)
 
+	def __mul__(self, num):
+		return __class__(self.text * num, self.colors)
+
 	def __getattr__(self, attr):
-		colors = []
+		self.colors.clear()
 		for color in attr.split('_'):
-			if color in __class__.codes:
-				colors.append(str(__class__.codes[color]))
+			if color in __class__._codes:
+				self.colors.append(str(__class__._codes[color]))
 			else:
-				prefix = "3" if color in __class__.colors else "4"
-				colors.append(prefix + "8;5;" + str(__class__.colors[color.lower()]))
-		content = self.text + __class__.escape(__class__.codes['RESET']) if self.text is not None else ''
-		self.colored_text = __class__.escape(';'.join(colors)) + content
+				prefix = "3" if color in __class__._colors else "4"
+				self.colors.append(prefix + "8;5;" + str(__class__._colors[color.lower()]))
 		return self
 
 class CustomFormatter(logging.Formatter):
