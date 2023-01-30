@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright © 2021 @brightio <brightiocode@gmail.com>
+# Copyright © 2021 - 2023 @brightio <brightiocode@gmail.com>
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@ import re
 import sys
 import tty
 import cmd
+import ssl
 import code
 import time
 import json
@@ -412,8 +413,10 @@ class MainMenu(cmd.Cmd):
 
 			spawn			Spawn a new session. If the current is bind then in will create a
 						bind shell. If the current is reverse, it will spawn a reverse one
+
 			spawn 5555		Spawn a reverse shell on 5555 port. This can be used to get shell
 						on another tab. On the other tab run: ./penelope.py 5555
+
 			spawn 3333 10.10.10.10	Spawn a reverse shell on the port 3333 of the 10.10.10.10 host
 		"""
 		host, port = None, None
@@ -508,9 +511,9 @@ class MainMenu(cmd.Cmd):
 			#print(paint("Output monitoring command:").blue)
 			files = [file.name for file in task['streams'].values()]
 			for file in set(files):
-				tail = f'tail -n+0 -f {file}'
-				Open("-e", f'{tail}', terminal=True)
-				print(tail)
+				tail_cmd = f'tail -n+0 -f {file}'
+				Open(tail_cmd, terminal=True)
+				print(tail_cmd)
 		else:
 			cmdlogger.warning("No command to execute")
 
@@ -1118,12 +1121,8 @@ class Listener:
 
 		try:
 			self.socket.shutdown(socket.SHUT_RDWR)
-
-		except OSError as e:
-			if e.errno == 107: # or e.errno == 9:
-				logger.debug("The socket is already terminated")
-			else:
-				raise
+		except OSError:
+			pass
 
 		self.socket.close()
 
@@ -2229,15 +2228,32 @@ class Session:
 
 				req = urllib.request.Request(local_item_path, headers={'User-Agent':options.useragent})
 
-				try:
-					logger.info(paint(f"--- ⇣  Downloading {local_item_path}").blue)
-					response = urllib.request.urlopen(req, timeout=options.short_timeout)
-					filename = response.headers.get_filename()
-					items = [response.read()]
+				logger.info(paint(f"--- ⇣  Downloading {local_item_path}").blue)
+				ctx = ssl.create_default_context() if options.verify_ssl_cert else ssl._create_unverified_context()
 
-				except Exception as e:
-					logger.error(f"Cannot download: {e}")
+				while True:
+					try:
+						response = urllib.request.urlopen(req, context=ctx, timeout=options.short_timeout)
+						break
+					except urllib.error.HTTPError as e:
+						logger.error(e)
+					except urllib.error.URLError as e:
+						logger.error(e.reason)
+						if type(e.reason) == ssl.SSLCertVerificationError:
+							answer = ask("Cannot verify SSL Certificate. Download anyway? (y/N)")
+							if answer.lower() == 'y': # Trust the cert
+								ctx = ssl._create_unverified_context()
+								continue
+						else:
+							answer = ask("Connection error. Try again? (Y/n)")
+							if answer.lower() == 'n': # Trust the cert
+								pass
+							else:
+								continue
 					return []
+
+				filename = response.headers.get_filename()
+				items = [response.read()]
 
 			elif local_item_path.startswith(os.path.sep):
 				items = list(Path(os.path.sep).glob(local_item_path.lstrip(os.path.sep)))
@@ -2382,7 +2398,12 @@ class Session:
 				if not port: port = self._port
 				if not host: host = self._host
 
-				listener = Listener(host, port)
+				temp_listener = Listener(host, port)
+#				temp_listener = None
+#				if not next((listener for listener in core.listeners.values() if listener.port == port), None):
+#					temp_listener = Listener(host, port)
+#					if not temp_listener:
+#						return False
 
 				if self.bin['bash']:
 					# bash -i doesn't always work
@@ -2412,8 +2433,8 @@ class Session:
 				logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
 				self.exec(cmd)
 
-				if listener: # TODO maybe leave some time before stopping it
-					listener.stop()
+				if temp_listener: # TODO maybe leave some time before stopping it
+					temp_listener.stop()
 			else:
 				host, port = self.socket.getpeername()
 				logger.info(f"Attempting to spawn a bind shell from {host}:{port}")
@@ -2532,12 +2553,8 @@ class Session:
 			core.wlist.remove(self)
 		try:
 			self.socket.shutdown(socket.SHUT_RDWR)
-
-		except OSError as e:
-			if e.errno == 107: # or e.errno == 9:
-				logger.debug("The socket is already terminated")
-			else:
-				raise
+		except OSError:
+			pass
 
 		self.socket.close()
 
@@ -2903,15 +2920,17 @@ pathlink = lambda filepath: (
 	f'/\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07'
 )
 
-def Open(*args, terminal=False):
-	if not DISPLAY:
-		logger.error("No available display to open the file")
+def Open(item, terminal=False):
+	if OS == 'Linux' and not DISPLAY:
+		logger.error("No available $DISPLAY")
 		return False
 
 	if not terminal:
 		program = {'Linux':'xdg-open', 'Darwin':'open'}[OS]
+		args = [item]
 	else:
 		program = 'x-terminal-emulator'
+		args = ['-e', *shlex.split(item)]
 
 	if not shutil.which(program):
 		logger.error(f"Cannot open window: '{program}' binary does not exist")
@@ -3136,7 +3155,7 @@ class CustomFormatter(logging.Formatter):
 		template = __class__.TEMPLATES[record.levelno]
 		prefix = "\r" if core.attached_session is None else ""
 		suffix = "\r" if core.attached_session is not None else ""
-		thread = " " + paint(threading.current_thread().name).white_CYAN\
+		thread = paint(" ") + paint(threading.current_thread().name).white_CYAN\
 			if record.levelno is logging.DEBUG or options.debug else ""
 		text = prefix + f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}" + suffix
 		return getattr(paint(text), template['color'])
@@ -3193,6 +3212,8 @@ class Options:
 		self.max_maintain = 10
 		self.maintain = 1
 		self.max_open_files = 5
+		self.verify_ssl_cert = True
+		self.proxy = ''
 		self.upload_chunk_size = 51200
 		self.download_chunk_size = 1048576
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
@@ -3264,6 +3285,14 @@ class Options:
 				value = []
 			elif type(value) is str:
 				value = re.split('[^a-zA-Z0-9]+', value)
+
+		elif option == 'proxy':
+			if not value:
+				os.environ.pop('http_proxy', '')
+				os.environ.pop('https_proxy', '')
+			else:
+				os.environ['http_proxy'] = value
+				os.environ['https_proxy'] = value
 
 		elif option == 'configfile':
 			self.__dict__[option] = value
