@@ -809,14 +809,14 @@ class ControlQueue:
 
 	def __init__(self):
 		self._out, self._in = os.pipe()
-		self.queue = queue.Queue(1) # TODO
+		self.queue = queue.Queue() # TODO
 
 	def fileno(self):
 		return self._out
 
 	def __lshift__(self, command):
-		os.write(self._in, b'\x00')
 		self.queue.put(command)
+		os.write(self._in, b'\x00')
 
 	def get(self):
 		os.read(self._out, 1)
@@ -1611,7 +1611,7 @@ class Session:
 		expect=None,		# Items to wait for in the response
 		bypass=False,		# Control session usage
 		preserve_dir=False,	# Current dir preservation when using control session
-		receive=True,		# Send cmd via this method but receive with TLV method
+		separate=False,		# If true, send cmd via this method but receive with TLV method
 		agent_typing=False	# Simulate typing on shell (for agent)
 	):
 
@@ -1684,7 +1684,8 @@ class Session:
 				if self.agent and agent_typing:
 					cmd = Messenger.message(Messenger.SHELL, cmd)
 				self.send(cmd)
-				if not receive:
+				if separate:
+					r, _, _ = select.select([self], [], [], options.short_timeout)
 					self.subchannel.result = False
 
 				self.subchannel.allow_receive_data = False
@@ -1905,7 +1906,7 @@ class Session:
 
 				return False
 
-			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', receive=not deploy_agent, raw=True)
+			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, raw=True)
 			if not response and not deploy_agent:
 				logger.error("The shell became unresponsive. I am killing it...")
 				self.kill()
@@ -2348,7 +2349,7 @@ class Session:
 				del self.control_session.progress_send_queue
 
 				logger.info(paint("--- Remote unpacking...").blue)
-				response = self.responses.get()
+				response = self.responses.get().decode()
 				exit_code = self.responses.get()
 
 			else:
@@ -2377,7 +2378,7 @@ class Session:
 						logger.info(f"Uploaded => {paint(shlex.quote(str(item))).yellow}")
 				else:
 					logger.error(f"Upload failed")
-					print(paint(textwrap.indent(response.decode(), " *  ")).yellow)
+					print(paint(textwrap.indent(response, " *  ")).yellow)
 					return []
 
 				return altnames
