@@ -298,7 +298,7 @@ class MainMenu(cmd.Cmd):
 				return False
 			else:
 				if __class__.confirm(f"Kill all sessions{self.active_sessions}"):
-					for session in reversed(core.sessions.copy().values()):
+					for session in reversed(list(core.sessions.copy().values())):
 						session.kill()
 				return
 		else:
@@ -1006,7 +1006,7 @@ class Core:
 
 		if self.sessions:
 			logger.warning(f"Killing sessions...")
-			for session in reversed(self.sessions.copy().values()):
+			for session in reversed(list(self.sessions.copy().values())):
 				session.kill()
 
 		for listener in self.listeners.copy().values():
@@ -1242,7 +1242,7 @@ class Session:
 		self.need_resize = False
 		self.agent = False
 		self.messenger = Messenger()
-		self.responses = queue.SimpleQueue()
+		self.responses = queue.Queue()
 
 		self.shell_pid = None
 		self._bin = defaultdict(lambda: "")
@@ -2057,7 +2057,7 @@ class Session:
 				logger.info(paint('--- Remote packing...').blue)
 				if self.agent:
 					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
-					self.control_session.progress_recv_queue = queue.SimpleQueue()
+					self.control_session.progress_recv_queue = queue.Queue()
 					self.send(Messenger.message(Messenger.DOWNLOAD, remote_item_path.encode()))
 					response = self.responses.get()
 					while response  == b'-2':
@@ -2104,7 +2104,7 @@ class Session:
 				progress_bar.end = send_size
 
 				if not self.agent:
-					self.control_session.progress_recv_queue = queue.SimpleQueue()
+					self.control_session.progress_recv_queue = queue.Queue()
 
 					data = io.BytesIO()
 					for offset in range(0, send_size, options.download_chunk_size):
@@ -2339,7 +2339,7 @@ class Session:
 				else:
 					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{destination}')".encode()))
 
-				self.control_session.progress_send_queue = queue.SimpleQueue()
+				self.control_session.progress_send_queue = queue.Queue()
 				self.send(Messenger.message(Messenger.UPLOAD, data))
 
 				while progress_bar.active:
@@ -2536,7 +2536,7 @@ class Session:
 
 			core.control << f'self.sessions[{self.id}].kill()'
 			if thread_name == 'Menu':
-				menu.kill_wait = queue.SimpleQueue()
+				menu.kill_wait = queue.Queue()
 				logger.error(menu.kill_wait.get())
 				del menu.kill_wait
 
@@ -3158,7 +3158,7 @@ class CustomFormatter(logging.Formatter):
 		thread = paint(" ") + paint(threading.current_thread().name).white_CYAN\
 			if record.levelno is logging.DEBUG or options.debug else ""
 		text = prefix + f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}" + suffix
-		return getattr(paint(text), template['color'])
+		return str(getattr(paint(text), template['color']))
 
 ##########################################################################################################
 
