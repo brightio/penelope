@@ -14,7 +14,7 @@ done
 ROWS=`tput lines`
 COLUMNS=`tput cols`
 
-xdotool type $'python -c "import pty; pty.spawn(\'/bin/bash\')"'
+xdotool type $'python3 -c "import pty; pty.spawn(\'/bin/bash\')" || python -c "import pty; pty.spawn(\'/bin/bash\')"'
 xdotool key Return
 xdotool type 'export TERM=xterm-256color'
 xdotool key Return
