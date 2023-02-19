@@ -940,7 +940,7 @@ class Core:
 
 					target = readable.shell_response_buf\
 					if not readable.subchannel.active\
-					and readable.subchannel.allow_receive_data\
+					and readable.subchannel.allow_receive_shell_data\
 					else readable.subchannel
 
 					if readable.agent:
@@ -960,7 +960,7 @@ class Core:
 					else:
 						target.write(data)
 
-					shell_output = readable.shell_response_buf.getvalue()
+					shell_output = readable.shell_response_buf.getvalue() # TODO
 					if shell_output:
 						if readable.is_attached:
 							os.write(sys.stdout.fileno(), shell_output)
@@ -1175,7 +1175,7 @@ class Channel:
 		self._read, self._write = os.pipe()
 		self.can_use = True
 		self.active = False
-		self.allow_receive_data = True
+		self.allow_receive_shell_data = True
 		self.control = ControlQueue()
 
 	def fileno(self):
@@ -1482,7 +1482,7 @@ class Session:
 			self.outbuf.write(data)
 			self.outbuf.seek(position)
 
-			self.subchannel.allow_receive_data = True
+			self.subchannel.allow_receive_shell_data = True
 
 			if self not in core.wlist:
 				core.wlist.append(self)
@@ -1684,11 +1684,7 @@ class Session:
 				if self.agent and agent_typing:
 					cmd = Messenger.message(Messenger.SHELL, cmd)
 				self.send(cmd)
-				if separate:
-					r, _, _ = select.select([self], [], [], options.short_timeout)
-					self.subchannel.result = False
-
-				self.subchannel.allow_receive_data = False
+				self.subchannel.allow_receive_shell_data = False # TODO
 
 			data_timeout = options.short_timeout if timeout is False else timeout
 			continuation_timeout = options.latency
@@ -1777,6 +1773,12 @@ class Session:
 				self.subchannel.result = self.subchannel.result.rstrip().decode()
 			logger.debug(f"{paint('FINAL RESPONSE: ').white_BLUE}{self.subchannel.result}")
 			self.subchannel.active = False
+
+			if separate and self.subchannel.result:
+				buffer = io.BytesIO()
+				for _type, _value in self.messenger.feed(self.subchannel.result):
+					buffer.write(_value)
+				return buffer.getvalue()
 
 			return self.subchannel.result
 
@@ -1907,7 +1909,7 @@ class Session:
 				return False
 
 			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, raw=True)
-			if not response and not deploy_agent:
+			if not response:
 				logger.error("The shell became unresponsive. I am killing it...")
 				self.kill()
 				return False
@@ -2762,9 +2764,10 @@ def agent():
 		tasks = dict()
 		pipes = dict()
 		agent.pipe_name = None
-		fds = [master_fd, pty.STDIN_FILENO]
+		rlist = [master_fd, pty.STDIN_FILENO]
+		wlist = []
 		while True:
-			rfds, wfds, xfds = select.select(fds, [], [])
+			rfds, wfds, xfds = select.select(rlist, wlist, [])
 
 			for readable in rfds:
 				if readable is master_fd:
@@ -2885,7 +2888,7 @@ def agent():
 								del pipes[taskid]
 							out = process.stdout.fileno()
 							err = process.stderr.fileno()
-							fds.extend([out, err])
+							rlist.extend([out, err])
 							tasks[out] = taskid + "1".encode()
 							tasks[err] = taskid + "2".encode()
 							respond(Messenger.RESPONSE, str(process.pid).encode())
@@ -2894,7 +2897,7 @@ def agent():
 					data = os.read(readable, NET_BUF_SIZE)
 					respond(Messenger.TASK_RESPONSE, tasks[readable] + data)
 					if not data:
-						fds.remove(readable)
+						rlist.remove(readable)
 						del tasks[readable]
 	except:
 		_, e, t = sys.exc_info()
