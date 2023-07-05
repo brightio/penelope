@@ -41,7 +41,7 @@ As shown in the below video, within only a few seconds we have easily:
 8. Downloaded the remote /etc directory
 9. For every shell that may be killed for some reason, automatically a new one is spawned. This gives us a kind of persistence with the target
 
-https://user-images.githubusercontent.com/65655412/208298446-fe2f11f6-d8bc-4e85-9f19-94e66593102b.mp4
+https://github.com/brightio/penelope/assets/65655412/7295da32-28e2-4c92-971f-09423eeff178
 
 ### Main Menu Commands
 Some Notes:
