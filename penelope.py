@@ -2784,8 +2784,10 @@ def agent():
 
 					messages = messenger.feed(data)
 					for _type, _value in messages:
-						if   _type == Messenger.SHELL:
-							pty._writen(master_fd, _value)
+						if _type == Messenger.SHELL:
+							while _value:
+								n = os.write(master_fd, _value)
+								_value = _value[n:]
 
 						elif _type == Messenger.RESIZE:
 							fcntl.ioctl(master_fd, termios.TIOCSWINSZ, _value)
