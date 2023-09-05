@@ -1241,7 +1241,7 @@ class Session:
 		self.alternate_buffer = False
 		self.need_resize = False
 		self.agent = False
-		self.messenger = Messenger()
+		self.messenger = Messenger(io.BytesIO)
 		self.responses = queue.Queue()
 
 		self.shell_pid = None
@@ -2598,7 +2598,7 @@ class Messenger:
 
 	LEN_BYTES = 4
 
-	def __init__(self):
+	def __init__(self, bufferclass):
 
 		self.len_got = 0
 		self.len_bytes = None
@@ -2607,13 +2607,8 @@ class Messenger:
 		self.mess_got = 0
 		self.mess_last_got = 0
 
-		if not OLD:
-			self.buffer = io.BytesIO()
-			self.message_buf = io.BytesIO()
-		else:
-			self.buffer_index = 0
-			self.buffer = None
-			self.message_buf = None
+		self.buffer = bufferclass()
+		self.message_buf = bufferclass()
 
 	@staticmethod
 	def message(_type, _data):
@@ -2623,34 +2618,20 @@ class Messenger:
 	def feed(self, data):
 		messages = []
 
-		if not OLD:
-			position = self.buffer.tell()
-			self.buffer.seek(0, io.SEEK_END)
-			self.buffer.write(data)
-			self.buffer.seek(position)
-		else:
-			if not self.buffer:
-				self.buffer = data
-			else:
-				self.buffer += data
+		position = self.buffer.tell()
+		self.buffer.seek(0, 2) # io.SEEK_END
+		self.buffer.write(data)
+		self.buffer.seek(position)
 
 		while True:
 			if not self.len:
 				need = Messenger.LEN_BYTES - self.len_got
-				if not OLD:
-					data = self.buffer.read(need)
-				else:
-					if self.buffer:
-						data = self.buffer[self.buffer_index:self.buffer_index + need]
-						#self.buffer_index += need
-					else:
-						data = None
+
+				data = self.buffer.read(need)
+
 				if not data:
 					break
 				self.len_got += len(data)
-
-				if OLD:
-					self.buffer_index += self.len_got
 
 				if not self.len_bytes:
 					self.len_bytes = data
@@ -2662,28 +2643,15 @@ class Messenger:
 
 			if self.len:
 				to_get = self.len - self.mess_got
-				if not OLD:
-					data = self.buffer.read(to_get)
-				else:
-					if self.buffer:
-						data = self.buffer[self.buffer_index:self.buffer_index + to_get]
-						#self.buffer_index += to_get
-					else:
-						data = None
+
+				data = self.buffer.read(to_get)
 
 				if not data:
 					break
 				self.mess_last_got = len(data)
 				self.mess_got += self.mess_last_got
-				if OLD:
-					self.buffer_index += self.mess_last_got
-				if not OLD:
-					self.message_buf.write(data)
-				else:
-					if not self.message_buf:
-						self.message_buf = data
-					else:
-						self.message_buf += data
+
+				self.message_buf.write(data)
 
 				if self.mess_got == self.len:
 					self.len_got = 0
@@ -2692,25 +2660,18 @@ class Messenger:
 
 					self.mess_got = 0
 
-					if not OLD:
-						self.message_buf.seek(0)
-						_type = struct.unpack('!B', self.message_buf.read(1))[0]
-						_message = self.message_buf.read()
-						self.message_buf.seek(0)
-						self.message_buf.truncate(0)
-					else:
-						_type = struct.unpack('!B', self.message_buf[0])[0]
-						_message = self.message_buf[1:]
-						self.message_buf = None
+					self.message_buf.seek(0)
+					_type = struct.unpack('!B', self.message_buf.read(1))[0]
+					_message = self.message_buf.read()
+					self.message_buf.seek(0)
+					self.message_buf.truncate(0)
 
 					messages.append((_type, _message))
 					#open("/tmp/" + "ppp2", "a").write(repr((_type, _message)) + "\n")
-		if not OLD:
-			self.buffer.seek(0)
-			self.buffer.truncate(0)
-		else:
-			self.buffer = None
-			self.buffer_index = 0
+
+		self.buffer.seek(0)
+		self.buffer.truncate(0)
+
 		return messages
 
 
@@ -2732,13 +2693,15 @@ def agent():
 
 	SHELL = "{}"
 	NET_BUF_SIZE = 8192
-	OLD = sys.version_info < (2, 6)
-	if not OLD:
-		import io
-	else:
-		import tempfile
 	{}
-	messenger = Messenger()
+	try:
+		import io
+		bufferclass = io.BytesIO
+	except:
+		import StringIO
+		bufferclass = StringIO.StringIO
+
+	messenger = Messenger(bufferclass)
 
 	respond = lambda _type, _value: os.write(pty.STDOUT_FILENO, Messenger.message(_type, _value))
 
@@ -2794,17 +2757,13 @@ def agent():
 
 						elif _type == Messenger.UPLOAD:
 							try:
-								if not OLD:
-									tar = tarfile.open(mode='r:gz', fileobj=io.BytesIO(_value))
-								else:
-									tmpf = tempfile.TemporaryFile()
-									tmpf.write(_value)
-									tmpf.seek(0)
-									tar = tarfile.open(mode='r:gz', fileobj=tmpf)
-									tar.errorlevel=1
+								data = bufferclass(_value)
+								tar = tarfile.open(name="", mode='r:gz', fileobj=data)
+								tar.errorlevel = 1
 
 								if not agent.pipe_name:
-									tar.extractall()
+									for item in tar:
+										tar.extract(item)
 								else:
 									pipes[agent.pipe_name.encode()] = os.pipe()
 									file = tar.extractfile(tar.members[0])
@@ -2822,8 +2781,6 @@ def agent():
 										args=(pipes[agent.pipe_name.encode()][1], data)
 										).start()
 								tar.close()
-								if OLD:
-									tmpf.close()
 
 							except: #TODO
 								_, e, _ = sys.exc_info()
@@ -2841,22 +2798,17 @@ def agent():
 								items = glob.glob(os.path.expanduser(_value.decode()))
 								if not items:
 									raise Exception("No such file or directory: " + _value.decode())
-								if not OLD:
-									tmpf = io.BytesIO()
-								else:
-									tmpf = tempfile.TemporaryFile()
-								tar = tarfile.open(mode='w:gz', fileobj=tmpf)
+
+								buffer = bufferclass()
+								tar = tarfile.open(name="", mode='w:gz', fileobj=buffer)
 								tar.add = handle_exceptions(tar.add)
 								for item in items:
 									tar.add(item)
 								actual_size = sum([item.size for item in tar])
 								tar.close()
-								if not OLD:
-									data = tmpf.getvalue()
-								else:
-									tmpf.seek(0)
-									data = tmpf.read()
-									tmpf.close()
+
+								data = buffer.getvalue()
+
 							except:
 								_, e, _ = sys.exc_info()
 								respond(Messenger.RESPONSE, str(-1).encode())
@@ -3194,7 +3146,6 @@ NET_BUF_SIZE = 8192
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 MESSENGER = inspect.getsource(Messenger)
 AGENT = inspect.getsource(agent)
-OLD = sys.version_info < (2, 6)
 
 # INITIALIZATION
 signal.signal(signal.SIGINT, ControlC)
