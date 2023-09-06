@@ -423,7 +423,11 @@ class MainMenu(cmd.Cmd):
 
 		if line:
 			args = line.split(" ")
-			port = args[0]
+			try:
+				port = int(args[0])
+			except ValueError:
+				cmdlogger.error("Port number should be numeric")
+				return False
 			arg_num = len(args)
 			if arg_num == 2:
 				host = args[1]
@@ -945,6 +949,7 @@ class Core:
 
 					if readable.agent:
 						for _type, _value in readable.messenger.feed(data):
+							#print(_type,_value)
 							if _type == Messenger.SHELL:
 								target.write(_value)
 							elif _type == Messenger.TASK_RESPONSE:
@@ -1062,28 +1067,30 @@ class Listener:
 			self.socket.bind((self.host, self.port))
 
 		except PermissionError:
-			logger.error(f"Cannot bind to port {self.port}: Insufficient privileges")
+			error = f"Cannot bind to port {self.port}: Insufficient privileges"
 
 		except socket.gaierror:
-			logger.error("Cannot resolve hostname")
+			error = "Cannot resolve hostname"
 
 		except OSError as e:
 			if e.errno == errno.EADDRINUSE:
-				if not self.caller == 'spawn':
-					logger.error(f"The port {self.port} is currently in use")
+				error = f"The port {self.port} is currently in use"
 
 			elif e.errno == errno.EADDRNOTAVAIL:
-				logger.error(f"Cannot listen on the requested address")
+				error = f"Cannot listen on the requested address"
 
 		except OverflowError:
-			logger.error("Invalid port number. Valid numbers: 1-65535")
+			error = "Invalid port number. Valid numbers: 1-65535"
 
 		except ValueError:
-			logger.error("Port number must be numeric")
+			error = "Port number must be numeric"
 
 		else:
 			self.start()
 			return
+
+		if not self.caller == 'spawn':
+			logger.error(error)
 
 	def __str__(self):
 		return f"Listener({self.host}:{self.port})"
@@ -1131,7 +1138,6 @@ class Listener:
 		else:
 			logger.warning(f"Stopping {self}")
 
-
 	@property
 	def hints(self):
 		presets = [
@@ -1151,7 +1157,7 @@ class Listener:
 
 		output.append("─" * len(max(output, key=len)))
 
-		return '\n'.join(output)
+		return '\r\n'.join(output)
 
 
 class LineBuffer:
@@ -1620,7 +1626,10 @@ class Session:
 			if self.agent and not agent_typing: # TODO environment will not be the same as shell
 				if cmd:
 					self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode()))
-					return self.responses.get()
+					try:
+						return self.responses.get(timeout=15)#options.short_timeout)
+					except queue.Empty: # TODO temp fix
+						return b""
 				return None
 
 			if self.need_control_session and not bypass:
@@ -2398,15 +2407,10 @@ class Session:
 		#print(threading.current_thread().name)
 		if self.OS == "Unix":
 			if any([self.listener, port, host]):
-				if not port: port = self._port
-				if not host: host = self._host
+				if port is None: port = self._port
+				if host is None: host = self._host
 
-				temp_listener = Listener(host, port)
-#				temp_listener = None
-#				if not next((listener for listener in core.listeners.values() if listener.port == port), None):
-#					temp_listener = Listener(host, port)
-#					if not temp_listener:
-#						return False
+				new_listener = Listener(host, port)
 
 				if self.bin['bash']:
 					# bash -i doesn't always work
@@ -2436,8 +2440,9 @@ class Session:
 				logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
 				self.exec(cmd)
 
-				if temp_listener: # TODO maybe leave some time before stopping it
-					temp_listener.stop()
+				# TODO maybe destroy the new_listener upon getting a shell?
+				# if new_listener:
+				#	new_listener.stop()
 			else:
 				host, port = self.socket.getpeername()
 				logger.info(f"Attempting to spawn a bind shell from {host}:{port}")
@@ -3342,11 +3347,13 @@ if DEV_MODE:
 	options.no_bins = 'python,python3,script'
 
 def listener_menu(listener):
+	if not listener:
+		return False
 	func = None
 	tty.setraw(sys.stdin)
 
 	while True:
-		sys.stdout.write(f"\r\x1b[?25l➤ 💀 Show Payloads (p) 🏠 Main Menu (m) 🚫 Quit (q/Ctrl-C)")
+		sys.stdout.write(f"\r\x1b[?25l{paint('➤').cyan} 💀 Show Payloads (p) 🏠 Main Menu (m) 🚫 Quit (q/Ctrl-C)")
 		sys.stdout.flush()
 
 		r, _, _ = select.select([sys.stdin, core.control], [], [])
