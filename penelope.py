@@ -1153,7 +1153,7 @@ class Listener:
 
 		for ip in ips:
 			output.extend(('', '➤  ' + str(paint(ip).CYAN), ''))
-			output.extend([preset.format(ip, port) for preset in presets])
+			output.extend([preset.format(ip, self.port) for preset in presets])
 
 			output.extend(textwrap.dedent(f"""
 			{paint('Metasploit').UNDERLINE}
@@ -2903,8 +2903,11 @@ def Open(item, terminal=False):
 		program = {'Linux':'xdg-open', 'Darwin':'open'}[OS]
 		args = [item]
 	else:
-		program = 'x-terminal-emulator'
-		args = ['-e', *shlex.split(item)]
+		program = {'Linux':'x-terminal-emulator', 'Darwin':'osascript'}[OS]
+		if OS == 'Linux':
+			args = ['-e', *shlex.split(item)]
+		elif OS == 'Darwin':
+			args = ['-e', f'tell app "Terminal" to do script "{item}"']
 
 	if not shutil.which(program):
 		logger.error(f"Cannot open window: '{program}' binary does not exist")
@@ -3371,7 +3374,7 @@ def listener_menu(listener):
 		if sys.stdin in r:
 			command = sys.stdin.read(1)
 			if command == 'p':
-				sys.stdout.write(f"\r\n\r\n{listener.hints}\r\n")
+				sys.stdout.write(f"\r\n{listener.hints}\r\n")
 				sys.stdout.flush()
 			elif command == 'm':
 				func = menu.show
