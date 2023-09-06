@@ -658,7 +658,10 @@ class MainMenu(cmd.Cmd):
 
 		Reset the local terminal
 		"""
-		os.system("reset")
+		if shutil.which("reset"):
+			os.system("reset")
+		else:
+			cmdlogger.error("'reset' command doesn't exist on the system")
 
 	def do_history(self, line):
 		"""
@@ -2958,17 +2961,24 @@ class Interfaces:
 	@property
 	def list(self):
 		if OS == 'Linux':
-			output = subprocess.check_output(['ip', 'a']).decode()
-			interfaces = re.findall(r'(?m)(?<=^ {4}inet )([^ /]*).* ([^ ]*)$', output)
-			return {i[1]:i[0] for i in interfaces}
+			if shutil.which("ip"):
+				output = subprocess.check_output(['ip', 'a']).decode()
+				interfaces = re.findall(r'(?m)(?<=^ {4}inet )([^ /]*).* ([^ ]*)$', output)
+				return {i[1]:i[0] for i in interfaces}
+			else:
+				logger.error("'ip' command is not available")
+				return dict()
 
 		elif OS == 'Darwin':
 			_list = dict()
-			output = re.sub('\n\s', ' ', subprocess.check_output(['ifconfig']).decode())
-			for line in output.splitlines():
-				result = re.search('^([^:]*).*inet ([^ ]*)', line)
-				if result:
-					_list[result[1]] = result[2]
+			if shutil.which("ifconfig"):
+				output = re.sub('\n\s', ' ', subprocess.check_output(['ifconfig']).decode())
+				for line in output.splitlines():
+					result = re.search('^([^:]*).*inet ([^ ]*)', line)
+					if result:
+						_list[result[1]] = result[2]
+			else:
+				logger.error("'ifconfig' command is not available")
 			return _list
 
 	@property
