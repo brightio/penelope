@@ -3341,6 +3341,37 @@ if DEV_MODE:
 	options.max_maintain = 50
 	options.no_bins = 'python,python3,script'
 
+def listener_menu(listener):
+	func = None
+	tty.setraw(sys.stdin)
+
+	while True:
+		sys.stdout.write(f"\r\x1b[?25l➤ 💀 Show Payloads (p) 🏠 Main Menu (m) 🚫 Quit (q/Ctrl-C)")
+		sys.stdout.flush()
+
+		r, _, _ = select.select([sys.stdin, core.control], [], [])
+		if sys.stdin in r:
+			command = sys.stdin.read(1)
+			if command == 'p':
+				sys.stdout.write(f"\r\n\r\n{listener.hints}\r\n")
+				sys.stdout.flush()
+			elif command == 'm':
+				func = menu.show
+				break
+			elif command in ('q', '\x03'):
+				func = core.stop
+				break
+			continue
+		if core.sessions: # TODO
+			break
+
+	termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
+	sys.stdout.write("\r\n\x1b[?25h\x1b[1A\x1b[K")
+	sys.stdout.flush()
+	if func: func()
+
+	return True
+
 # MAIN
 if __name__ == "__main__":
 
@@ -3356,12 +3387,12 @@ if __name__ == "__main__":
 	else:
 		if options.ports:
 			for port in options.ports:
-				Listener(port=port)
+				listener_menu(Listener(port=port))
 			if options.plain:
 				menu.show()
 		else:
 			if options.plain:
 				menu.show()
 			else:
-				Listener()
+				listener_menu(Listener())
 
