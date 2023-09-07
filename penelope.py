@@ -261,11 +261,25 @@ class MainMenu(cmd.Cmd):
 				return True
 		else:
 			if core.sessions:
-				for session in core.sessions.values():
-					print(session, flush=True)
+				for host, sessions in core.hosts.items():
+					print('\n➤  ' + OSes[sessions[0].OS] + " " + str(paint(host).RED + ' 💀'))
+					table = Table(joinchar=' | ')
+					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'Source')]
+					for session in sessions:
+						if self.sid == session.id:
+							ID = paint('[' + str(session.id) + ']').red
+						elif session.new:
+							ID = paint('<' + str(session.id) + '>').yellow_BLINK
+						else:
+							ID = paint(' ' + str(session.id)).yellow
+						source = 'Reverse shell from ' + str(session.listener) if session.listener else f'Bind shell (port {session.port})'
+						table += [ID, paint(session.type).CYAN if session.type == 'PTY' else session.type, source]
+					print("\n", textwrap.indent(str(table), "    "), "\n", sep="")
 				print(flush=True)
 			else:
+				print()
 				cmdlogger.warning("No sessions yet 😟")
+				print()
 
 	@session()
 	def do_interact(self, ID):
@@ -1332,29 +1346,6 @@ class Session:
 
 	def __bool__(self):
 		return self.socket.fileno() != -1# and self.OS)
-
-	def __str__(self):
-		if menu.sid == self.id:
-			ID = paint('[' + str(self.id) + ']').red
-
-		elif self.new:
-			ID = paint('<' + str(self.id) + '>').yellow_BLINK
-
-		else:
-			ID = paint('(' + str(self.id) + ')').yellow
-
-		source = 'Reverse shell from ' + str(self.listener) if self.listener else f'Bind shell (port {self.port})'
-
-		return (
-			f"\n{paint('SessionID ').blue}{ID}\n"
-			f"{paint('    └──── ').blue}"
-			f"{paint('Host: ').green}{paint(self.name).RED}\n"
-			f"\t  {paint('Shell Type: ').green}"
-			#f"{paint('Control').YELLOW if self.control else self.type}\n"
-			f"{paint(self.type).CYAN if not self.type == 'Basic' else self.type}\n"
-			f"\t  {paint('OS Family: ').green}{self.OS}\n"
-			f"\t  {paint('Source: ').green}{source}"
-		)
 
 	def __repr__(self):
 		return (
