@@ -1901,7 +1901,7 @@ class Session:
 					logger.warning("Cannot upgrade shell with the available binaries...")
 					socat_binary = self.need_binary(
 						"socat",
-						"https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/socat"
+						BINARIES['socat']
 						)
 					if socat_binary:
 						_bin = socat_binary
@@ -2440,7 +2440,7 @@ class Session:
 						logger.warning("ncat is not available on the target")
 						ncat_binary = self.need_binary(
 							"ncat",
-							"https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/ncat"
+							BINARIES['ncat']
 							)
 						if ncat_binary:
 							cmd = ncat_cmd.format(ncat_binary)
@@ -3175,6 +3175,15 @@ NET_BUF_SIZE = 8192
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 MESSENGER = inspect.getsource(Messenger)
 AGENT = inspect.getsource(agent)
+BINARIES = {
+	'socat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/socat",
+	'ncat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/ncat",
+	'linpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh",
+	'winpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEAS.bat",
+	'lse': "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
+	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1"
+}
+
 
 # INITIALIZATION
 signal.signal(signal.SIGINT, ControlC)
@@ -3214,11 +3223,11 @@ class Options:
 				'description':'Upload privilege escalation scripts to the target',
 				'actions':{
 					'Unix':[
-						'upload https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh',
-						'upload https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh'
+						f"upload {BINARIES['linpeas']}",
+						f"upload {BINARIES['lse']}"
 					],
 					'Windows':[
-						'upload https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1'
+						f"upload {BINARIES['powerup']}"
 					]
 				}
 			},
@@ -3226,10 +3235,10 @@ class Options:
 				'description':'Run the latest version of PEASS-ng in the background',
 				'actions':{
 					'Unix':[
-						'task https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh'
+						f"task {BINARIES['linpeas']}"
 					],
 					'Windows':[
-						'task https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEAS.bat'
+						f"task {BINARIES['winpeas']}"
 					]
 				}
 			}
