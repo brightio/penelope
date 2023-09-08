@@ -1169,7 +1169,7 @@ class Listener:
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend(('', '➤  ' + str(paint(ip).CYAN), ''))
+			output.extend(('', '➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
 			output.extend([preset.format(ip, self.port) for preset in presets])
 
 			output.extend(textwrap.dedent(f"""
@@ -3370,30 +3370,43 @@ if DEV_MODE:
 	options.max_maintain = 50
 	options.no_bins = 'python,python3,script'
 
-def listener_menu(listener):
-	if not listener:
+def listener_menu():
+	if not core.listeners:
 		return False
 	func = None
 	tty.setraw(sys.stdin)
 
 	while True:
-		sys.stdout.write(f"\r\x1b[?25l{paint('➤ ').white} 💀 {paint('Show Payloads').magenta} (p) 🏠 {paint('Main Menu').green} (m) 🚫 {paint('Quit').red} (q/Ctrl-C)")
+		sys.stdout.write(
+			f"\r\x1b[?25l{paint('➤ ').white} "
+			f"💀 {paint('Show Payloads').magenta} (p) "
+			f"🏠 {paint('Main Menu').green} (m) "
+			f"🔄 {paint('Clear').yellow} (Ctrl-L) "
+			f"🚫 {paint('Quit').red} (q/Ctrl-C)"
+		)
 		sys.stdout.flush()
 
 		r, _, _ = select.select([sys.stdin, core.control], [], [])
 		if sys.stdin in r:
-			command = sys.stdin.read(1)
+			command = sys.stdin.read(1).lower()
 			if command == 'p':
-				sys.stdout.write(f"\r\n{listener.hints}\r\n")
-				sys.stdout.flush()
+				for listener in core.listeners.values():
+					sys.stdout.write(f"\r\n{listener.hints}\r\n")
 			elif command == 'm':
 				func = menu.show
 				break
+			elif command == '\x0C':
+				os.system("clear")
 			elif command in ('q', '\x03'):
 				func = core.stop
 				break
 			continue
 		if core.sessions: # TODO
+			for session in core.sessions.values():
+				if session and session.OS:
+					break
+			else:
+				continue
 			break
 
 	termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
@@ -3418,12 +3431,15 @@ if __name__ == "__main__":
 	else:
 		if options.ports:
 			for port in options.ports:
-				listener_menu(Listener(port=port))
+				Listener(port=port)
 			if options.plain:
 				menu.show()
+			else:
+				listener_menu()
 		else:
 			if options.plain:
 				menu.show()
 			else:
-				listener_menu(Listener())
+				Listener()
+				listener_menu()
 
