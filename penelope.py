@@ -1858,10 +1858,12 @@ class Session:
 			if self.bin['python3'] or self.bin['python']:
 				if self.bin['python3']:
 					_bin = self.bin['python3']
+					_decode = 'b64decode'
 					_exec = 'exec(_value, globals(), _locals)'
 
 				elif self.bin['python']:
 					_bin = self.bin['python']
+					_decode = 'decodestring'
 					_exec = 'exec _value in globals(), _locals'
 
 				deploy_agent = True
@@ -1872,7 +1874,7 @@ class Session:
 					_exec,
 					).encode())).decode()
 				cmd = (
-					f'{_bin} -c \'import base64,zlib;exec(zlib.decompress(base64.b64decode("{payload}")));agent()\''
+					f'{_bin} -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")));agent()\''
 				)
 
 			elif self.bin['script']:
@@ -2620,10 +2622,10 @@ class Messenger:
 		self.buffer = bufferclass()
 		self.message_buf = bufferclass()
 
-	@staticmethod
 	def message(_type, _data):
 		_len = len(_data)
 		return struct.pack('!IB' + str(_len) + 's', _len + 1, _type, _data)
+	message = staticmethod(message)
 
 	def feed(self, data):
 		messages = []
