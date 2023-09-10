@@ -2713,8 +2713,14 @@ def agent():
 		bufferclass = StringIO.StringIO
 
 	messenger = Messenger(bufferclass)
+	outbuf = bufferclass()
+	ttybuf = bufferclass()
 
-	respond = lambda _type, _value: os.write(pty.STDOUT_FILENO, Messenger.message(_type, _value))
+	def respond(_type, _value):
+		outbuf.seek(0, 2)
+		outbuf.write(Messenger.message(_type, _value))
+		if not pty.STDOUT_FILENO in wlist:
+			wlist.append(pty.STDOUT_FILENO)
 
 	def handle_exceptions(func):
 		def inner(*args, **kwargs):
@@ -2740,6 +2746,10 @@ def agent():
 		agent.pipe_name = None
 		rlist = [master_fd, pty.STDIN_FILENO]
 		wlist = []
+		for fd in (master_fd, pty.STDIN_FILENO, pty.STDOUT_FILENO):
+			flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+			fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
 		while True:
 			rfds, wfds, xfds = select.select(rlist, wlist, [])
 
@@ -2759,9 +2769,10 @@ def agent():
 					messages = messenger.feed(data)
 					for _type, _value in messages:
 						if _type == Messenger.SHELL:
-							while _value:
-								n = os.write(master_fd, _value)
-								_value = _value[n:]
+							ttybuf.seek(0, 2)
+							ttybuf.write(_value)
+							if not master_fd in wlist:
+								wlist.append(master_fd)
 
 						elif _type == Messenger.RESIZE:
 							fcntl.ioctl(master_fd, termios.TIOCSWINSZ, _value)
@@ -2864,13 +2875,34 @@ def agent():
 					if not data:
 						rlist.remove(readable)
 						del tasks[readable]
+
+			for writable in wfds:
+				if writable is pty.STDOUT_FILENO:
+					sendbuf = outbuf
+				elif writable is master_fd:
+					sendbuf = ttybuf
+
+				sendbuf.seek(0)
+				data = sendbuf.read(NET_BUF_SIZE)
+
+				try:
+					sent = os.write(writable, data)
+				except OSError:
+					break
+
+				sendbuf.seek(sent)
+				remaining = sendbuf.read()
+				sendbuf.seek(0)
+				sendbuf.truncate()
+				sendbuf.write(remaining)
+				if not remaining:
+					wlist.remove(writable)
+
 	except:
 		_, e, t = sys.exc_info()
 		import traceback
 		traceback.print_exc()
 		traceback.print_stack()
-		respond(Messenger.RESPONSE, str(t).encode())
-		pass
 
 	os.close(master_fd)
 	os.waitpid(pid, 0)[1]
