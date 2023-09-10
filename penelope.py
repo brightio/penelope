@@ -1003,25 +1003,26 @@ class Core:
 			else:
 				for writable in writables:
 					with writable.wlock:
+						writable.outbuf.seek(0)
 						data = writable.outbuf.read(NET_BUF_SIZE)
-						if len(data) < NET_BUF_SIZE:
-							writable.outbuf.seek(0)
-							writable.outbuf.truncate(0)
-							self.wlist.remove(writable)
-						if not data:
-							continue
 
 						try:
 							sent = writable.socket.send(data)
-
 							if hasattr(writable.control_session, 'progress_send_queue'):
 								writable.control_session.progress_send_queue.put(sent)
-
 						except OSError:
 							logger.debug(f"Died while writing")
 							writable.kill()
 							threading.Thread(target=writable.maintain).start()
 							break
+
+						writable.outbuf.seek(sent)
+						remaining = writable.outbuf.read()
+						writable.outbuf.seek(0)
+						writable.outbuf.truncate()
+						writable.outbuf.write(remaining)
+						if not remaining:
+							self.wlist.remove(writable)
 
 	def stop(self):
 		options.maintain = 0
@@ -1487,10 +1488,8 @@ class Session:
 			if not self in core.rlist:
 				return False
 
-			position = self.outbuf.tell()
 			self.outbuf.seek(0, io.SEEK_END)
 			self.outbuf.write(data)
-			self.outbuf.seek(position)
 
 			self.subchannel.allow_receive_shell_data = True
 
