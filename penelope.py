@@ -1003,11 +1003,8 @@ class Core:
 			else:
 				for writable in writables:
 					with writable.wlock:
-						writable.outbuf.seek(0)
-						data = writable.outbuf.read(NET_BUF_SIZE)
-
 						try:
-							sent = writable.socket.send(data)
+							sent = writable.socket.send(writable.outbuf.getvalue())
 							if hasattr(writable.control_session, 'progress_send_queue'):
 								writable.control_session.progress_send_queue.put(sent)
 						except OSError:
@@ -2882,11 +2879,8 @@ def agent():
 				elif writable is master_fd:
 					sendbuf = ttybuf
 
-				sendbuf.seek(0)
-				data = sendbuf.read(NET_BUF_SIZE)
-
 				try:
-					sent = os.write(writable, data)
+					sent = os.write(writable, sendbuf.getvalue())
 				except OSError:
 					break
 
