@@ -899,7 +899,10 @@ class Core:
 				# The control queue
 				if readable is self.control:
 					command = self.control.get()
-					logger.debug(f"About to execute {command}")
+					if command:
+						logger.debug(f"About to execute {command}")
+					else:
+						logger.debug(f"Core break")
 					try:
 						exec(command)
 					except KeyError: # TODO
@@ -1492,8 +1495,8 @@ class Session:
 
 			if self not in core.wlist:
 				core.wlist.append(self)
-			if not stdin:
-				core.control << ""
+				if not stdin:
+					core.control << ""
 
 	def record(self, data, _input=False):
 		self.last_lines << data

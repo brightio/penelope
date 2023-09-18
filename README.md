@@ -134,4 +134,4 @@ Penelope was the wife of Odysseus and she is known for her fidelity for him by w
 * [Longlone - @WAY29](https://github.com/WAY29) for indicating the need for compatibility with previous versions of Python (3.6).
 * [Carlos Polop - @carlospolop](https://github.com/carlospolop) for the idea to spawn shells on listeners on other systems.
 * [@darrenmartyn](https://github.com/darrenmartyn) for indicating an alternative method to upgrade the shell to PTY using the script command.
-* [@robertstrom](https://github.com/robertstrom) and [@RamadhanAmizudin](https://github.com/RamadhanAmizudin) for bug reporting.
+* [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin) and [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu) for bug reporting.
