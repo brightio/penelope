@@ -1996,7 +1996,7 @@ class Session:
 
 	def attach(self):
 		if listener_menu.active:
-			listener_menu.control.shutdown(socket.SHUT_RDWR)
+			os.close(listener_menu.control_w)
 			listener_menu.finishing.wait()
 
 		if threading.current_thread().name != 'Core':
@@ -3415,28 +3415,25 @@ if DEV_MODE:
 def listener_menu():
 	if not core.listeners:
 		return False
-	func = None
 
 	listener_menu.active = True
-	listener_menu.control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-	listener_menu.control.bind("\0control")
-	listener_menu.control.listen()
-	#listener_menu.control, listener_menu.control2 = socket.socketpair()
+	func = None
+	listener_menu.control_r, listener_menu.control_w = os.pipe()
+
 	listener_menu.finishing = threading.Event()
 
 	tty.setraw(sys.stdin)
-
 	while True:
 		sys.stdout.write(
-			f"\r\x1b[?25l{paint('➤ ').white} "
+			f"\x1b[?25l{paint('➤ ').white} "
 			f"💀 {paint('Show Payloads').magenta} (p) "
 			f"🏠 {paint('Main Menu').green} (m) "
 			f"🔄 {paint('Clear').yellow} (Ctrl-L) "
-			f"🚫 {paint('Quit').red} (q/Ctrl-C)"
+			f"🚫 {paint('Quit').red} (q/Ctrl-C)\r\n"
 		)
 		sys.stdout.flush()
 
-		r, _, _ = select.select([sys.stdin, listener_menu.control], [], [])
+		r, _, _ = select.select([sys.stdin, listener_menu.control_r], [], [])
 		if sys.stdin in r:
 			command = sys.stdin.read(1).lower()
 			if command == 'p':
@@ -3450,18 +3447,20 @@ def listener_menu():
 			elif command in ('q', '\x03'):
 				func = core.stop
 				break
+			sys.stdout.write('\x1b[1A')
 			continue
 		break
 
 	termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
-	sys.stdout.write("\r\n\x1b[?25h\x1b[1A\x1b[K")
+	sys.stdout.write("\x1b[?25h")
 	sys.stdout.flush()
 	if func: func()
 
-	listener_menu.control.close()
+	os.close(listener_menu.control_r)
 	listener_menu.active = False
 	listener_menu.finishing.set()
 	return True
+
 
 # MAIN
 if __name__ == "__main__":
