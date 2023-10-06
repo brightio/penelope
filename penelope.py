@@ -1328,6 +1328,10 @@ class Session:
 				not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect')
 			]
 
+			if hasattr(listener_menu, 'active'):
+				os.close(listener_menu.control_w)
+				listener_menu.finishing.wait()
+
 			# If no other session is attached
 			if core.attached_session is None:
 				# If auto-attach is enabled
@@ -1995,10 +1999,6 @@ class Session:
 		return True
 
 	def attach(self):
-		if listener_menu.active:
-			os.close(listener_menu.control_w)
-			listener_menu.finishing.wait()
-
 		if threading.current_thread().name != 'Core':
 			if self.new:
 				self.new = False
