@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.9.2"
+__version__ = "0.10.0"
 
 import os
 import io
@@ -3461,31 +3461,35 @@ def listener_menu():
 	listener_menu.finishing.set()
 	return True
 
+def main():
 
-# MAIN
-if __name__ == "__main__":
-
+	# Version
 	if options.version:
 		print(__version__)
+		return
 
+	# Interfaces
 	elif options.interfaces:
 		print(Interfaces())
+		return
 
-	elif options.connect:
-		Connect(options.connect, options.ports[0])
+	# Main Menu
+	elif options.plain:
+		menu.show()
+		return
 
-	else:
-		if options.ports:
-			for port in options.ports:
-				Listener(port=port)
-			if options.plain:
-				menu.show()
-			else:
-				listener_menu()
+	if not options.ports:
+		options.ports.append(options.port)
+
+	for port in options.ports:
+		# Bind shell
+		if options.connect:
+			Connect(options.connect, port)
+		# Reverse Listener
 		else:
-			if options.plain:
-				menu.show()
-			else:
-				Listener()
-				listener_menu()
+			Listener(port=port)
 
+	listener_menu()
+
+if __name__ == "__main__":
+	main()
