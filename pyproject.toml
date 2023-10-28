@@ -1,0 +1,14 @@
+[build-system]
+  requires = ["setuptools"]
+  build-backend = "setuptools.build_meta"
+
+[project]
+  name = "penelope"
+  version = "0.10.0"
+  requires-python = ">=3.6"
+
+[project.scripts]
+  penelope = "penelope:main"
+
+[tool.setuptools]
+  script-files = ["penelope.py"]
