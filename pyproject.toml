@@ -4,11 +4,17 @@
 
 [project]
   name = "penelope"
-  version = "0.10.0"
+  dynamic = ["version"]
   requires-python = ">=3.6"
 
 [project.scripts]
-  penelope = "penelope:main"
+  penelope = "penelope:penelope.main"
 
 [tool.setuptools]
-  script-files = ["penelope.py"]
+  packages = ["penelope"]
+
+[tool.setuptools.dynamic]
+  version = {attr = "penelope.penelope.__version__"}
+
+[tool.setuptools.package-data]
+  penelope = ["extras/*"]
