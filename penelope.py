@@ -180,7 +180,7 @@ class MainMenu(cmd.Cmd):
 		self.lastcmd = None
 
 	def show_help(self, command):
-		help_prompt = re.compile("Run 'help [^\']*' for more information")
+		help_prompt = re.compile(r"Run 'help [^\']*' for more information") # TODO
 		parts = textwrap.dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")
 		print("\n", paint(command).green, paint(parts[1]).blue, "\n")
 		modified_parts = []
@@ -571,7 +571,22 @@ class MainMenu(cmd.Cmd):
 			exec cat /etc/passwd
 		"""
 		if cmdline:
-			output = core.sessions[self.sid].exec(cmdline, preserve_dir=True, timeout=None, stdout_dst=sys.stdout.buffer, stderr_dst=sys.stderr.buffer)
+			if core.sessions[self.sid].agent:
+				core.sessions[self.sid].exec(
+					cmdline,
+					preserve_dir=True,
+					timeout=None,
+					stdout_dst=sys.stdout.buffer,
+					stderr_dst=sys.stderr.buffer
+				)
+			else:
+				output = core.sessions[self.sid].exec(
+					cmdline,
+					preserve_dir=True,
+					timeout=None,
+					value=True
+				)
+				print(output)
 		else:
 			cmdlogger.warning("No command to execute")
 
@@ -2465,7 +2480,7 @@ class Session:
 		resolved_items = []
 		for item in local_items:
 			# Download URL
-			if re.match('(http|ftp)s?://', item, re.IGNORECASE):
+			if re.match(r'(http|ftp)s?://', item, re.IGNORECASE):
 				try:
 					filename, item = url_to_bytes(item)
 					resolved_items.append((filename, item))
@@ -2622,6 +2637,10 @@ class Session:
 			logger.warning("Upload on Windows shells is not implemented yet")
 
 	def script(self, local_script):
+		if not self.agent:
+			logger.error("This can only be run in python agent mode: Try to 'upgrade' the session first")
+			return False
+
 		local_script_folder = self.directory / "scripts"
 		prefix = datetime.now().strftime("%Y_%m_%d-%H_%M_%S-")
 
@@ -2631,7 +2650,7 @@ class Session:
 			logger.error(e)
 			return False
 
-		if re.match('(http|ftp)s?://', local_script, re.IGNORECASE):
+		if re.match(r'(http|ftp)s?://', local_script, re.IGNORECASE):
 			try:
 				filename, data = url_to_bytes(local_script)
 			except Exception as e:
@@ -2914,6 +2933,9 @@ class Session:
 
 		if self.is_attached:
 			self.detach()
+
+		# Kill tasks
+
 
 		return True
 
@@ -3260,7 +3282,7 @@ bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
 pathlink = lambda filepath: (
 	f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
-	f'/\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07'
+	f'{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07'
 )
 
 def Open(item, terminal=False):
@@ -3779,7 +3801,7 @@ def url_to_bytes(URL):
 
 	# URLs with special treatment
 	URL = re.sub(
-		"https://www.exploit-db.com/exploits/",
+		r"https://www.exploit-db.com/exploits/",
 		"https://www.exploit-db.com/download/",
 		URL
 	)
