@@ -2290,12 +2290,12 @@ class Session:
 			remote_size = int(float(self.exec(f"{inspect.getsource(get_glob_size)}"
 				f"stdout_stream << str(get_glob_size(r'{remote_items}', {block_size})).encode()", python=True, value=True, preserve_dir=True)))
 		else:
-			cmd = f"du -bcs {remote_items}"
+			cmd = f"du -ck {remote_items}"
 			response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
 			#errors = [line[4:] for line in response.splitlines() if line.startswith('du: ')]
 			#for error in errors:
 			#	logger.error(error)
-			remote_size = int(response.splitlines()[-1].split()[0])
+			remote_size = int(response.splitlines()[-1].split()[0]) * 1024
 
 		need = remote_size - available_bytes
 
@@ -2359,7 +2359,7 @@ class Session:
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
 				for error in errors:
 					logger.error(error)
-				send_size = int(self.exec(f"stat --printf='%s' {temp}"))
+				send_size = int(self.exec(rf"stat {temp} | sed -n 's/.*Size: \([0-9]*\).*/\1/p'"))
 
 				b64data = io.BytesIO()
 				for offset in range(0, send_size, options.download_chunk_size):
@@ -2504,7 +2504,6 @@ class Session:
 
 		if self.OS == 'Unix':
 			# Get remote available space
-			remote_block_size = 1024
 			if self.agent:
 				response = self.exec(f"""
 				stats = os.statvfs('{destination}')
@@ -2514,13 +2513,14 @@ class Session:
 				remote_available_blocks, remote_block_size = map(int, response.split(';'))
 				remote_space = remote_available_blocks * remote_block_size
 			else:
-				remote_space = int(self.exec(f"df -k {destination}|tail -1|awk '{{print $4}}'", value=True))
+				remote_block_size = int(self.exec(rf"stat {destination}| sed -n 's/.*IO Block: \([0-9]*\).*/\1/p'", value=True))
+				remote_space = int(self.exec(f"df -k {destination}|tail -1|awk '{{print $4}}'", value=True)) * 1024
 
 			# Calculate local size
 			local_size = 0
 			for item in resolved_items:
 				if isinstance(item, tuple):
-					local_size += len(item[1])
+					local_size += ceil(len(item[1]) / remote_block_size) * remote_block_size
 				else:
 					local_size += get_glob_size(str(item), remote_block_size)
 
