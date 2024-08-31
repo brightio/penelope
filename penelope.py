@@ -2504,6 +2504,7 @@ class Session:
 
 		if self.OS == 'Unix':
 			# Get remote available space
+			remote_block_size = 1024
 			if self.agent:
 				response = self.exec(f"""
 				stats = os.statvfs('{destination}')
@@ -2513,7 +2514,7 @@ class Session:
 				remote_available_blocks, remote_block_size = map(int, response.split(';'))
 				remote_space = remote_available_blocks * remote_block_size
 			else:
-				remote_space = int(self.exec(f"df --block-size=1 {destination}|tail -1|awk '{{print $4}}'", value=True))
+				remote_space = int(self.exec(f"df -k {destination}|tail -1|awk '{{print $4}}'", value=True))
 
 			# Calculate local size
 			local_size = 0
