@@ -2108,10 +2108,14 @@ class Session:
 			if self.agent:
 				logger.warning("The shell is already PTY...")
 				return False
-			elif self.bin['python3'] or self.bin['python']:
-				logger.info("Attempting to deploy agent...")
 			else:
-				return False
+				self.bypass_control_session = True
+				deploy_agent = self.bin['python3'] or self.bin['python']
+				self.bypass_control_session = False
+				if deploy_agent:
+					logger.info("Attempting to deploy agent...")
+				else:
+					return False
 		else:
 			logger.info("Attempting to upgrade shell to PTY...")
 
