@@ -944,7 +944,7 @@ class Core:
 				self.sessionID += 1
 				return self.sessionID
 		else:
-			raise AttributeError
+			raise AttributeError(name)
 
 	@property
 	def threads(self):
@@ -1350,6 +1350,9 @@ class Session:
 		self._tmp = None
 		self._cwd = None
 		self._bsd = None
+		self._tty = None
+
+		self.bypass_control_session = False
 
 		self.id = core.new_sessionID
 		logger.debug(f"Assigned session ID: {self.id}")
@@ -1446,7 +1449,7 @@ class Session:
 
 				return self.streams[_stream_ID_hex]
 		else:
-			raise AttributeError
+			raise AttributeError(name)
 
 	def fileno(self):
 		return self.socket.fileno()
@@ -1492,6 +1495,17 @@ class Session:
 					return False
 		elif self.OS == 'Windows':
 			self.shell_pid = None #TODO
+
+	@property
+	def tty(self):
+		if self._tty is None:
+			try:
+				self.bypass_control_session = True
+				self._tty = self.exec(f"readlink -f /proc/{self.shell_pid}/fd/0", value=True) # TODO check binary
+				self.bypass_control_session = False
+			except:
+				pass
+		return self._tty
 
 	@property
 	def bsd(self):
@@ -1734,6 +1748,7 @@ class Session:
 			elif b'/dev/pts/' in response:
 				self.type =	'PTY'
 				self.reverse_pty = True
+				self._tty = re.search(rb'/dev/pts/\d*', response)[0].decode()
 
 			return True
 
@@ -2036,10 +2051,12 @@ class Session:
 			self.subchannel.active = False
 
 			if separate and self.subchannel.result:
+				self.subchannel.result = re.search(rb"..\x01.*", self.subchannel.result, re.DOTALL)[0]
 				buffer = io.BytesIO()
 				for _type, _value in self.messenger.feed(self.subchannel.result):
 					buffer.write(_value)
 				return buffer.getvalue()
+
 
 			return self.subchannel.result
 
@@ -2091,8 +2108,10 @@ class Session:
 			if self.agent:
 				logger.warning("The shell is already PTY...")
 				return False
-			else:
+			elif self.bin['python3'] or self.bin['python']:
 				logger.info("Attempting to deploy agent...")
+			else:
+				return False
 		else:
 			logger.info("Attempting to upgrade shell to PTY...")
 
@@ -2189,9 +2208,10 @@ class Session:
 				self.echoing = False
 
 			self.bypass_control_session = True
-			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, raw=True)
+			expect = (b"\x01",) if deploy_agent else None
+			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, expect=expect, raw=True)
 			self.bypass_control_session = False
-			if not response:
+			if not isinstance(response, bytes):
 				logger.error("The shell became unresponsive. I am killing it...")
 				self.kill()
 				return False
@@ -2206,10 +2226,6 @@ class Session:
 			self.agent = 		deploy_agent
 
 			self.get_shell_pid()
-			if not self.agent: # TODO check for the binaries
-				self.bypass_control_session = True
-				self.tty = self.exec(f"readlink -f /proc/{self.shell_pid}/fd/0", value=True)
-				self.bypass_control_session = False
 
 		elif self.OS == "Windows":
 			logger.warning("Upgrading Windows shell is not implemented yet.")
@@ -2224,8 +2240,6 @@ class Session:
 
 		elif self.OS == 'Unix':
 			threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
-			# TODO it needs a separate thread because there are sync issues
-			#self.exec(f"stty rows {lines} columns {columns} -F {self.tty}")
 
 	def attach(self):
 
@@ -2235,6 +2249,21 @@ class Session:
 
 				if not options.no_upgrade and (not self.type == 'PTY' or not (self.reverse_pty and self.agent)):
 					self.upgrade()
+				elif options.no_upgrade and self.type == 'PTY':
+					logger.warning("Agent is not deployed. I need to maintain at least one basic session...")
+					core.session_wait_host = self.name
+					self.bypass_control_session = True
+					self.spawn()
+					self.shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
+					self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}', raw=True)
+					self.get_shell_pid()
+					self.bypass_control_session = False
+					try:
+						new_session = core.sessions[core.session_wait.get(timeout=options.short_timeout)]
+						core.session_wait_host = None
+					except queue.Empty:
+						logger.error("Failed spawning new session")
+						return False
 
 				if self.prompt:
 					self.record(self.prompt)
