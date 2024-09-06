@@ -2517,6 +2517,23 @@ class Session:
 
 	def upload(self, local_items, remote_path=None, randomize_fname=False):
 
+		# Check remote permissions
+		destination = remote_path or self.cwd
+		try:
+			if self.OS == 'Unix':
+				if self.agent:
+					if not eval(self.exec(f"stdout_stream << str(os.access('{destination}', os.W_OK)).encode()", python=True, value=True)):
+						logger.error(f"{destination}: Permission denied")
+						return []
+				else:
+					if int(self.exec(f"[ -w \"{destination}\" ];echo $?", value=True)):
+						logger.error(f"{destination}: Permission denied")
+						return []
+			elif self.OS == 'Windows':
+				pass # TODO
+		except Exception as e:
+			logger.error(e)
+
 		# Initialization
 		try:
 			local_items = shlex.split(local_items)
@@ -2531,8 +2548,6 @@ class Session:
 				if not self.bin[binary]:
 					logger.error(f"'{binary}' binary is not available at the target. Cannot upload...")
 					return []
-
-		destination = remote_path or self.cwd
 
 		# Resolve items
 		resolved_items = []
@@ -2682,8 +2697,11 @@ class Session:
 				dest = f"-C {remote_path}" if remote_path else ""
 				cmd = f"base64 -d {temp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True, preserve_dir=True)
-				exit_code = self.exec("echo $temp", value=True)
+				exit_code = int(self.exec("echo $temp", value=True))
 				self.exec(f"rm {temp}")
+				if exit_code:
+					logger.error(response)
+					return [] # TODO
 
 			# Present uploaded
 			altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
@@ -3700,6 +3718,14 @@ class Options:
 					],
 					'Windows':[
 						f"script {BINARIES['winpeas']}"
+					]
+				}
+			},
+			'lse':{
+				'description':'Run the latest version of linux-smart-enumeration in the background',
+				'actions':{
+					'Unix':[
+						f"script {BINARIES['lse']}"
 					]
 				}
 			}
