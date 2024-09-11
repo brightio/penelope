@@ -52,6 +52,7 @@ import argparse
 import platform
 import threading
 import subprocess
+import http.server
 import socketserver
 import urllib.request
 
@@ -62,6 +63,7 @@ from functools import wraps
 from itertools import islice
 from collections import deque, defaultdict
 from configparser import ConfigParser
+from urllib.parse import unquote
 
 if not sys.version_info >= (3, 6):
 	print("(!) Penelope requires Python version 3.6 or higher (!)")
@@ -921,9 +923,12 @@ class Core:
 		self.listener_lock = threading.Lock()
 		self.sessionID = 0
 		self.session_lock = threading.Lock()
+		self.fileserverID = 0
+		self.fileserver_lock = threading.Lock()
 
 		self.sessions = {}
 		self.listeners = {}
+		self.fileservers = {}
 		self.forwardings = {}
 
 	def __getattr__(self, name):
@@ -943,6 +948,12 @@ class Core:
 			with self.session_lock:
 				self.sessionID += 1
 				return self.sessionID
+
+		elif name == 'new_fileserverID':
+			with self.fileserver_lock:
+				self.fileserverID += 1
+				return self.fileserverID
+
 		else:
 			raise AttributeError(name)
 
@@ -1094,6 +1105,9 @@ class Core:
 
 		for listener in self.listeners.copy().values():
 			listener.stop()
+
+		for fileserver in self.fileservers.copy().values():
+			fileserver.stop()
 
 		self.control << 'self.started = False'
 
@@ -2056,7 +2070,6 @@ class Session:
 				for _type, _value in self.messenger.feed(self.subchannel.result):
 					buffer.write(_value)
 				return buffer.getvalue()
-
 
 			return self.subchannel.result
 
@@ -3355,6 +3368,115 @@ def agent():
 	os.kill(os.getppid(), signal.SIGKILL) # TODO
 
 
+class FileServer:
+	def __init__(self, items=None, port=8000, host='0.0.0.0'):
+		self.port = port
+		self.host = host
+		self.items = items or ['.']
+		self.filemap = {} # manually add
+		for item in self.items:
+			self.add(item)
+
+	def add(self, item):
+		item = os.path.abspath(item)
+		if os.path.exists(item):
+			self.filemap[f"/{os.path.basename(os.path.normpath(item))}"] = item
+		else:
+			logger.warning(f"{item} does not exist and will be ignored.")
+
+	def remove(self, item):
+		if item in self.filemap:
+			del self.filemap[f"/{os.path.basename(os.path.normpath(item))}"]
+		else:
+			logger.warning(f"{item} is not served.")
+
+	@property
+	def hints(self):
+
+		output = []
+		ips = [self.host]
+
+		if self.host == '0.0.0.0':
+			ips = [ip for ip in Interfaces().list.values()]
+
+		for ip in ips:
+			output.extend(('', '➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
+			table = Table(joinchar=' -> ')
+			for urlpath, filepath in self.filemap.items():
+				table += (paint("⦿  ").red + paint(f"http://{ip}:{self.port}{urlpath}").blue, filepath)
+			output.append(str(table))
+			output.append("-" * len(output[1]))
+
+		return f'\r\n'.join(output)
+
+	def start(self):
+		filemap, host, port = self.filemap, self.host, self.port
+
+		class CustomTCPServer(socketserver.TCPServer):
+			allow_reuse_address = True
+			def __init__(self, server_address, RequestHandlerClass):
+				super().__init__(server_address, RequestHandlerClass)
+				self.client_sockets = []
+			def process_request(self, request, client_address):
+				self.client_sockets.append(request)
+				super().process_request(request, client_address)
+			def shutdown(self):
+				for sock in self.client_sockets:
+					try:
+						sock.shutdown(socket.SHUT_RDWR)
+						sock.close()
+					except:
+						pass
+				super().shutdown()
+
+		class CustomHandler(http.server.SimpleHTTPRequestHandler):
+			def do_GET(self):
+				if self.path == '/':
+					response = ''
+					for path in filemap.keys():
+						response += f'<li><a href="{path}">{path}</a></li>'
+					response = response.encode()
+					self.send_response(200)
+					self.send_header("Content-type", "text/html")
+					self.send_header("Content-Length", str(len(response)))
+					self.end_headers()
+
+					self.wfile.write(response)
+				else:
+					super().do_GET()
+
+			def translate_path(self, path):
+				path = path.split('?',1)[0]
+				path = path.split('#',1)[0]
+				try:
+					path = unquote(path, errors='surrogatepass')
+				except UnicodeDecodeError:
+					path = unquote(path)
+				path = os.path.normpath(path)
+
+				for urlpath, filepath in filemap.items():
+					if path == urlpath:
+						return filepath
+					elif path.startswith(urlpath):
+						relpath = path[len(urlpath):].lstrip('/')
+						return os.path.join(filepath, relpath)
+				return ""
+
+			def log_message(self, format, *args):
+				message = format % args
+				logger.info(f"{paint('[').white}{paint(self.log_date_time_string()).magenta}] FileServer({host}:{port})-client [{paint(self.address_string()).cyan}] {paint(message.translate(self._control_char_table)).green}")
+
+		with CustomTCPServer((self.host, self.port), CustomHandler) as self.httpd:
+			self.id = core.new_fileserverID
+			core.fileservers[self.id] = self
+			print(self.hints)
+			self.httpd.serve_forever()
+
+	def stop(self):
+		del core.fileservers[self.id]
+		logger.warning(f"Shuting down Fileserver #{self.id}")
+		self.httpd.shutdown()
+
 ################################## GENERAL PURPOSE CUSTOM CODE ####################################
 
 caller = lambda: inspect.stack()[2].function
@@ -3626,6 +3748,7 @@ def ControlC(num, stack):
 			core.sessions[menu.sid].subchannel.control << 'stop'
 
 	elif not core.sessions:
+		#print(threading.enumerate())
 		core.stop()
 
 def WinResize(num, stack):
@@ -3831,6 +3954,9 @@ misc.add_argument("-S", "--single-session", help="Accommodate only the first cre
 misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
 misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
 
+misc = parser.add_argument_group("File server")
+misc.add_argument("-s", "--serve", help="Serve a file/directory via HTTP", type=str, metavar='', action='append', nargs='?', const='.')
+
 debug = parser.add_argument_group("Debug")
 debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
 debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
@@ -3995,6 +4121,12 @@ def main():
 	# Main Menu
 	elif options.plain:
 		menu.show()
+		return
+
+	# File Server
+	elif options.serve:
+		server = FileServer(options.serve)
+		threading.Thread(target=server.start).start()
 		return
 
 	if not options.ports:
