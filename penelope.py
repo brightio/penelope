@@ -1111,6 +1111,32 @@ class Core:
 
 		self.control << 'self.started = False'
 
+def handle_bind_errors(func):
+	@wraps(func)
+	def wrapper(*args, **kwargs):
+		try:
+			return func(*args, **kwargs)
+
+		except PermissionError:
+			return "Cannot bind to port: Insufficient privileges"
+
+		except socket.gaierror:
+			return "Cannot resolve hostname"
+
+		except OSError as e:
+			if e.errno == errno.EADDRINUSE:
+				return "The port is currently in use"
+			elif e.errno == errno.EADDRNOTAVAIL:
+				return "Cannot listen on the requested address"
+			else:
+				return f"OS error: {str(e)}"
+
+		except OverflowError:
+			return "Invalid port number. Valid numbers: 1-65535"
+
+		except ValueError:
+			return "Port number must be numeric"
+	return wrapper
 
 def Connect(host, port):
 
@@ -1134,7 +1160,8 @@ def Connect(host, port):
 		logger.error("Port number must be numeric")
 
 	else:
-		if not core.started: core.start()
+		if not core.started:
+			core.start()
 		logger.info(f"Connected to {paint(host).blue}:{paint(port).red} 🎯")
 		session = Session(_socket, host, port)
 		if session:
@@ -1142,53 +1169,34 @@ def Connect(host, port):
 
 	return False
 
-
 class Listener:
 
 	def __init__(self, host=None, port=None):
-		self.host = options.interface if host is None else host
+		self.host = host or options.interface
 		self.host = Interfaces().translate(self.host)
-		port = options.port if port is None else port
+		port = port or options.port
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		self.socket.setblocking(False)
 		self.caller = caller()
 
-		try:
-			self.port = int(port)
-			self.socket.bind((self.host, self.port))
-
-		except PermissionError:
-			error = f"Cannot bind to port {self.port}: Insufficient privileges"
-
-		except socket.gaierror:
-			error = "Cannot resolve hostname"
-
-		except OSError as e:
-			if e.errno == errno.EADDRINUSE:
-				error = f"The port {self.port} is currently in use"
-
-			elif e.errno == errno.EADDRNOTAVAIL:
-				error = f"Cannot listen on the requested address"
-
-		except OverflowError:
-			error = "Invalid port number. Valid numbers: 1-65535"
-
-		except ValueError:
-			error = "Port number must be numeric"
-
-		else:
+		result = self.bind(port)
+		if not isinstance(result, str):
 			self.start()
 			return
-
-		if not self.caller == 'spawn':
-			logger.error(error)
+		elif not self.caller == 'spawn':
+			logger.error(result)
 
 	def __str__(self):
 		return f"Listener({self.host}:{self.port})"
 
 	def __bool__(self):
 		return hasattr(self, 'id')
+
+	@handle_bind_errors
+	def bind(self, port):
+		self.port = int(port)
+		self.socket.bind((self.host, self.port))
 
 	def fileno(self):
 		return self.socket.fileno()
@@ -2724,6 +2732,15 @@ class Session:
 			return altnames
 
 		elif self.OS == 'Windows':
+			#server = FileServer(resolved_items)
+			#x = [server.add(item) for item in resolved_items]
+			#print(x)
+			#server.start()
+			#for urlpath in x:
+			#	response = self.exec(rf"bitsadmin /transfer myDownloadJob /download /priority normal http://{self._host}:{server.port}{urlpath} %cd%\{urlpath.lstrip('/')}", value=True, preserve_dir=True)
+			#print(response)
+			#server.stop()
+
 			logger.warning("Upload on Windows shells is not implemented yet")
 
 	def script(self, local_script):
@@ -3371,16 +3388,18 @@ def agent():
 class FileServer:
 	def __init__(self, items=None, port=8000, host='0.0.0.0'):
 		self.port = port
-		self.host = host
+		self.host = Interfaces().translate(host)
 		self.items = items or ['.']
-		self.filemap = {} # manually add
+		self.filemap = {}
 		for item in self.items:
 			self.add(item)
 
 	def add(self, item):
 		item = os.path.abspath(item)
 		if os.path.exists(item):
-			self.filemap[f"/{os.path.basename(os.path.normpath(item))}"] = item
+			path = f"/{os.path.basename(os.path.normpath(item))}"
+			self.filemap[path] = item
+			return path
 		else:
 			logger.warning(f"{item} does not exist and will be ignored.")
 
@@ -3400,26 +3419,37 @@ class FileServer:
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend(('', '➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
+			output.extend(('', '➤  http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red), ''))
 			table = Table(joinchar=' -> ')
 			for urlpath, filepath in self.filemap.items():
-				table += (paint("⦿  ").red + paint(f"http://{ip}:{self.port}{urlpath}").blue, filepath)
+				table += (paint("⦿  ").yellow + paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath)
 			output.append(str(table))
 			output.append("-" * len(output[1]))
 
 		return f'\r\n'.join(output)
 
 	def start(self):
+		threading.Thread(target=self._start).start()
+
+	@handle_bind_errors
+	def _start(self):
 		filemap, host, port = self.filemap, self.host, self.port
 
 		class CustomTCPServer(socketserver.TCPServer):
 			allow_reuse_address = True
-			def __init__(self, server_address, RequestHandlerClass):
-				super().__init__(server_address, RequestHandlerClass)
+
+			def __init__(self, *args, **kwargs):
 				self.client_sockets = []
+				super().__init__(*args, **kwargs)
+
+			@handle_bind_errors
+			def server_bind(self):
+				super().server_bind()
+
 			def process_request(self, request, client_address):
 				self.client_sockets.append(request)
 				super().process_request(request, client_address)
+
 			def shutdown(self):
 				for sock in self.client_sockets:
 					try:
@@ -3446,8 +3476,8 @@ class FileServer:
 					super().do_GET()
 
 			def translate_path(self, path):
-				path = path.split('?',1)[0]
-				path = path.split('#',1)[0]
+				path = path.split('?', 1)[0]
+				path = path.split('#', 1)[0]
 				try:
 					path = unquote(path, errors='surrogatepass')
 				except UnicodeDecodeError:
@@ -3466,7 +3496,12 @@ class FileServer:
 				message = format % args
 				logger.info(f"{paint('[').white}{paint(self.log_date_time_string()).magenta}] FileServer({host}:{port})-client [{paint(self.address_string()).cyan}] {paint(message.translate(self._control_char_table)).green}")
 
-		with CustomTCPServer((self.host, self.port), CustomHandler) as self.httpd:
+		with CustomTCPServer((self.host, self.port), CustomHandler, bind_and_activate=False) as self.httpd:
+			result = self.httpd.server_bind()
+			if isinstance(result, str):
+				logger.error(result)
+				return False
+			self.httpd.server_activate()
 			self.id = core.new_fileserverID
 			core.fileservers[self.id] = self
 			print(self.hints)
@@ -3474,7 +3509,7 @@ class FileServer:
 
 	def stop(self):
 		del core.fileservers[self.id]
-		logger.warning(f"Shuting down Fileserver #{self.id}")
+		logger.warning(f"Shutting down Fileserver #{self.id}")
 		self.httpd.shutdown()
 
 ################################## GENERAL PURPOSE CUSTOM CODE ####################################
@@ -3553,8 +3588,16 @@ class Interfaces:
 	def list(self):
 		if OS == 'Linux':
 			if shutil.which("ip"):
-				output = subprocess.check_output(['ip', 'addr']).decode()
-				interfaces = re.findall(r'^\d+: (\w+):.*?\n\s+inet (\d+\.\d+\.\d+\.\d+)', output, re.MULTILINE | re.DOTALL)
+				interfaces = []
+				interface_stack = []
+				for line in subprocess.check_output(['ip', 'addr']).decode().splitlines():
+					interface = re.search(r"^\d+: (\w+):", line)
+					if interface:
+						interface_stack.append(interface[1])
+						continue
+					ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
+					if ip:
+						interfaces.append((interface_stack.pop(), ip[1]))
 			else:
 				logger.error("'ip' command is not available")
 				return dict()
@@ -3955,7 +3998,8 @@ misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upo
 misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
 
 misc = parser.add_argument_group("File server")
-misc.add_argument("-s", "--serve", help="Serve a file/directory via HTTP", type=str, metavar='', action='append', nargs='?', const='.')
+misc.add_argument("-s", "--serve", help="HTTP File Server mode", action="store_true")
+misc.add_argument("-p", "--port", help="File Server port. Default: 8000", type=int, metavar='')
 
 debug = parser.add_argument_group("Debug")
 debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
@@ -4125,8 +4169,8 @@ def main():
 
 	# File Server
 	elif options.serve:
-		server = FileServer(options.serve)
-		threading.Thread(target=server.start).start()
+		server = FileServer(options.ports, options.port, options.interface)
+		server.start()
 		return
 
 	if not options.ports:
