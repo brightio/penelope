@@ -3591,7 +3591,7 @@ class Interfaces:
 				interfaces = []
 				interface_stack = []
 				for line in subprocess.check_output(['ip', 'addr']).decode().splitlines():
-					interface = re.search(r"^\d+: (\w+):", line)
+					interface = re.search(r"^\d+: (.+?):", line)
 					if interface:
 						interface_stack.append(interface[1])
 						continue
