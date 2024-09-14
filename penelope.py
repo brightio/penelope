@@ -1172,9 +1172,9 @@ def Connect(host, port):
 class Listener:
 
 	def __init__(self, host=None, port=None):
-		self.host = host or options.interface
+		self.host = host or options.default_interface
 		self.host = Interfaces().translate(self.host)
-		port = port or options.port
+		port = port or options.default_listener_port
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		self.socket.setblocking(False)
@@ -3386,22 +3386,37 @@ def agent():
 
 
 class FileServer:
-	def __init__(self, items=None, port=8000, host='0.0.0.0'):
-		self.port = port
-		self.host = Interfaces().translate(host)
+	def __init__(self, items=None, port=None, host=None, password=None):
+		self.port = port or 8000
+		self.host = host or options.default_interface
+		self.host = Interfaces().translate(self.host)
 		self.items = items or ['.']
+		self.password = password + '/' if password else ''
 		self.filemap = {}
 		for item in self.items:
 			self.add(item)
 
 	def add(self, item):
+		if item == '/':
+			self.filemap[f'/{self.password}[root]'] = '/'
+			return '/[root]'
+
 		item = os.path.abspath(item)
-		if os.path.exists(item):
-			path = f"/{os.path.basename(os.path.normpath(item))}"
-			self.filemap[path] = item
-			return path
-		else:
+
+		if not os.path.exists(item):
 			logger.warning(f"{item} does not exist and will be ignored.")
+
+		if item in self.filemap.values():
+			for _urlpath, _item in self.filemap.items():
+				if _item == item:
+					return _urlpath
+
+		urlpath = f"/{self.password}{os.path.basename(os.path.normpath(item))}"
+		while urlpath in self.filemap:
+			root, ext = os.path.splitext(urlpath)
+			urlpath = root + '_' + ext
+		self.filemap[urlpath] = item
+		return urlpath
 
 	def remove(self, item):
 		if item in self.filemap:
@@ -3411,7 +3426,6 @@ class FileServer:
 
 	@property
 	def hints(self):
-
 		output = []
 		ips = [self.host]
 
@@ -3419,10 +3433,10 @@ class FileServer:
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend(('', '➤  http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red), ''))
+			output.extend(('', '➤  http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red) + '/' + self.password, ''))
 			table = Table(joinchar=' -> ')
 			for urlpath, filepath in self.filemap.items():
-				table += (paint("⦿  ").yellow + paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath)
+				table += (paint("⦿  ").green + paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath)
 			output.append(str(table))
 			output.append("-" * len(output[1]))
 
@@ -3433,7 +3447,7 @@ class FileServer:
 
 	@handle_bind_errors
 	def _start(self):
-		filemap, host, port = self.filemap, self.host, self.port
+		filemap, host, port, password = self.filemap, self.host, self.port, self.password
 
 		class CustomTCPServer(socketserver.TCPServer):
 			allow_reuse_address = True
@@ -3444,6 +3458,7 @@ class FileServer:
 
 			@handle_bind_errors
 			def server_bind(self):
+				self.server_address = (host, int(port))
 				super().server_bind()
 
 			def process_request(self, request, client_address):
@@ -3461,7 +3476,7 @@ class FileServer:
 
 		class CustomHandler(http.server.SimpleHTTPRequestHandler):
 			def do_GET(self):
-				if self.path == '/':
+				if self.path == '/' + password:
 					response = ''
 					for path in filemap.keys():
 						response += f'<li><a href="{path}">{path}</a></li>'
@@ -3494,7 +3509,19 @@ class FileServer:
 
 			def log_message(self, format, *args):
 				message = format % args
-				logger.info(f"{paint('[').white}{paint(self.log_date_time_string()).magenta}] FileServer({host}:{port})-client [{paint(self.address_string()).cyan}] {paint(message.translate(self._control_char_table)).green}")
+				response = message.translate(self._control_char_table).split(' ')
+				if not response[0].startswith('"'):
+					return
+				if response[3][0] == '3':
+					color = 'yellow'
+				elif response[3][0] in ('4', '5'):
+					color = 'red'
+				else:
+					color = 'green'
+
+				response = getattr(paint(f"{response[0]} {response[1]} {response[3]}\""), color)
+
+				logger.info(f"{paint('[').white}{paint(self.log_date_time_string()).magenta}] FileServer({host}:{port}) [{paint(self.address_string()).cyan}] {response}")
 
 		with CustomTCPServer((self.host, self.port), CustomHandler, bind_and_activate=False) as self.httpd:
 			result = self.httpd.server_bind()
@@ -3576,13 +3603,13 @@ class Interfaces:
 	def oneLine(self):
 		return '(' + str(self).replace('\n', '|') + ')'
 
-	def translate(self, iface_ip):
-		if iface_ip in self.list:
-			return self.list[iface_ip]
-		elif iface_ip == 'any':
+	def translate(self, interface_name):
+		if interface_name in self.list:
+			return self.list[interface_name]
+		elif interface_name in ('any', 'all'):
 			return '0.0.0.0'
 		else:
-			return iface_ip
+			return interface_name
 
 	@property
 	def list(self):
@@ -3614,7 +3641,7 @@ class Interfaces:
 
 	@property
 	def list_all(self):
-		return [item for item in list(self.list.keys())+list(self.list.values())]
+		return [item for item in list(self.list.keys()) + list(self.list.values())]
 
 class Table:
 
@@ -3843,8 +3870,8 @@ class Options:
 	log_levels = {"silent":'WARNING', "debug":'DEBUG'}
 
 	def __init__(self):
-		self.port = 4444
-		self.interface = "0.0.0.0"
+		self.default_listener_port = 4444
+		self.default_interface = "0.0.0.0"
 		self.latency = .01
 		self.histlength = 1000
 		self.long_timeout = 60
@@ -3999,7 +4026,8 @@ misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="st
 
 misc = parser.add_argument_group("File server")
 misc.add_argument("-s", "--serve", help="HTTP File Server mode", action="store_true")
-misc.add_argument("-p", "--port", help="File Server port. Default: 8000", type=int, metavar='')
+misc.add_argument("-p", "--port", help="File Server port. Default: 8000", metavar='')
+misc.add_argument("-pass", "--password", help="URL prefix", type=str, metavar='')
 
 debug = parser.add_argument_group("Debug")
 debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
@@ -4169,12 +4197,12 @@ def main():
 
 	# File Server
 	elif options.serve:
-		server = FileServer(options.ports, options.port, options.interface)
+		server = FileServer(options.ports, options.port, options.interface, options.password)
 		server.start()
 		return
 
 	if not options.ports:
-		options.ports.append(options.port)
+		options.ports.append(options.default_listener_port)
 
 	for port in options.ports:
 		# Bind shell
@@ -4182,7 +4210,7 @@ def main():
 			Connect(options.connect, port)
 		# Reverse Listener
 		else:
-			Listener(port=port)
+			Listener(host=options.interface, port=port)
 
 	listener_menu()
 
