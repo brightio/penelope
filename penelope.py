@@ -3404,7 +3404,8 @@ class FileServer:
 		item = os.path.abspath(item)
 
 		if not os.path.exists(item):
-			logger.warning(f"{item} does not exist and will be ignored.")
+			logger.warning(f"'{item}' does not exist and will be ignored.")
+			return None
 
 		if item in self.filemap.values():
 			for _urlpath, _item in self.filemap.items():
@@ -3433,10 +3434,10 @@ class FileServer:
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend(('', '➤  http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red) + '/' + self.password, ''))
-			table = Table(joinchar=' -> ')
+			output.extend(('', '🏠 http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red) + '/' + self.password))
+			table = Table(joinchar=' → ')
 			for urlpath, filepath in self.filemap.items():
-				table += (paint("⦿  ").green + paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath)
+				table += (paint(f"{'📁' if os.path.isdir(filepath) else '📄'} ").green + paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath)
 			output.append(str(table))
 			output.append("-" * len(output[1]))
 
@@ -4198,7 +4199,10 @@ def main():
 	# File Server
 	elif options.serve:
 		server = FileServer(options.ports, options.port, options.interface, options.password)
-		server.start()
+		if server.filemap:
+			server.start()
+		else:
+			logger.error("No files to serve")
 		return
 
 	if not options.ports:
