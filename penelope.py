@@ -2284,7 +2284,7 @@ class Session:
 
 		while core.attached_session == self:
 			try:
-				cmd = input()
+				cmd = input("\033[s\033[u")
 				readline.set_history_length(options.histlength)
 				try:
 					readline.write_history_file(self.histfile)
