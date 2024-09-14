@@ -1406,6 +1406,7 @@ class Session:
 			if not options.no_log:
 				self.directory.mkdir(parents=True, exist_ok=True)
 				self.logpath = self.directory / f"{self.name}.log"
+				self.histfile = self.directory / "readline_history"
 				self.logfile = open(self.logpath, 'ab', buffering=0)
 				if not options.no_timestamps and not self.logpath.exists():
 					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ").magenta).encode())
@@ -2276,9 +2277,19 @@ class Session:
 			threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
 
 	def readline_loop(self):
+
+		readline.clear_history()
+		if self.histfile.exists():
+			readline.read_history_file(self.histfile)
+
 		while core.attached_session == self:
 			try:
 				cmd = input()
+				readline.set_history_length(options.histlength)
+				try:
+					readline.write_history_file(self.histfile)
+				except FileNotFoundError:
+					cmdlogger.debug(f"History file '{self.histfile}' does not exist")
 			except EOFError:
 				self.detach()
 				break
@@ -3916,7 +3927,7 @@ class Options:
 		self.default_listener_port = 4444
 		self.default_interface = "0.0.0.0"
 		self.latency = .01
-		self.histlength = 1000
+		self.histlength = 2000
 		self.long_timeout = 60
 		self.short_timeout = 5
 		self.max_maintain = 10
