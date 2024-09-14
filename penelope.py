@@ -50,6 +50,7 @@ import binascii
 import textwrap
 import argparse
 import platform
+import traceback
 import threading
 import subprocess
 import http.server
@@ -175,8 +176,9 @@ class MainMenu(cmd.Cmd):
 	def preloop(self):
 		__class__.load_history(options.cmd_histfile)
 
-	def postloop(self):
+	def postcmd(self, stop, line):
 		__class__.write_history(options.cmd_histfile)
+		return stop
 
 	def emptyline(self):
 		self.lastcmd = None
@@ -997,6 +999,8 @@ class Core:
 				elif readable is sys.stdin:
 					if self.attached_session:
 						session = self.attached_session
+						if session.readline:
+							continue
 
 						data = os.read(sys.stdin.fileno(), NET_BUF_SIZE)
 
@@ -1005,9 +1009,7 @@ class Core:
 
 						if data == options.escape['sequence']:
 							if session.alternate_buffer:
-								logger.error(
-							"(!) Exit the current alternate buffer program first"
-								)
+								logger.error("(!) Exit the current alternate buffer program first")
 							else:
 								session.detach()
 						else:
@@ -1015,7 +1017,7 @@ class Core:
 								session.record(data,
 									_input=not session.interactive)
 
-							if session.agent:
+							elif session.agent:
 								data = Messenger.message(Messenger.SHELL, data)
 
 							session.send(data, stdin=True)
@@ -1337,6 +1339,7 @@ class Session:
 		self.interactive = None
 		self.echoing = None
 		self.reverse_pty = None
+		self.readline = None
 
 		self.version = None
 		self.user = None
@@ -2195,8 +2198,13 @@ class Session:
 						cmd = socat_cmd.format(_bin)
 
 					else:
-						logger.error("Falling back to basic shell support")
-						return False
+						if readline:
+							logger.info("Readline support enabled")
+							self.readline = True
+							return True
+						else:
+							logger.error("Falling back to basic shell support")
+							return False
 
 			if not deploy_agent and not self.spare_control_sessions: #### TODO
 				logger.warning("Agent cannot be deployed. I need to maintain at least one basic session...")
@@ -2253,7 +2261,8 @@ class Session:
 			self.get_shell_pid()
 
 		elif self.OS == "Windows":
-			logger.warning("Upgrading Windows shell is not implemented yet.")
+			self.readline = True
+			logger.info("Added readline support...")
 
 		return True
 
@@ -2265,6 +2274,16 @@ class Session:
 
 		elif self.OS == 'Unix':
 			threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
+
+	def readline_loop(self):
+		while core.attached_session == self:
+			try:
+				cmd = input()
+			except EOFError:
+				self.detach()
+				break
+			else:
+				self.send(cmd.encode() + b"\n")
 
 	def attach(self):
 
@@ -2299,10 +2318,17 @@ class Session:
 		if core.attached_session is not None:
 			return False
 
+		if self.type == 'PTY':
+			escape_key = options.escape['key']
+		elif self.readline:
+			escape_key = 'Ctrl-D'
+		else:
+			escape_key = 'Ctrl-C'
+
 		logger.info(
 			f"Interacting with session {paint('[' + str(self.id) + ']').red}"
 			f"{paint(', Shell Type:').green} {paint(self.type).CYAN}{paint(', Menu key:').green} "
-			f"{paint(options.escape['key'] if self.type == 'PTY' else 'Ctrl-C').MAGENTA} "
+			f"{paint(escape_key).MAGENTA} "
 		)
 
 		core.attached_session = self
@@ -2316,6 +2342,9 @@ class Session:
 		if self.type == 'PTY':
 			tty.setraw(sys.stdin)
 			os.kill(os.getpid(), signal.SIGWINCH)
+
+		elif self.readline:
+			threading.Thread(target=self.readline_loop).start()
 
 		self._cwd = None
 		return True
@@ -3042,7 +3071,6 @@ class Session:
 			self.detach()
 
 		# Kill tasks
-
 
 		return True
 
@@ -3809,7 +3837,7 @@ class CustomFormatter(logging.Formatter):
 ##########################################################################################################
 
 def ControlC(num, stack):
-	if core.attached_session:
+	if core.attached_session and not core.attached_session.readline:
 		core.attached_session.detach()
 
 	elif "Menu" in core.threads:
@@ -3834,6 +3862,20 @@ def handle_exceptions(func):
 			_, e, _ = sys.exc_info()
 			logger.error(e)
 	return inner
+
+def custom_excepthook(*args):
+    if len(args) == 1 and hasattr(args[0], 'exc_type'):
+        exc_type, exc_value, exc_traceback = args[0].exc_type, args[0].exc_value, args[0].exc_traceback
+    elif len(args) == 3:
+        exc_type, exc_value, exc_traceback = args
+    else:
+        return
+    traceback.print_exception(exc_type, exc_value, exc_traceback)
+    print(f"\nPython version: {sys.version}")
+    print(f"System: {platform.version()}")
+
+sys.excepthook = custom_excepthook
+threading.excepthook = custom_excepthook
 
 # CONSTANTS
 OS = platform.system()
