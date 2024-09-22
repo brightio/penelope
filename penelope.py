@@ -153,10 +153,11 @@ class MainMenu(cmd.Cmd):
 					if not self.sid:
 						if core.sessions:
 							cmdlogger.warning("No session ID selected. Select one with \"use [ID]\"")
-							return False
 						else:
 							cmdlogger.warning("No available sessions to perform this action")
-							return False
+						if func.__name__ == 'do_run':
+							self.show_modules()
+						return False
 				else:
 					if ID:
 						if ID.isnumeric() and int(ID) in core.sessions:
@@ -468,8 +469,8 @@ class MainMenu(cmd.Cmd):
 	def show_modules(self):
 		table = Table(joinchar=' <-> ')
 		table.header = [paint('MODULE NAME').cyan_UNDERLINE, paint('DESCRIPTION').cyan_UNDERLINE]
-		for name, info in options.modules.items():
-			table += [paint(name).red, info['description']]
+		for module in Module.modules.values():
+			table += [paint(module.name).red, module.description]
 		print("\n", table, "\n", sep="")
 
 	@session(current=True)
@@ -478,9 +479,10 @@ class MainMenu(cmd.Cmd):
 		[module name]
 		Run a module. Run 'help run' to view the available modules"""
 		if module_name:
-			module = options.modules.get(module_name)
+			module = Module.modules.get(module_name)
 			if module:
-				self.cmdqueue.extend(module['actions'][core.sessions[self.sid].OS])
+				module.session = core.sessions[self.sid]
+				module.run()
 			else:
 				logger.warning(f"Module '{module_name}' does not exist")
 		else:
@@ -806,7 +808,6 @@ class MainMenu(cmd.Cmd):
 					for param in options.__dict__ if param != 'modules' ]
 			table = Table(rows, fillchar=[paint('.').green, 0], joinchar=' => ')
 			print(table)
-			print(f"{paint('modules').cyan}\n{paint(json.dumps(getattr(options, 'modules'), indent=4)).yellow}")
 		else:
 			try:
 				args = line.split(" ", 1)
@@ -886,7 +887,7 @@ class MainMenu(cmd.Cmd):
 		return self.sessions(text, "*")
 
 	def complete_run(self, text, line, begidx, endidx):
-		return [module for module in options.modules if module.startswith(text)]
+		return [module for module in Module.modules.keys() if module.startswith(text)]
 
 
 class ControlQueue:
@@ -1413,6 +1414,10 @@ class Session:
 				if not options.no_timestamps and not self.logpath.exists():
 					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ").magenta).encode())
 
+			for module in Module.modules.values():
+				module.session = self
+				module.session_start()
+
 			self.maintain()
 
 			if options.single_session and self.listener:
@@ -1827,6 +1832,9 @@ class Session:
 		stdout_stream=None,	# stdout_stream object
 		stderr_stream=None	# stderr_stream object
 	):
+		if caller() == 'session_end':
+			value = True
+
 		if self.agent and not agent_typing: # TODO environment will not be the same as shell
 			if cmd:
 				if preserve_dir:
@@ -2151,6 +2159,12 @@ class Session:
 		return self.need_binary(name, url)
 
 	def upgrade(self):
+		if self._upgrade():
+			for module in Module.modules.values():
+				module.session = self
+				module.post_upgrade()
+
+	def _upgrade(self):
 		if self.OS == "Unix":
 			if self.agent:
 				logger.warning("Python agent is already deployed")
@@ -3070,6 +3084,10 @@ class Session:
 				else:
 					logger.error(f"Sessions {sessions} need a control session.")
 
+			for module in Module.modules.values():
+				module.session = self
+				module.session_end()
+
 			core.control << f'self.sessions[{self.id}].kill()'
 			if thread_name == 'Menu':
 				menu.kill_wait = queue.Queue()
@@ -3119,6 +3137,54 @@ class Session:
 		# Kill tasks
 
 		return True
+
+
+class Module:
+	modules = dict()
+	def __init__(self):
+		self.name = self.__class__.__name__
+		Module.modules[self.name] = self
+
+	def run(self):
+		pass
+
+	def session_start(self):
+		pass
+
+	def session_end(self):
+		pass
+
+	def post_upgrade(self):
+		pass
+
+class upload_privesc_scripts(Module):
+	description = 'Upload privilege escalation scripts to the target'
+	def run(self):
+		if self.session.OS == 'Unix':
+			self.session.upload(BINARIES['linpeas'])
+			self.session.upload(BINARIES['lse'])
+		elif self.session.OS == 'Windows':
+			self.session.upload(BINARIES['powerup'])
+
+class peass_ng(Module):
+	description = 'Run the latest version of PEASS-ng in the background'
+	def run(self):
+		if self.session.OS == 'Unix':
+			self.session.script(BINARIES['linpeas'])
+		elif self.session.OS == 'Windows':
+			self.session.upload(BINARIES['winpeas'])
+
+class lse(Module):
+	description = 'Run the latest version of linux-smart-enumeration in the background'
+	def run(self):
+		if self.session.OS == 'Unix':
+			self.session.script(BINARIES['lse'])
+		else:
+			logger.error("This module runs only in Unix shells")
+
+for subclass in Module.__subclasses__():
+	subclass()
+
 
 class Messenger:
 	SHELL = 1
@@ -3996,40 +4062,6 @@ class Options:
 		self.cmd_histfile = 'cmd_history'
 		self.debug_histfile = 'cmd_debug_history'
 		self.useragent = "Wget/1.21.2"
-		self.modules = {
-			'upload_privesc_scripts':{
-				'description':'Upload privilege escalation scripts to the target',
-				'actions':{
-					'Unix':[
-						f"upload {BINARIES['linpeas']}",
-						f"upload {BINARIES['lse']}"
-					],
-					'Windows':[
-						f"upload {BINARIES['powerup']}"
-					]
-				}
-			},
-			'peass-ng':{
-				'description':'Run the latest version of PEASS-ng in the background',
-				'actions':{
-					'Unix':[
-						f"script {BINARIES['linpeas']}"
-					],
-					'Windows':[
-						f"script {BINARIES['winpeas']}"
-					]
-				}
-			},
-			'lse':{
-				'description':'Run the latest version of linux-smart-enumeration in the background',
-				'actions':{
-					'Unix':[
-						f"script {BINARIES['lse']}"
-					]
-				}
-			}
-		}
-
 		self.configfile = self.basedir / 'penelope.conf'
 
 	def __getattribute__(self, option):
