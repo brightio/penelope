@@ -1401,7 +1401,7 @@ class Session:
 
 			logger.info(
 				f"Got {self.source} shell from {OSes[self.OS]} "
-				f"{paint(self.name).white_RED}{paint().green} 💀 - "
+				f"{paint(self.name).white_RED}{paint().green} 😍️  - "
 				f"Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
 			)
 
@@ -1498,7 +1498,7 @@ class Session:
 					version = self.exec(f"{_bin} -V || {_bin} --version", value=True)
 					major, minor, micro = re.search(r"Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
 					self.remote_python_version = (int(major), int(minor), int(micro))
-					if self.remote_python_version >= (2, 3): # TODO
+					if self.remote_python_version >= (2, 3): # Python 2.2 lacks: tarfile, os.walk, yield
 						self._can_deploy_agent = True
 					else:
 						self._can_deploy_agent = False
@@ -3164,6 +3164,7 @@ class upload_privesc_scripts(Module):
 			self.session.upload(BINARIES['linpeas'])
 			self.session.upload(BINARIES['lse'])
 		elif self.session.OS == 'Windows':
+			self.session.upload(BINARIES['winpeas'])
 			self.session.upload(BINARIES['powerup'])
 
 class peass_ng(Module):
@@ -3172,7 +3173,7 @@ class peass_ng(Module):
 		if self.session.OS == 'Unix':
 			self.session.script(BINARIES['linpeas'])
 		elif self.session.OS == 'Windows':
-			self.session.upload(BINARIES['winpeas'])
+			logger.error("This module runs only in Unix shells")
 
 class lse(Module):
 	description = 'Run the latest version of linux-smart-enumeration in the background'
