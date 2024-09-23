@@ -1206,7 +1206,11 @@ class Listener:
 		return self.socket.fileno()
 
 	def start(self):
-		logger.info(f"Listening for reverse shells on {paint(self.host).blue} 🚪{paint(self.port).red} ")
+		specific = ""
+		if self.host == '0.0.0.0':
+			specific = paint('⇉  ').cyan + str(paint(' • ').cyan).join([str(paint(ip).cyan) for ip in Interfaces().list.values()])
+
+		logger.info(f"Listening for reverse shells on {paint(self.host).blue}{paint(':').red}{paint(self.port).red} {specific}")
 
 		self.socket.listen(5)
 
