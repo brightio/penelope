@@ -1,5 +1,8 @@
 <div align="center">
-<img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
+  <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
+</div>
+<div align="center">
+  <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/>
 </div>
 
 Penelope is a shell handler designed to be easy to use and intended to replace netcat when exploiting RCE vulnerabilities. It is compatible with Linux and macOS and requires Python 3.6 or higher. It is a standalone script that does not require any installation or external dependencies, and it is intended to remain this way.
@@ -89,10 +92,14 @@ Misc:
   -C, --no-attach       Disable auto attaching sessions upon creation
   -U, --no-upgrade      Do not upgrade shells
 
+File server:
+  -s, --serve           HTTP File Server mode
+  -p , --port           File Server port. Default: 8000
+  -pass , --password    URL prefix
+
 Debug:
   -N , --no-bins        Simulate binary absence on target (comma separated list)
   -v, --version         Show Penelope version
-
 ```
 
 ## Extras
