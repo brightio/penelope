@@ -4,6 +4,8 @@
 
 Penelope is a shell handler designed to be easy to use and intended to replace netcat when exploiting RCE vulnerabilities. It is compatible with Linux and macOS and requires Python 3.6 or higher. It is a standalone script that does not require any installation or external dependencies, and it is intended to remain this way.
 
+![penelope](https://github.com/user-attachments/assets/e1b9332f-d224-4aee-ae96-8ec43a8faf67)
+
 Among the main features are:
 - Auto-upgrade shells to PTY (realtime resize included)
 - Logging interaction with the targets
@@ -14,11 +16,14 @@ Among the main features are:
 - Maintain X amount of active shells per host no matter what
 - Multiple sessions
 - Multiple listeners
+- Serve files/folders via HTTP (-s switch)
 - Can be imported by python3 exploits and get shell on the same terminal (see [Extras](#Extras))
 
 Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
 
-Currently only Unix shells are fully supported. There is only basic support for Windows shells (netcat-like interaction + logging) and the rest of the features are under way.
+One useful feature regarding Windows shells is that they can be automatically upgraded to meterpreter shells by running the "meterpreter" module.
+
+![meterpreter](https://github.com/user-attachments/assets/b9cda69c-e25c-41e1-abe2-ce18ba13c4ed)
 
 ## Usage
 ### Sample Typical Usage
@@ -50,7 +55,6 @@ https://github.com/brightio/penelope/assets/65655412/7295da32-28e2-4c92-971f-094
 Some Notes:
 - By default you need to press `F12` to detach the PTY shell and go to the Main Menu. If the upgrade was not possible the you ended up with a basic shell, you can detach it with `Ctrl+C`. This also prevents the accidental killing of the shell.
 - The Main Menu supports TAB completion and also short commands. For example instead of `interact 1` you can just type `i 1`.
-- You can add more scripts and modify default behaviours by using a configuration file (See extras/penelope.conf). This file can be speficied with -r in the command line or can be placed in ~/.penelope/penelope.conf
 
 ![Main Menu](https://user-images.githubusercontent.com/65655412/196921489-5d446ff2-1fe9-4789-b6af-11a8ddf81fe7.png)
 
