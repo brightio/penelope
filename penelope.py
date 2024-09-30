@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.11.11"
+__version__ = "0.12.2"
 
 import os
 import io
@@ -24,7 +24,6 @@ import re
 import pwd
 import sys
 import tty
-import cmd
 import ssl
 import code
 import time
@@ -71,7 +70,438 @@ if not sys.version_info >= (3, 6):
 	print("(!) Penelope requires Python version 3.6 or higher (!)")
 	sys.exit()
 
-class MainMenu(cmd.Cmd):
+################################## PYTHON MISSING BATTERIES ####################################
+
+rand = lambda _len: ''.join(random.choice(string.ascii_letters) for i in range(_len))
+caller = lambda: inspect.stack()[2].function
+bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
+chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
+pathlink = lambda filepath: (
+	f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
+	f'{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07'
+)
+
+def Open(item, terminal=False):
+	if OS == 'Linux' and not DISPLAY:
+		logger.error("No available $DISPLAY")
+		return False
+
+	if not terminal:
+		program = {'Linux':'xdg-open', 'Darwin':'open'}[OS]
+		args = [item]
+	else:
+		program = {'Linux':'x-terminal-emulator', 'Darwin':'osascript'}[OS]
+		if OS == 'Linux':
+			args = ['-e', *shlex.split(item)]
+		elif OS == 'Darwin':
+			args = ['-e', f'tell app "Terminal" to do script "{item}"']
+
+	if not shutil.which(program):
+		logger.error(f"Cannot open window: '{program}' binary does not exist")
+		return False
+
+	process = subprocess.Popen(
+		(program, *args),
+		stdin=subprocess.DEVNULL,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.PIPE
+	)
+	r, _, _ = select.select([process.stderr], [], [], .01)
+	if process.stderr in r:
+		error = os.read(process.stderr.fileno(), 1024)
+		if error:
+			logger.error(error.decode())
+			return False
+
+	return True
+
+def ask(text):
+	try:
+		return input(f"\r{paint(f'[?] {text}: ').yellow}")
+
+	except EOFError:
+		return ask(text)
+
+class Interfaces:
+
+	def __str__(self):
+		table = Table(joinchar=' : ')
+		table.header = [paint('Interface').MAGENTA, paint('IP Address').MAGENTA]
+		for name, ip in self.list.items():
+			table += [paint(name).cyan, paint(ip).yellow]
+		return str(table)
+
+	def oneLine(self):
+		return '(' + str(self).replace('\n', '|') + ')'
+
+	def translate(self, interface_name):
+		if interface_name in self.list:
+			return self.list[interface_name]
+		elif interface_name in ('any', 'all'):
+			return '0.0.0.0'
+		else:
+			return interface_name
+
+	@property
+	def list(self):
+		if OS == 'Linux':
+			if shutil.which("ip"):
+				interfaces = []
+				interface_stack = []
+				for line in subprocess.check_output(['ip', 'addr']).decode().splitlines():
+					interface = re.search(r"^\d+: (.+?):", line)
+					if interface:
+						interface_stack.append(interface[1])
+						continue
+					ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
+					if ip:
+						interfaces.append((interface_stack.pop(), ip[1]))
+			else:
+				logger.error("'ip' command is not available")
+				return dict()
+
+		elif OS == 'Darwin':
+			if shutil.which("ifconfig"):
+				output = subprocess.check_output(['ifconfig']).decode()
+				interfaces = re.findall(r'^(\w+).*?\n\s+inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)', output, re.MULTILINE | re.DOTALL)
+			else:
+				logger.error("'ifconfig' command is not available")
+				return dict()
+
+		return {i[0]:i[1] for i in interfaces}
+
+	@property
+	def list_all(self):
+		return [item for item in list(self.list.keys()) + list(self.list.values())]
+
+class Table:
+
+	def __init__(self, list_of_lists=[], header=None, fillchar=" ", joinchar=" "):
+		self.list_of_lists = list_of_lists
+
+		self.joinchar = joinchar
+
+		if type(fillchar) is str:
+			self.fillchar = [fillchar]
+		elif type(fillchar) is list:
+			self.fillchar = fillchar
+#		self.fillchar[0] = self.fillchar[0][0]
+
+		self.data = []
+		self.max_row_len = 0
+		self.col_max_lens = []
+		if header: self.header = header
+		for row in self.list_of_lists:
+			self += row
+
+	@property
+	def header(self):
+		...
+
+	@header.setter
+	def header(self, header):
+		self.add_row(header, header=True)
+
+	def __str__(self):
+		self.fill()
+		return "\n".join([self.joinchar.join(row) for row in self.data])
+
+	def __len__(self):
+		return len(self.data)
+
+	def add_row(self, row, header=False):
+		row_len = len(row)
+		if row_len > self.max_row_len:
+			self.max_row_len = row_len
+
+		cur_col_len = len(self.col_max_lens)
+		for _ in range(row_len - cur_col_len):
+			self.col_max_lens.append(0)
+
+		for _ in range(cur_col_len - row_len):
+			row.append("")
+
+		new_row = []
+		for index, element in enumerate(row):
+			if not isinstance(element, (str, paint)):
+				element = str(element)
+			elem_length = len(element)
+			new_row.append(element)
+			if elem_length > self.col_max_lens[index]:
+				self.col_max_lens[index] = elem_length
+
+		if header:
+			self.data.insert(0, new_row)
+		else:
+			self.data.append(new_row)
+
+	def __iadd__(self, row):
+		self.add_row(row)
+		return self
+
+	def fill(self):
+		for row in self.data:
+			for index, element in enumerate(row):
+				fillchar = ' '
+				if index in [*self.fillchar][1:]:
+					fillchar = self.fillchar[0]
+
+				row[index] = element + fillchar * (self.col_max_lens[index] - len(element))
+
+class PBar:
+	pbars = []
+
+	def __init__(self, end, caption="", max_width=None):
+		self.pos = 0
+		self.end = end # end > 0 # TODO
+		self.active = True
+		self.caption = caption
+		self.max_width = max_width
+		__class__.pbars.append(self)
+
+	@property
+	def percent(self):
+		return int(self.pos * 100 / self.end)
+
+	def update(self, step=1):
+		self.pos += step
+		if self.pos > self.end:
+			self.pos = self.end
+		if self.active:
+			self.render()
+
+	def render(self):
+		percent = self.percent
+		self.active = False if percent == 100 else True
+		cursor = "\x1b[?25l" if self.active else "\x1b[?25h" # __exit__ TODO
+		left = f"{self.caption} ["
+		right = f"] {str(percent).rjust(3)}%"
+		up = f"\x1b[A" if self.active else ""
+		bar_space = self.max_width if self.max_width else os.get_terminal_size().columns - len(left) - len(right)
+		bars = int(percent * bar_space / 100) * "#"
+		print(f'{cursor}{left}{bars.ljust(bar_space, ".")}{right}{up}')
+
+	def terminate(self):
+		print("\x1b[?25h")
+
+class paint:
+	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
+	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'white':231, 'orange':136}
+	_escape = lambda codes: f"\001\x1b[{codes}m\002"
+
+	def __init__(self, text=None, colors=None):
+		self.text = str(text) if text is not None else None
+		self.colors = colors if colors is not None else []
+
+	def __str__(self):
+		if self.colors:
+			content = self.text + __class__._escape(__class__._codes['RESET']) if self.text is not None else ''
+			return __class__._escape(';'.join(self.colors)) + content
+		return self.text
+
+	def __len__(self):
+		return len(self.text)
+
+	def __add__(self, text):
+		return str(self) + str(text)
+
+	def __mul__(self, num):
+		return __class__(self.text * num, self.colors)
+
+	def __getattr__(self, attr):
+		self.colors.clear()
+		for color in attr.split('_'):
+			if color in __class__._codes:
+				self.colors.append(str(__class__._codes[color]))
+			else:
+				prefix = "3" if color in __class__._colors else "4"
+				self.colors.append(prefix + "8;5;" + str(__class__._colors[color.lower()]))
+		return self
+
+class CustomFormatter(logging.Formatter):
+	TEMPLATES = {
+		logging.CRITICAL:	{'color':"RED",		'prefix':"[!!!]"},
+		logging.ERROR:		{'color':"red",		'prefix':"[-]"},
+		logging.WARNING:	{'color':"yellow",	'prefix':"[!]"},
+		logging.INFO:		{'color':"green",	'prefix':"[+]"},
+		logging.DEBUG:		{'color':"magenta",	'prefix':"[---DEBUG---]"}
+	}
+	def format(self, record):
+		template = __class__.TEMPLATES[record.levelno]
+		prefix = "\r" if core.attached_session is None else ""
+		suffix = "\r" if core.attached_session is not None else ""
+		thread = paint(" ") + paint(threading.current_thread().name).white_CYAN\
+			if record.levelno is logging.DEBUG or options.debug else ""
+		text = prefix + f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}" + suffix
+		return str(getattr(paint(text), template['color']))
+
+class BetterCMD:
+	def __init__(self, prompt=None, banner=None):
+		self.prompt = prompt
+		self.banner = banner
+		self.cmdqueue = []
+		self.completekey = 'tab'
+
+	def cmdloop(self):
+		self.preloop()
+		if readline:
+			readline.set_completer(self.complete)
+			readline.parse_and_bind(self.completekey + ": complete")
+
+		if self.banner:
+			print(self.banner)
+			self.banner = None
+
+		stop = None
+		while not stop:
+			if self.cmdqueue:
+				line = self.cmdqueue.pop(0)
+			else:
+				try:
+					line = input(self.prompt)
+				except EOFError:
+					line = 'EOF'
+			line = self.precmd(line)
+			stop = self.onecmd(line)
+			stop = self.postcmd(stop, line)
+		self.postloop()
+
+	def onecmd(self, line):
+		cmd, arg, line = self.parseline(line)
+		if line:
+			try:
+				func = getattr(self, 'do_' + cmd)
+			except AttributeError:
+				return self.default(cmd)
+			return func(arg)
+
+	def default(self, cmd):
+		logger.error(f"Command {cmd} does not exist")
+
+	def parseline(self, line):
+		line = line.lstrip()
+		if not line:
+			return None, None, line
+		elif line[0] == '!':
+			if hasattr(self, 'do_shell'):
+				line = 'shell ' + line[1:]
+			else:
+				return None, None, line
+		else:
+			parts = line.split(' ' , 1)
+			if len(parts) == 1:
+				return parts[0], None, line
+			elif len(parts) == 2:
+				return parts[0], parts[1], line
+
+	@staticmethod
+	def set_auto_history(state):
+		if readline:
+			readline.set_auto_history(state)
+
+	@staticmethod
+	def load_history(histfile):
+		if readline:
+			readline.clear_history()
+			if histfile.exists():
+				readline.read_history_file(histfile)
+
+	@staticmethod
+	def write_history(histfile):
+		if readline:
+			readline.set_history_length(options.histlength)
+			try:
+				readline.write_history_file(histfile)
+			except FileNotFoundError:
+				cmdlogger.debug(f"History file '{histfile}' does not exist")
+
+	def precmd(self, line):
+		__class__.write_history(options.cmd_histfile)
+		return line
+
+	def postcmd(self, stop, line):
+		return stop
+
+	def preloop(self):
+		__class__.load_history(options.cmd_histfile)
+
+	def postloop(self):
+		pass
+
+	def do_reset(self, line):
+		"""
+
+		Reset the local terminal
+		"""
+		if shutil.which("reset"):
+			os.system("reset")
+		else:
+			cmdlogger.error("'reset' command doesn't exist on the system")
+
+	def do_history(self, line):
+		"""
+
+		Show Main Menu history
+		"""
+		if readline:
+			self.write_history(options.cmd_histfile)
+			if options.cmd_histfile.exists():
+				with open(options.cmd_histfile, "r") as history_file:
+					lines = history_file.readlines()
+				max_digits = len(str(len(lines)))
+				for i, line in enumerate(lines, start=1):
+					print(f"  {i:>{max_digits}}  {line}", end='')
+		else:
+			cmdlogger.error("Python is not compiled with readline support")
+
+	def do_DEBUG(self, line):
+		"""
+
+		Open debug console
+		"""
+		__class__.write_history(options.cmd_histfile)
+		__class__.load_history(options.debug_histfile)
+		code.interact(banner=paint(
+			"===> Entering debugging console...").CYAN, local=globals(),
+			exitmsg=paint("<=== Leaving debugging console..."
+		).CYAN)
+		__class__.write_history(options.debug_histfile)
+		__class__.load_history(options.cmd_histfile)
+
+	def completedefault(self, *ignored):
+		return []
+
+	def completenames(self, text, *ignored):
+		dotext = 'do_'+text
+		return [a[3:] for a in dir(self.__class__) if a.startswith(dotext)]
+
+	def complete(self, text, state):
+		if state == 0:
+			origline = readline.get_line_buffer()
+			line = origline.lstrip()
+			stripped = len(origline) - len(line)
+			begidx = readline.get_begidx() - stripped
+			endidx = readline.get_endidx() - stripped
+			if begidx > 0:
+				cmd, args, foo = self.parseline(line)
+				if cmd == '':
+					compfunc = self.completedefault
+				else:
+					try:
+						compfunc = getattr(self, 'complete_' + cmd)
+					except AttributeError:
+						compfunc = self.completedefault
+			else:
+				compfunc = self.completenames
+			self.completion_matches = compfunc(text, line, begidx, endidx)
+		try:
+			return self.completion_matches[state]
+		except IndexError:
+			return None
+
+##########################################################################################################
+
+class MainMenu(BetterCMD):
 
 	def __init__(self):
 		super().__init__()
@@ -112,29 +542,6 @@ class MainMenu(cmd.Cmd):
 		except EOFError:
 			return __class__.confirm(text)
 
-	@staticmethod
-	def set_auto_history(state):
-		if readline:
-			readline.set_auto_history(state)
-
-	@staticmethod
-	def load_history(histfile):
-		if readline:
-			readline.clear_history()
-			if histfile.exists():
-				readline.read_history_file(histfile)
-
-	@staticmethod
-	def write_history(histfile):
-		if readline:
-			readline.set_history_length(options.histlength)
-
-			try:
-				readline.write_history_file(histfile)
-
-			except FileNotFoundError:
-				cmdlogger.debug(f"History file '{histfile}' does not exist")
-
 	def show(self):
 		print()
 		threading.Thread(target=self.cmdloop, name='Menu').start()
@@ -174,16 +581,6 @@ class MainMenu(cmd.Cmd):
 				return func(self, ID)
 			return newfunc
 		return inner
-
-	def preloop(self):
-		__class__.load_history(options.cmd_histfile)
-
-	def precmd(self, line):
-		__class__.write_history(options.cmd_histfile)
-		return line
-
-	def emptyline(self):
-		self.lastcmd = None
 
 	def show_help(self, command):
 		help_prompt = re.compile(r"Run 'help [^\']*' for more information") # TODO
@@ -350,6 +747,21 @@ class MainMenu(cmd.Cmd):
 
 		if arrow == '->':
 			_type = 'L'
+			lhost = "127.0.0.1"
+
+			if group2:
+				match = re.search(r"((?:[^\s]*)?):((?:[^\s]*)?)", group2)
+				if match:
+					rhost = match.group(1)
+					rport = match.group(2)
+					lport = rport
+				if not rport:
+					logger.warning("At least remote port is required")
+					return False
+			else:
+				logger.warning("At least remote port is required")
+				return False
+
 			if group1:
 				match = re.search(r"((?:[^\s]*)?):((?:[^\s]*)?)", group1)
 				if match:
@@ -358,17 +770,6 @@ class MainMenu(cmd.Cmd):
 				else:
 					logger.warning("Invalid syntax")
 					return False
-			if group2:
-				match = re.search(r"((?:[^\s]*)?):((?:[^\s]*)?)", group2)
-				if match:
-					rhost = match.group(1)
-					rport = match.group(2)
-				if not rport:
-					logger.warning("At least remote port is required")
-					return False
-			else:
-				logger.warning("At least remote port is required")
-				return False
 
 		elif arrow == '<-':
 			_type = 'R'
@@ -729,28 +1130,6 @@ class MainMenu(cmd.Cmd):
 		"""
 		print(Interfaces())
 
-	def do_reset(self, line):
-		"""
-
-		Reset the local terminal
-		"""
-		if shutil.which("reset"):
-			os.system("reset")
-		else:
-			cmdlogger.error("'reset' command doesn't exist on the system")
-
-	def do_history(self, line):
-		"""
-
-		Show Main Menu history
-		"""
-		if readline:
-			self.write_history(options.cmd_histfile)
-			if options.cmd_histfile.exists():
-				print(open(options.cmd_histfile).read())
-		else:
-			cmdlogger.error("Python is not compiled with readline support")
-
 	def do_exit(self, line):
 		"""
 
@@ -777,20 +1156,6 @@ class MainMenu(cmd.Cmd):
 		#	return self.do_exit(line)
 		print("exit")
 		return self.do_exit(line)
-
-	def do_DEBUG(self, line):
-		"""
-
-		Open debug console
-		"""
-		__class__.write_history(options.cmd_histfile)
-		__class__.load_history(options.debug_histfile)
-		code.interact(banner=paint(
-			"===> Entering debugging console...").CYAN, local=globals(),
-			exitmsg=paint("<=== Leaving debugging console..."
-		).CYAN)
-		__class__.write_history(options.debug_histfile)
-		__class__.load_history(options.cmd_histfile)
 
 	def do_SET(self, line):
 		"""
@@ -841,10 +1206,7 @@ class MainMenu(cmd.Cmd):
 			parts = line.split()
 			candidates = [command for command in self.raw_commands if command.startswith(parts[0])]
 			if not candidates:
-				cmdlogger.warning(
-					f"No such command: '{line}'. "
-					f"Issue 'help' for all available commands"
-				)
+				cmdlogger.warning(f"No such command: '{line}'. Issue 'help' for all available commands")
 			elif len(candidates) == 1:
 				cmd = f"{candidates[0]} {' '.join(parts[1:])}"
 				print(f"\x1b[1A{self.prompt}{cmd}")
@@ -1208,7 +1570,7 @@ class Listener:
 	def start(self):
 		specific = ""
 		if self.host == '0.0.0.0':
-			specific = paint('⇉  ').cyan + str(paint(' • ').cyan).join([str(paint(ip).cyan) for ip in Interfaces().list.values()])
+			specific = paint('→  ').cyan + str(paint(' • ').cyan).join([str(paint(ip).cyan) for ip in Interfaces().list.values()])
 
 		logger.info(f"Listening for reverse shells on {paint(self.host).blue}{paint(':').red}{paint(self.port).red} {specific}")
 
@@ -2992,6 +3354,8 @@ class Session:
 						continue
 					break
 				client.close()
+				#stdout_stream.terminate()
+				#stderr_stream.terminate()
 				"""
 
 				core.sessions[1].exec(
@@ -3719,273 +4083,7 @@ class FileServer:
 			logger.warning(f"Shutting down Fileserver #{self.id}")
 		self.httpd.shutdown()
 
-################################## GENERAL PURPOSE CUSTOM CODE ####################################
 
-caller = lambda: inspect.stack()[2].function
-rand = lambda _len: ''.join(random.choice(string.ascii_letters) for i in range(_len))
-bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
-chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
-pathlink = lambda filepath: (
-	f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
-	f'{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07'
-)
-
-def Open(item, terminal=False):
-	if OS == 'Linux' and not DISPLAY:
-		logger.error("No available $DISPLAY")
-		return False
-
-	if not terminal:
-		program = {'Linux':'xdg-open', 'Darwin':'open'}[OS]
-		args = [item]
-	else:
-		program = {'Linux':'x-terminal-emulator', 'Darwin':'osascript'}[OS]
-		if OS == 'Linux':
-			args = ['-e', *shlex.split(item)]
-		elif OS == 'Darwin':
-			args = ['-e', f'tell app "Terminal" to do script "{item}"']
-
-	if not shutil.which(program):
-		logger.error(f"Cannot open window: '{program}' binary does not exist")
-		return False
-
-	process = subprocess.Popen(
-		(program, *args),
-		stdin=subprocess.DEVNULL,
-		stdout=subprocess.DEVNULL,
-		stderr=subprocess.PIPE
-	)
-	r, _, _ = select.select([process.stderr], [], [], .01)
-	if process.stderr in r:
-		error = os.read(process.stderr.fileno(), 1024)
-		if error:
-			logger.error(error.decode())
-			return False
-
-	return True
-
-def ask(text):
-	try:
-		return input(f"\r{paint(f'[?] {text}: ').yellow}")
-
-	except EOFError:
-		return ask(text)
-
-class Interfaces:
-
-	def __str__(self):
-		table = Table(joinchar=' : ')
-		table.header = [paint('Interface').MAGENTA, paint('IP Address').MAGENTA]
-		for name, ip in self.list.items():
-			table += [paint(name).cyan, paint(ip).yellow]
-		return str(table)
-
-	def oneLine(self):
-		return '(' + str(self).replace('\n', '|') + ')'
-
-	def translate(self, interface_name):
-		if interface_name in self.list:
-			return self.list[interface_name]
-		elif interface_name in ('any', 'all'):
-			return '0.0.0.0'
-		else:
-			return interface_name
-
-	@property
-	def list(self):
-		if OS == 'Linux':
-			if shutil.which("ip"):
-				interfaces = []
-				interface_stack = []
-				for line in subprocess.check_output(['ip', 'addr']).decode().splitlines():
-					interface = re.search(r"^\d+: (.+?):", line)
-					if interface:
-						interface_stack.append(interface[1])
-						continue
-					ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
-					if ip:
-						interfaces.append((interface_stack.pop(), ip[1]))
-			else:
-				logger.error("'ip' command is not available")
-				return dict()
-
-		elif OS == 'Darwin':
-			if shutil.which("ifconfig"):
-				output = subprocess.check_output(['ifconfig']).decode()
-				interfaces = re.findall(r'^(\w+).*?\n\s+inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)', output, re.MULTILINE | re.DOTALL)
-			else:
-				logger.error("'ifconfig' command is not available")
-				return dict()
-
-		return {i[0]:i[1] for i in interfaces}
-
-	@property
-	def list_all(self):
-		return [item for item in list(self.list.keys()) + list(self.list.values())]
-
-class Table:
-
-	def __init__(self, list_of_lists=[], header=None, fillchar=" ", joinchar=" "):
-		self.list_of_lists = list_of_lists
-
-		self.joinchar = joinchar
-
-		if type(fillchar) is str:
-			self.fillchar = [fillchar]
-		elif type(fillchar) is list:
-			self.fillchar = fillchar
-#		self.fillchar[0] = self.fillchar[0][0]
-
-		self.data = []
-		self.max_row_len = 0
-		self.col_max_lens = []
-		if header: self.header = header
-		for row in self.list_of_lists:
-			self += row
-
-	@property
-	def header(self):
-		...
-
-	@header.setter
-	def header(self, header):
-		self.add_row(header, header=True)
-
-	def __str__(self):
-		self.fill()
-		return "\n".join([self.joinchar.join(row) for row in self.data])
-
-	def __len__(self):
-		return len(self.data)
-
-	def add_row(self, row, header=False):
-		row_len = len(row)
-		if row_len > self.max_row_len:
-			self.max_row_len = row_len
-
-		cur_col_len = len(self.col_max_lens)
-		for _ in range(row_len - cur_col_len):
-			self.col_max_lens.append(0)
-
-		for _ in range(cur_col_len - row_len):
-			row.append("")
-
-		new_row = []
-		for index, element in enumerate(row):
-			if not isinstance(element, (str, paint)):
-				element = str(element)
-			elem_length = len(element)
-			new_row.append(element)
-			if elem_length > self.col_max_lens[index]:
-				self.col_max_lens[index] = elem_length
-
-		if header:
-			self.data.insert(0, new_row)
-		else:
-			self.data.append(new_row)
-
-	def __iadd__(self, row):
-		self.add_row(row)
-		return self
-
-	def fill(self):
-		for row in self.data:
-			for index, element in enumerate(row):
-				fillchar = ' '
-				if index in [*self.fillchar][1:]:
-					fillchar = self.fillchar[0]
-
-				row[index] = element + fillchar * (self.col_max_lens[index] - len(element))
-
-
-class PBar:
-	pbars = []
-
-	def __init__(self, end, caption="", max_width=None):
-		self.pos = 0
-		self.end = end # end > 0 # TODO
-		self.active = True
-		self.caption = caption
-		self.max_width = max_width
-		__class__.pbars.append(self)
-
-	@property
-	def percent(self):
-		return int(self.pos * 100 / self.end)
-
-	def update(self, step=1):
-		self.pos += step
-		if self.pos > self.end:
-			self.pos = self.end
-		if self.active:
-			self.render()
-
-	def render(self):
-		percent = self.percent
-		self.active = False if percent == 100 else True
-		cursor = "\x1b[?25l" if self.active else "\x1b[?25h" # __exit__ TODO
-		left = f"{self.caption} ["
-		right = f"] {str(percent).rjust(3)}%"
-		up = f"\x1b[A" if self.active else ""
-		bar_space = self.max_width if self.max_width else os.get_terminal_size().columns - len(left) - len(right)
-		bars = int(percent * bar_space / 100) * "#"
-		print(f'{cursor}{left}{bars.ljust(bar_space, ".")}{right}{up}')
-
-	def terminate(self):
-		print("\x1b[?25h")
-
-class paint:
-	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'white':231, 'orange':136}
-	_escape = lambda codes: f"\001\x1b[{codes}m\002"
-
-	def __init__(self, text=None, colors=None):
-		self.text = str(text) if text is not None else None
-		self.colors = colors if colors is not None else []
-
-	def __str__(self):
-		if self.colors:
-			content = self.text + __class__._escape(__class__._codes['RESET']) if self.text is not None else ''
-			return __class__._escape(';'.join(self.colors)) + content
-		return self.text
-
-	def __len__(self):
-		return len(self.text)
-
-	def __add__(self, text):
-		return str(self) + str(text)
-
-	def __mul__(self, num):
-		return __class__(self.text * num, self.colors)
-
-	def __getattr__(self, attr):
-		self.colors.clear()
-		for color in attr.split('_'):
-			if color in __class__._codes:
-				self.colors.append(str(__class__._codes[color]))
-			else:
-				prefix = "3" if color in __class__._colors else "4"
-				self.colors.append(prefix + "8;5;" + str(__class__._colors[color.lower()]))
-		return self
-
-class CustomFormatter(logging.Formatter):
-	TEMPLATES = {
-		logging.CRITICAL:	{'color':"RED",		'prefix':"[!!!]"},
-		logging.ERROR:		{'color':"red",		'prefix':"[-]"},
-		logging.WARNING:	{'color':"yellow",	'prefix':"[!]"},
-		logging.INFO:		{'color':"green",	'prefix':"[+]"},
-		logging.DEBUG:		{'color':"magenta",	'prefix':"[---DEBUG---]"}
-	}
-	def format(self, record):
-		template = __class__.TEMPLATES[record.levelno]
-		prefix = "\r" if core.attached_session is None else ""
-		suffix = "\r" if core.attached_session is not None else ""
-		thread = paint(" ") + paint(threading.current_thread().name).white_CYAN\
-			if record.levelno is logging.DEBUG or options.debug else ""
-		text = prefix + f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}" + suffix
-		return str(getattr(paint(text), template['color']))
-
-##########################################################################################################
 
 def ControlC(num, stack):
 	if core.attached_session and not core.attached_session.readline:
