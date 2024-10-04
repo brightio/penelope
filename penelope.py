@@ -342,9 +342,10 @@ class BetterCMD:
 		self.cmdqueue = []
 		self.completekey = 'tab'
 		self.lastcmd = ''
-		self.debug = False
+		self.active = False
 
 	def cmdloop(self):
+
 		self.preloop()
 		if readline:
 			readline.set_completer(self.complete)
@@ -360,7 +361,9 @@ class BetterCMD:
 				line = self.cmdqueue.pop(0)
 			else:
 				try:
+					self.active = True
 					line = input(self.prompt)
+					self.active = False
 				except EOFError:
 					line = 'EOF'
 			line = self.precmd(line)
@@ -370,7 +373,7 @@ class BetterCMD:
 
 	def onecmd(self, line):
 		cmd, arg, line = self.parseline(line)
-		if line:
+		if cmd:
 			try:
 				func = getattr(self, 'do_' + cmd)
 				self.lastcmd = line
@@ -386,10 +389,16 @@ class BetterCMD:
 		if not line:
 			return None, None, line
 		elif line[0] == '!':
-			if hasattr(self, 'do_shell'):
-				line = 'shell ' + line[1:]
-			else:
+			number = line[1:].strip()
+			hist_len = readline.get_current_history_length()
+			if not number.isnumeric() or int(number) > hist_len:
+				logger.error("Invalid command number")
 				return None, None, line
+			if options.cmd_histfile.exists():
+				with open(options.cmd_histfile, "r") as history_file:
+					line = history_file.readlines()[int(number) - 1][:-1]
+					readline.replace_history_item(hist_len - 1, line)
+					return self.parseline(line)
 		else:
 			parts = line.split(' ' , 1)
 			if len(parts) == 1:
@@ -462,7 +471,7 @@ class BetterCMD:
 
 		Open debug console
 		"""
-		self.debug = True
+		self.active = True
 		__class__.write_history(options.cmd_histfile)
 		__class__.load_history(options.debug_histfile)
 		code.interact(banner=paint(
@@ -471,7 +480,6 @@ class BetterCMD:
 		).CYAN)
 		__class__.write_history(options.debug_histfile)
 		__class__.load_history(options.cmd_histfile)
-		self.debug = False
 
 	def completedefault(self, *ignored):
 		return []
@@ -2963,6 +2971,7 @@ class Session:
 		return downloaded
 
 	def upload(self, local_items, remote_path=None, randomize_fname=False):
+
 		# Check remote permissions
 		destination = remote_path or self.cwd
 		try:
@@ -4136,7 +4145,7 @@ def custom_excepthook(*args):
 	print('─' * 80, f"\n{paint('Penelope version:').red} {paint(__version__).green}")
 	print(f"{paint('Python version:').red} {paint(sys.version).green}")
 	print(f"{paint('System:').red} {paint(platform.version()).green}")
-	if not menu.debug:
+	if not menu.active:
 		menu.show()
 
 sys.excepthook = custom_excepthook
