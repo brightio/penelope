@@ -342,6 +342,7 @@ class BetterCMD:
 		self.cmdqueue = []
 		self.completekey = 'tab'
 		self.lastcmd = ''
+		self.debug = False
 
 	def cmdloop(self):
 		self.preloop()
@@ -461,6 +462,7 @@ class BetterCMD:
 
 		Open debug console
 		"""
+		self.debug = True
 		__class__.write_history(options.cmd_histfile)
 		__class__.load_history(options.debug_histfile)
 		code.interact(banner=paint(
@@ -469,6 +471,7 @@ class BetterCMD:
 		).CYAN)
 		__class__.write_history(options.debug_histfile)
 		__class__.load_history(options.cmd_histfile)
+		self.debug = False
 
 	def completedefault(self, *ignored):
 		return []
@@ -1928,14 +1931,13 @@ class Session:
 	@property
 	def bsd(self):
 		if self._bsd is None:
+			self._bsd = False
 			if self.OS == 'Unix':
 				try:
 					response = self.control_session.exec("uname -s", value=True)
 					self._bsd = bool(re.search(r"(BSD|Darwin)", response))
 				except:
 					pass
-			elif self.OS == 'Windows':
-				self._bsd = False
 		return self._bsd
 
 	@property
@@ -2961,7 +2963,6 @@ class Session:
 		return downloaded
 
 	def upload(self, local_items, remote_path=None, randomize_fname=False):
-
 		# Check remote permissions
 		destination = remote_path or self.cwd
 		try:
@@ -4124,18 +4125,19 @@ def handle_exceptions(func):
 	return inner
 
 def custom_excepthook(*args):
-    if len(args) == 1 and hasattr(args[0], 'exc_type'):
-        exc_type, exc_value, exc_traceback = args[0].exc_type, args[0].exc_value, args[0].exc_traceback
-    elif len(args) == 3:
-        exc_type, exc_value, exc_traceback = args
-    else:
-        return
-    traceback.print_exception(exc_type, exc_value, exc_traceback)
-    print()
-    print(f"Penelope version: {__version__}")
-    print(f"Python version: {sys.version}")
-    print(f"System: {platform.version()}")
-    menu.show()
+	print("\n", paint('Oops...').RED, '🐞\n', paint().yellow, '─' * 80, sep='')
+	if len(args) == 1 and hasattr(args[0], 'exc_type'):
+		exc_type, exc_value, exc_traceback = args[0].exc_type, args[0].exc_value, args[0].exc_traceback
+	elif len(args) == 3:
+		exc_type, exc_value, exc_traceback = args
+	else:
+		return
+	sys.__excepthook__(exc_type, exc_value, exc_traceback)
+	print('─' * 80, f"\n{paint('Penelope version:').red} {paint(__version__).green}")
+	print(f"{paint('Python version:').red} {paint(sys.version).green}")
+	print(f"{paint('System:').red} {paint(platform.version()).green}")
+	if not menu.debug:
+		menu.show()
 
 sys.excepthook = custom_excepthook
 threading.excepthook = custom_excepthook
