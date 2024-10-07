@@ -344,6 +344,11 @@ class BetterCMD:
 		self.lastcmd = ''
 		self.active = False
 
+	def show(self):
+		print()
+		self.cmdloop()
+#		threading.Thread(target=self.cmdloop, name='Menu').start()
+
 	def cmdloop(self):
 
 		self.preloop()
@@ -366,6 +371,10 @@ class BetterCMD:
 					self.active = False
 				except EOFError:
 					line = 'EOF'
+				except KeyboardInterrupt:
+					self.interrupt()
+					continue
+
 			line = self.precmd(line)
 			stop = self.onecmd(line)
 			stop = self.postcmd(stop, line)
@@ -384,23 +393,28 @@ class BetterCMD:
 	def default(self, line):
 		logger.error(f"Invalid command")
 
+	def interrupt(self):
+		print("^C")
+
 	def parseline(self, line):
 		line = line.lstrip()
 		if not line:
 			return None, None, line
 		elif line[0] == '!':
-			number = line[1:].strip()
+			index = line[1:].strip()
 			hist_len = readline.get_current_history_length()
-			if not number.isnumeric() or int(number) > hist_len:
+
+			if not index.isnumeric() or not (0 < int(index) < hist_len):
 				logger.error("Invalid command number")
+				readline.remove_history_item(hist_len - 1)
 				return None, None, line
-			if options.cmd_histfile.exists():
-				with open(options.cmd_histfile, "r") as history_file:
-					line = history_file.readlines()[int(number) - 1][:-1]
-					readline.replace_history_item(hist_len - 1, line)
-					return self.parseline(line)
+
+			line = readline.get_history_item(int(index))
+			readline.replace_history_item(hist_len - 1, line)
+			return self.parseline(line)
+
 		else:
-			parts = line.split(' ' , 1)
+			parts = line.split(' ', 1)
 			if len(parts) == 1:
 				return parts[0], None, line
 			elif len(parts) == 2:
@@ -415,8 +429,10 @@ class BetterCMD:
 	def load_history(histfile):
 		if readline:
 			readline.clear_history()
-			if histfile.exists():
+			try:
 				readline.read_history_file(histfile)
+			except Exception as e:
+				cmdlogger.debug(f"Error loading history file: {e}")
 
 	@staticmethod
 	def write_history(histfile):
@@ -424,8 +440,8 @@ class BetterCMD:
 			readline.set_history_length(options.histlength)
 			try:
 				readline.write_history_file(histfile)
-			except FileNotFoundError:
-				cmdlogger.debug(f"History file '{histfile}' does not exist")
+			except Exception as e:
+				cmdlogger.debug(f"Error writing to history file: {e}")
 
 	def precmd(self, line):
 		__class__.write_history(options.cmd_histfile)
@@ -456,13 +472,10 @@ class BetterCMD:
 		Show Main Menu history
 		"""
 		if readline:
-			self.write_history(options.cmd_histfile)
-			if options.cmd_histfile.exists():
-				with open(options.cmd_histfile, "r") as history_file:
-					lines = history_file.readlines()
-				max_digits = len(str(len(lines)))
-				for i, line in enumerate(lines, start=1):
-					print(f"  {i:>{max_digits}}  {line}", end='')
+			hist_len = readline.get_current_history_length()
+			max_digits = len(str(hist_len))
+			for i in range(1, hist_len + 1):
+				print(f"  {i:>{max_digits}}  {readline.get_history_item(i)}")
 		else:
 			cmdlogger.error("Python is not compiled with readline support")
 
@@ -554,10 +567,8 @@ class MainMenu(BetterCMD):
 
 		except EOFError:
 			return __class__.confirm(text)
-
-	def show(self):
-		print()
-		threading.Thread(target=self.cmdloop, name='Menu').start()
+		except KeyboardInterrupt:
+			print("^C")
 
 	def set_id(self, ID):
 		self.sid = ID
@@ -594,6 +605,11 @@ class MainMenu(BetterCMD):
 				return func(self, ID)
 			return newfunc
 		return inner
+
+	def interrupt(self):
+		super().interrupt()
+		if menu.sid:
+			core.sessions[menu.sid].subchannel.control << 'stop'
 
 	def show_help(self, command):
 		help_prompt = re.compile(r"Run 'help [^\']*' for more information") # TODO
@@ -1150,13 +1166,13 @@ class MainMenu(BetterCMD):
 		"""
 		if __class__.confirm(f"Exit Penelope?{self.active_sessions}"):
 			core.stop()
-			for thread in threading.enumerate():
-				if thread.name == 'Core':
-					thread.join()
+			#for thread in threading.enumerate():
+			#	if thread.name == 'Core':
+			#		thread.join()
 			logger.info("Exited!")
-			remaining_threads = [thread for thread in threading.enumerate() if thread.name not in ('MainThread', 'Menu')]
-			if remaining_threads:
-				logger.error(f"Please report this: {remaining_threads}")
+			#remaining_threads = [thread for thread in threading.enumerate() if thread.name not in ('MainThread', 'Menu')]
+			#if remaining_threads:
+			#	logger.error(f"Please report this: {remaining_threads}")
 			return True
 		return False
 
@@ -1279,7 +1295,19 @@ class ControlQueue:
 	def get(self):
 		os.read(self._out, 1)
 		return self.queue.get()
-
+		
+	def clear(self):
+		pass
+		#while not self.queue.empty():
+		#	try:
+		#		self.queue.get_nowait()
+		#	except queue.Empty:
+		#		break
+		#try:
+		#	while True:
+		#		os.read(self._out, 1)
+		#except OSError:
+		#	pass 
 
 class Core:
 
@@ -1802,13 +1830,13 @@ class Session:
 
 			attach_conditions = [
 				# Is a reverse shell and the Menu is not active and reached the maintain value
-				self.listener and not "Menu" in core.threads and len(core.hosts[self.name]) == options.maintain,
+				self.listener and not menu.active and len(core.hosts[self.name]) == options.maintain,
 
 				# Is a bind shell and is not spawned from the Menu
-				not self.listener and not "Menu" in core.threads,
+				not self.listener and not menu.active,
 
 				# Is a bind shell and is spawned from the connect Menu command
-				not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect')
+				not self.listener and menu.active and menu.lastcmd.startswith('connect')
 			]
 
 			if hasattr(listener_menu, 'active') and listener_menu.active:
@@ -1824,7 +1852,7 @@ class Session:
 						self.attach()
 
 				# If auto-attach is disabled and the menu is not active
-				elif not "Menu" in core.threads:
+				elif not menu.active:
 					# Then show the menu
 					menu.show()
 		else:
@@ -2197,11 +2225,11 @@ class Session:
 		timeout=False,		# Timeout
 		expect=None,		# Items to wait for in the response
 		preserve_dir=False,	# Current dir preservation when using control session
+		force_cmd=False,	# Execute cmd command from powershell
 		separate=False,		# If true, send cmd via this method but receive with TLV method (agent)
 					# --- Agent only args ---
 		agent_typing=False,	# Simulate typing on shell
 		python=False,		# Execute python command
-		force_cmd=False,	# Execute cmd command from powershell
 		stdin_src=None,		# stdin stream source
 		stdout_dst=None,	# stdout stream destination
 		stderr_dst=None,	# stderr stream destination
@@ -2315,7 +2343,6 @@ class Session:
 								rlist.remove(readable)
 								if rlist == [self.subchannel.control]:
 									break
-
 					else:
 						continue
 					break
@@ -2345,6 +2372,7 @@ class Session:
 
 			self.subchannel.active = True
 			self.subchannel.result = None
+			self.subchannel.control.clear()
 			buffer = io.BytesIO()
 			_start = time.perf_counter()
 
@@ -2424,8 +2452,6 @@ class Session:
 						self.subchannel.can_use = False
 						self.subchannel.result = False
 						break
-
-					self.subchannel.control.done()
 
 				if self.subchannel in readables:
 					logger.debug(f"Latency: {time.perf_counter() - last_data}")
@@ -2667,13 +2693,15 @@ class Session:
 		return True
 
 	def update_pty_size(self):
-		columns, lines = shutil.get_terminal_size()
-
-		if self.agent:
-			self.send(Messenger.message(Messenger.RESIZE, struct.pack("HH", lines, columns)))
-
-		elif self.OS == 'Unix':
-			threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
+		if self.OS == 'Unix':
+			if self.agent:
+				columns, lines = shutil.get_terminal_size()
+				self.send(Messenger.message(Messenger.RESIZE, struct.pack("HH", lines, columns)))
+			else: # TODO
+				columns, lines = shutil.get_terminal_size()
+				threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
+		elif self.OS == 'Windows':
+			pass
 
 	def readline_loop(self):
 
@@ -2800,7 +2828,10 @@ class Session:
 					f"stdout_stream << str(get_glob_size(r'{remote_items}', {block_size})).encode()", python=True, value=True, preserve_dir=True)))
 			else:
 				cmd = f"du -ck {remote_items}"
-				response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
+				response = self.exec(cmd, timeout=None, preserve_dir=True, value=True)
+				if not response:
+					logger.error("Cannot determine remote size")
+					return []
 				#errors = [line[4:] for line in response.splitlines() if line.startswith('du: ')]
 				#for error in errors:
 				#	logger.error(error)
@@ -2863,7 +2894,10 @@ class Session:
 			else:
 				temp = self.tmp + "/" + rand(8)
 				cmd = f'tar cz $(for file in {remote_items};do readlink -f "$file";done) | base64 -w0 > {temp}'
-				response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
+				response = self.exec(cmd, timeout=None, preserve_dir=True, value=True)
+				if not response:
+					logger.error("Cannot create archive")
+					return []
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
 				for error in errors:
 					logger.error(error)
@@ -2889,7 +2923,11 @@ class Session:
 			#	return []
 
 			# Local extraction
-			tar = tarfile.open(mode=mode, fileobj=tar_source)
+			try:
+				tar = tarfile.open(mode=mode, fileobj=tar_source)
+			except:
+				logger.error("Invalid data returned")
+				return []
 			tar.extract = handle_exceptions(tar.extract)
 
 			for item in tar:
@@ -2913,7 +2951,10 @@ class Session:
 				""", python=True, value=True, preserve_dir=True)
 			else:
 				cmd = f'for file in {remote_items}; do if [ -e "$file" ]; then readlink -f "$file"; else echo $file; fi; done'
-				response = self.exec(cmd, timeout=None, preserve_dir=True).decode()
+				response = self.exec(cmd, timeout=None, preserve_dir=True, value=True)
+				if not response:
+					logger.error("Cannot get remote paths")
+					return []
 
 			remote_paths = response.splitlines()
 
@@ -3118,7 +3159,6 @@ class Session:
 					tar.add(item, arcname=altname)
 
 				altnames.append(altname)
-
 			tar.close()
 
 			if self.agent:
@@ -4104,21 +4144,15 @@ class FileServer:
 			logger.warning(f"Shutting down Fileserver #{self.id}")
 		self.httpd.shutdown()
 
-
-
 def ControlC(num, stack):
 	if core.attached_session and not core.attached_session.readline:
 		core.attached_session.detach()
 
-	elif "Menu" in core.threads:
-		#os.write(sys.stdout.fileno(), b'^C\n')
-		#os.write(sys.stdout.fileno(), menu.prompt.encode())
-		if menu.sid:
-			core.sessions[menu.sid].subchannel.control << 'stop'
-
-	elif not core.sessions:
+	elif not menu.active:
 		#print(threading.enumerate())
 		core.stop()
+	else:
+		raise KeyboardInterrupt
 
 def WinResize(num, stack):
 	if core.attached_session is not None and core.attached_session.type == "PTY":
