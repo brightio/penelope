@@ -1523,7 +1523,30 @@ def handle_bind_errors(func):
 			return func(*args, **kwargs)
 
 		except PermissionError:
-			return "Cannot bind to port: Insufficient privileges"
+			port = args[1]
+			# TODO Improve
+			workarounds = textwrap.dedent(
+			f"""
+			{paint('Workarounds:')}
+
+			1) {paint('Port forwarding').UNDERLINE} (Run the Listener on a non-privileged port e.g 4444)
+			    sudo iptables -t nat -A PREROUTING -p tcp --dport {port} -j REDIRECT --to-port 4444
+			        {paint('or').white}
+			    sudo nft add rule ip nat prerouting tcp dport {port} redirect to 4444
+			        {paint('then').white}
+			    sudo iptables -t nat -D PREROUTING -p tcp --dport {port} -j REDIRECT --to-port 4444
+			        {paint('or').white}
+			    sudo nft delete rule ip nat prerouting tcp dport {port} redirect to 4444
+
+			2) {paint('Setting CAP_NET_BIND_SERVICE capability').UNDERLINE}
+			    sudo setcap 'cap_net_bind_service=+ep' {os.path.realpath(sys.executable)}
+			    ./penelope.py {port}
+			    sudo setcap 'cap_net_bind_service=-ep' {os.path.realpath(sys.executable)}
+
+			3) {paint('SUDO').UNDERLINE} (The {__program__.title()}'s directory will change to /root/.penelope)
+			    sudo ./penelope.py {port}
+			""")
+			return (f"Cannot bind to port {port}: Insufficient privileges", workarounds)
 
 		except socket.gaierror:
 			return "Cannot resolve hostname"
@@ -1586,10 +1609,14 @@ class Listener:
 		self.caller = caller()
 
 		result = self.bind(port)
-		if not isinstance(result, str):
+		if not isinstance(result, (str, tuple)):
 			self.start()
 			return
 		elif not self.caller == 'spawn':
+			if isinstance(result, tuple):
+				logger.error(result[0])
+				print(result[1])
+				return
 			logger.error(result)
 
 	def __str__(self):
@@ -1856,7 +1883,7 @@ class Session:
 
 				# If auto-attach is disabled and the menu is not active
 				#elif not menu.active:
-				elif not "Menu" in core.threads
+				elif not "Menu" in core.threads:
 					# Then show the menu
 					menu.show()
 		else:
@@ -4218,8 +4245,6 @@ BINARIES = {
 }
 
 # INITIALIZATION
-GID = int(os.environ.get('SUDO_GID', os.getgid()))
-os.setgid(GID)
 os.umask(0o007)
 signal.signal(signal.SIGINT, ControlC)
 signal.signal(signal.SIGWINCH, WinResize)
@@ -4237,7 +4262,7 @@ class Options:
 	log_levels = {"silent":'WARNING', "debug":'DEBUG'}
 
 	def __init__(self):
-		self.basedir = Path(pwd.getpwuid(GID).pw_dir) / f'.{__program__}'
+		self.basedir = Path.home() / f'.{__program__}'
 		self.default_listener_port = 4444
 		self.default_interface = "0.0.0.0"
 		self.latency = .01
