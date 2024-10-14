@@ -346,8 +346,8 @@ class BetterCMD:
 
 	def show(self):
 		print()
-		self.cmdloop()
-#		threading.Thread(target=self.cmdloop, name='Menu').start()
+#		self.cmdloop()
+		threading.Thread(target=self.cmdloop, name='Menu').start()
 
 	def cmdloop(self):
 
@@ -371,9 +371,9 @@ class BetterCMD:
 					self.active = False
 				except EOFError:
 					line = 'EOF'
-				except KeyboardInterrupt:
-					self.interrupt()
-					continue
+				#except KeyboardInterrupt:
+				#	self.interrupt()
+				#	continue
 
 			line = self.precmd(line)
 			stop = self.onecmd(line)
@@ -393,8 +393,8 @@ class BetterCMD:
 	def default(self, line):
 		logger.error(f"Invalid command")
 
-	def interrupt(self):
-		print("^C")
+#	def interrupt(self):
+#		print("^C")
 
 	def parseline(self, line):
 		line = line.lstrip()
@@ -606,10 +606,10 @@ class MainMenu(BetterCMD):
 			return newfunc
 		return inner
 
-	def interrupt(self):
-		super().interrupt()
-		if menu.sid:
-			core.sessions[menu.sid].subchannel.control << 'stop'
+	#def interrupt(self):
+	#	super().interrupt()
+	#	if menu.sid:
+	#		core.sessions[menu.sid].subchannel.control << 'stop'
 
 	def show_help(self, command):
 		help_prompt = re.compile(r"Run 'help [^\']*' for more information") # TODO
@@ -1166,13 +1166,13 @@ class MainMenu(BetterCMD):
 		"""
 		if __class__.confirm(f"Exit Penelope?{self.active_sessions}"):
 			core.stop()
-			#for thread in threading.enumerate():
-			#	if thread.name == 'Core':
-			#		thread.join()
+			for thread in threading.enumerate():
+				if thread.name == 'Core':
+					thread.join()
 			logger.info("Exited!")
-			#remaining_threads = [thread for thread in threading.enumerate() if thread.name not in ('MainThread', 'Menu')]
-			#if remaining_threads:
-			#	logger.error(f"Please report this: {remaining_threads}")
+			remaining_threads = [thread for thread in threading.enumerate() if thread.name not in ('MainThread', 'Menu')]
+			if remaining_threads:
+				logger.error(f"Please report this: {remaining_threads}")
 			return True
 		return False
 
@@ -1295,7 +1295,7 @@ class ControlQueue:
 	def get(self):
 		os.read(self._out, 1)
 		return self.queue.get()
-		
+
 	def clear(self):
 		pass
 		#while not self.queue.empty():
@@ -1307,7 +1307,7 @@ class ControlQueue:
 		#	while True:
 		#		os.read(self._out, 1)
 		#except OSError:
-		#	pass 
+		#	pass
 
 class Core:
 
@@ -1830,13 +1830,16 @@ class Session:
 
 			attach_conditions = [
 				# Is a reverse shell and the Menu is not active and reached the maintain value
-				self.listener and not menu.active and len(core.hosts[self.name]) == options.maintain,
+				#self.listener and not menu.active and len(core.hosts[self.name]) == options.maintain,
+				self.listener and not "Menu" in core.threads and len(core.hosts[self.name]) == options.maintain,
 
 				# Is a bind shell and is not spawned from the Menu
-				not self.listener and not menu.active,
+				#not self.listener and not menu.active,
+				not self.listener and not "Menu" in core.threads,
 
 				# Is a bind shell and is spawned from the connect Menu command
-				not self.listener and menu.active and menu.lastcmd.startswith('connect')
+				#not self.listener and menu.active and menu.lastcmd.startswith('connect')
+				not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect')
 			]
 
 			if hasattr(listener_menu, 'active') and listener_menu.active:
@@ -1852,7 +1855,8 @@ class Session:
 						self.attach()
 
 				# If auto-attach is disabled and the menu is not active
-				elif not menu.active:
+				#elif not menu.active:
+				elif not "Menu" in core.threads
 					# Then show the menu
 					menu.show()
 		else:
@@ -4148,11 +4152,19 @@ def ControlC(num, stack):
 	if core.attached_session and not core.attached_session.readline:
 		core.attached_session.detach()
 
-	elif not menu.active:
-		#print(threading.enumerate())
+	elif "Menu" in core.threads:
+		#os.write(sys.stdout.fileno(), b'^C\n')
+		#os.write(sys.stdout.fileno(), menu.prompt.encode())
+		if menu.sid:
+			core.sessions[menu.sid].subchannel.control << 'stop'
+	elif not core.sessions:
 		core.stop()
-	else:
-		raise KeyboardInterrupt
+
+#	elif not menu.active:
+#		#print(threading.enumerate())
+#		core.stop()
+#	else:
+#		raise KeyboardInterrupt
 
 def WinResize(num, stack):
 	if core.attached_session is not None and core.attached_session.type == "PTY":
