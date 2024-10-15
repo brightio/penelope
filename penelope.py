@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright © 2021 - 2023 @brightio <brightiocode@gmail.com>
+# Copyright © 2021 - 2024 @brightio <brightiocode@gmail.com>
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,12 +16,11 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.2"
+__version__ = "0.12.3"
 
 import os
 import io
 import re
-import pwd
 import sys
 import tty
 import ssl
@@ -2135,13 +2134,13 @@ class Session:
 		data = re.sub(rb'\x1b\x63', b'', data) # Need to include all Clear escape codes
 
 		if not options.no_timestamps:
-			timestamp = datetime.now().strftime(str(paint("%Y-%m-%d %H:%M:%S: ").magenta)) #TEMP
-			data = re.sub(rb'(\r\n|\r|\n|\v|\f)', rf'\1{timestamp}'.encode(), data)
-
+			timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S: ") #TEMP
+			if not options.no_colored_timestamps:
+				timestamp = paint(timestamp).magenta
+			data = re.sub(rb'\r\n|\r|\n|\v|\f', rf"\g<0>{timestamp}".encode(), data)
 		try:
 			if _input:
-				self.logfile.write(bytes(paint('ISSUED ==>').GREEN+' ', encoding='utf8'))
-
+				self.logfile.write(bytes(paint('ISSUED ==>').GREEN + ' ', encoding='utf8'))
 			self.logfile.write(data)
 
 		except ValueError:
@@ -4373,6 +4372,7 @@ verbosity.add_argument("-d", "--debug", help="Show debug messages", action="stor
 log = parser.add_argument_group("Session Logging")
 log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
 log.add_argument("-T", "--no-timestamps", help="Do not include timestamps in session logs", action="store_true")
+log.add_argument("-CT", "--no-colored-timestamps", help="Do not color timestamps in session logs", action="store_true")
 
 misc = parser.add_argument_group("Misc")
 misc.add_argument("-r", "--configfile", help="Configuration file location", type=Path, metavar='')
