@@ -2679,11 +2679,12 @@ class Session:
 					logger.error("Failed spawning new session")
 					return False
 
-				if self.type == "Basic":
-					new_session.upgrade()
-					if caller() == 'attach':
-						new_session.attach()
-					return True
+				#if self.type == "Basic":
+					#self.detach()
+					#new_session.upgrade()
+					#if caller() == 'attach':
+				new_session.attach()
+				return True
 
 			if self.pty_ready:
 				self.exec("stty -echo")
