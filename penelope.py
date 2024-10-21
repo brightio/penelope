@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.3"
+__version__ = "0.12.4"
 
 import os
 import io
@@ -146,15 +146,17 @@ class Interfaces:
 		if OS == 'Linux':
 			if shutil.which("ip"):
 				interfaces = []
-				interface_stack = []
+				current_interface = None
 				for line in subprocess.check_output(['ip', 'addr']).decode().splitlines():
 					interface = re.search(r"^\d+: (.+?):", line)
 					if interface:
-						interface_stack.append(interface[1])
+						current_interface = interface[1]
 						continue
-					ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
-					if ip:
-						interfaces.append((interface_stack.pop(), ip[1]))
+					if current_interface:
+						ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
+						if ip:
+							interfaces.append((current_interface, ip[1]))
+							current_interface = None # TODO support multiple IPs in one interface
 			else:
 				logger.error("'ip' command is not available")
 				return dict()
@@ -1832,7 +1834,7 @@ class Session:
 
 			logger.info(
 				f"Got {self.source} shell from {OSes[self.OS]} "
-				f"{paint(self.name).white_RED}{paint().green} 😍️  - "
+				f"{paint(self.name).white_RED}{paint().green} 😍️ - "
 				f"Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
 			)
 

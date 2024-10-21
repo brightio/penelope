@@ -122,6 +122,7 @@ If you want to contribute to this project please report bugs, unexpected program
 * remote and local port forwarding
 * socks & http proxy
 * persistence modules
+* team server
 * edit command: open the remote file locally, make changes and upon saving, upload it to the target
 * currently spawn/script/portfwd commands are supported only on Unix shells. Those need to be implemented for Windows shells too.
 * an option switch for disable all logging, not only sessions.
@@ -148,4 +149,4 @@ Penelope was the wife of Odysseus and she is known for her fidelity for him by w
 * [Longlone - @WAY29](https://github.com/WAY29) for indicating the need for compatibility with previous versions of Python (3.6).
 * [Carlos Polop - @carlospolop](https://github.com/carlospolop) for the idea to spawn shells on listeners on other systems.
 * [@darrenmartyn](https://github.com/darrenmartyn) for indicating an alternative method to upgrade the shell to PTY using the script command.
-* [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno) for bug reporting.
+* [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80) for bug reporting.
