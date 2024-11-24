@@ -1781,7 +1781,6 @@ class Session:
 
 		self.prompt = None
 		self.new = True
-		self.version = None
 
 		self.last_lines = LineBuffer()
 		self.lock = threading.Lock()
@@ -4274,12 +4273,21 @@ class Options:
 		self.basedir = Path.home() / f'.{__program__}'
 		self.default_listener_port = 4444
 		self.default_interface = "0.0.0.0"
+		self.hints = False
+		self.no_history = False
+		self.no_log = False
+		self.no_timestamps = False
+		self.no_colored_timestamps = False
+		self.max_maintain = 10
+		self.maintain = 1
+		self.single_session = False
+		self.no_attach = False
+		self.no_upgrade = False
+		self.debug = False
 		self.latency = .01
 		self.histlength = 2000
 		self.long_timeout = 60
 		self.short_timeout = 5
-		self.max_maintain = 10
-		self.maintain = 1
 		self.max_open_files = 5
 		self.verify_ssl_cert = True
 		self.proxy = ''
@@ -4312,7 +4320,8 @@ class Options:
 			if value > self.max_maintain:
 				show(f"Maintain value decreased to the max ({self.max_maintain})")
 				value = self.max_maintain
-			if value < 1: value = 1
+			if value < 1:
+				value = 1
 			#if value == 1: show(f"Maintain value should be 2 or above")
 			if value > 1 and self.single_session:
 				show(f"Single Session mode disabled because Maintain is enabled")
@@ -4360,50 +4369,6 @@ class Options:
 
 ## DEFAULT OPTIONS
 options = Options()
-
-## COMMAND LINE OPTIONS
-parser = argparse.ArgumentParser(description="Penelope Shell Handler", add_help=False)
-
-parser.add_argument("ports", nargs='*', help="Ports to listen/connect to, depending on -i/-c options. Default: 4444")
-
-method = parser.add_argument_group("Reverse or Bind shell?")
-method.add_argument("-i", "--interface", help="Interface or IP address to listen on. Default: 0.0.0.0", metavar='')
-method.add_argument("-c", "--connect", help="Bind shell Host", metavar='')
-
-hints = parser.add_argument_group("Hints")
-hints.add_argument("-a", "--hints", help="Show sample payloads for reverse shell based on the registered Listeners", action="store_true")
-hints.add_argument("-l", "--interfaces", help="Show the available network interfaces", action="store_true")
-hints.add_argument("-h", "--help", action="help", help="show this help message and exit")
-
-verbosity = parser.add_argument_group("Verbosity")
-verbosity.add_argument("-Q", "--silent", help="Be a bit less verbose", action="store_true")
-verbosity.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
-
-log = parser.add_argument_group("Session Logging")
-log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
-log.add_argument("-T", "--no-timestamps", help="Do not include timestamps in session logs", action="store_true")
-log.add_argument("-CT", "--no-colored-timestamps", help="Do not color timestamps in session logs", action="store_true")
-
-misc = parser.add_argument_group("Misc")
-misc.add_argument("-r", "--configfile", help="Configuration file location", type=Path, metavar='')
-misc.add_argument("-m", "--maintain", help="Maintain NUM total shells per target", type=int, metavar='')
-misc.add_argument("-H", "--no-history", help="Disable shell history on target", action="store_true")
-misc.add_argument("-P", "--plain", help="Just land to the main menu", action="store_true")
-misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
-misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
-misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
-
-misc = parser.add_argument_group("File server")
-misc.add_argument("-s", "--serve", help="HTTP File Server mode", action="store_true")
-misc.add_argument("-p", "--port", help="File Server port. Default: 8000", metavar='')
-misc.add_argument("-pass", "--password", help="URL prefix", type=str, metavar='')
-
-debug = parser.add_argument_group("Debug")
-debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
-debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
-
-args = [] if not __name__ == "__main__" else None
-parser.parse_args(args, options)
 
 ## LOGGERS
 stdout_handler = logging.StreamHandler()
@@ -4548,6 +4513,49 @@ def listener_menu():
 	return True
 
 def main():
+
+	## COMMAND LINE OPTIONS
+	parser = argparse.ArgumentParser(description="Penelope Shell Handler", add_help=False)
+
+	parser.add_argument("ports", nargs='*', help="Ports to listen/connect to, depending on -i/-c options. Default: 4444")
+
+	method = parser.add_argument_group("Reverse or Bind shell?")
+	method.add_argument("-i", "--interface", help="Interface or IP address to listen on. Default: 0.0.0.0", metavar='')
+	method.add_argument("-c", "--connect", help="Bind shell Host", metavar='')
+
+	hints = parser.add_argument_group("Hints")
+	hints.add_argument("-a", "--hints", help="Show sample payloads for reverse shell based on the registered Listeners", action="store_true")
+	hints.add_argument("-l", "--interfaces", help="Show the available network interfaces", action="store_true")
+	hints.add_argument("-h", "--help", action="help", help="show this help message and exit")
+
+	verbosity = parser.add_argument_group("Verbosity")
+	verbosity.add_argument("-Q", "--silent", help="Be a bit less verbose", action="store_true")
+	verbosity.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
+
+	log = parser.add_argument_group("Session Logging")
+	log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
+	log.add_argument("-T", "--no-timestamps", help="Do not include timestamps in session logs", action="store_true")
+	log.add_argument("-CT", "--no-colored-timestamps", help="Do not color timestamps in session logs", action="store_true")
+
+	misc = parser.add_argument_group("Misc")
+	misc.add_argument("-r", "--configfile", help="Configuration file location", type=Path, metavar='')
+	misc.add_argument("-m", "--maintain", help="Maintain NUM total shells per target", type=int, metavar='')
+	misc.add_argument("-H", "--no-history", help="Disable shell history on target", action="store_true")
+	misc.add_argument("-P", "--plain", help="Just land to the main menu", action="store_true")
+	misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
+	misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
+	misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
+
+	misc = parser.add_argument_group("File server")
+	misc.add_argument("-s", "--serve", help="HTTP File Server mode", action="store_true")
+	misc.add_argument("-p", "--port", help="File Server port. Default: 8000", metavar='')
+	misc.add_argument("-pass", "--password", help="URL prefix", type=str, metavar='')
+
+	debug = parser.add_argument_group("Debug")
+	debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
+	debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
+
+	parser.parse_args(None, options)
 
 	# Version
 	if options.version:
