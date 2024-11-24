@@ -1932,7 +1932,10 @@ class Session:
 			else:
 				_bin = self.bin['python3'] or self.bin['python']
 				if _bin:
-					version = self.exec(f"{_bin} -V || {_bin} --version", value=True)
+					version = self.exec(f"{_bin} -V 2>&1 || {_bin} --version 2>&1", value=True)
+					if not version: # TEMP patch
+						self._can_deploy_agent = False
+						return self._can_deploy_agent
 					major, minor, micro = re.search(r"Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
 					self.remote_python_version = (int(major), int(minor), int(micro))
 					if self.remote_python_version >= (2, 3): # Python 2.2 lacks: tarfile, os.walk, yield
@@ -3085,6 +3088,8 @@ class Session:
 			if re.match(r'(http|ftp)s?://', item, re.IGNORECASE):
 				try:
 					filename, item = url_to_bytes(item)
+					if not item:
+						continue
 					resolved_items.append((filename, item))
 				except Exception as e:
 					logger.error(e)
@@ -3309,6 +3314,8 @@ class Session:
 		if re.match(r'(http|ftp)s?://', local_script, re.IGNORECASE):
 			try:
 				filename, data = url_to_bytes(local_script)
+				if not data:
+					return False
 			except Exception as e:
 				logger.error(e)
 
@@ -4479,7 +4486,7 @@ def url_to_bytes(URL):
 					pass
 				else:
 					continue
-		return None
+		return None, None
 
 	filename = response.headers.get_filename()
 	if filename:
