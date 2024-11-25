@@ -3674,6 +3674,16 @@ class meterpreter(Module):
 			else:
 				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
 
+class ngrok(Module):
+	description = 'Setup ngrok'
+	def run(self):
+		if self.session.OS == 'Unix':
+			self.session.upload("https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz", remote_path=self.session.tmp)
+			self.session.exec(f"tar xf {self.session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin")
+			token = input("Authtoken: ")
+			self.session.exec(f"ngrok config add-authtoken {token}")
+		else:
+			logger.error("This module runs only in Unix shells")
 
 for subclass in Module.__subclasses__():
 	subclass()
