@@ -2086,7 +2086,7 @@ class Session:
 				tmpname = rand(10)
 				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
 				for directory in common_dirs:
-					if not self.exec(f'echo {tmpname} > {directory}/{tmpname}'):
+					if not self.exec(f'echo {tmpname} > {directory}/{tmpname}', value=True):
 						self.exec(f'rm {directory}/{tmpname}')
 						self._tmp = directory
 						break
@@ -2096,7 +2096,7 @@ class Session:
 						for directory in candidate_dirs.decode().splitlines():
 							if directory in common_dirs:
 								continue
-							if not self.exec(f'echo {tmpname} > {directory}/{tmpname}'):
+							if not self.exec(f'echo {tmpname} > {directory}/{tmpname}', value=True):
 								self.exec(f'rm {directory}/{tmpname}')
 								self._tmp = directory
 								break
@@ -3149,13 +3149,13 @@ class Session:
 				if not all([stdin_stream, stderr_stream]):
 					return
 
-				code = r"""
+				code = rf"""
 				import tarfile
 				tar = tarfile.open(name='', mode='r|gz', fileobj=stdin_stream)
 				tar.extract = handle_exceptions(tar.extract, stderr_stream.id)
 				tar.errorlevel = 1
 				for item in tar:
-					tar.extract(item)
+					tar.extract(item, path='{destination}')
 				tar.close()
 				stdin_stream.terminate()
 				"""
