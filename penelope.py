@@ -3806,7 +3806,10 @@ def agent():
 	import struct
 	import signal
 	import termios
+	import warnings
 	import threading
+
+	warnings.warn = lambda *args, **kwargs: None
 
 	if sys.version_info[0] == 2:
 		import Queue as queue
