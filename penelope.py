@@ -2259,7 +2259,8 @@ class Session:
 				if preserve_dir:
 					self.exec(f"os.chdir('{self.cwd}')", python=True)
 				cmd = textwrap.dedent(cmd)
-				if value: buffer = io.BytesIO()
+				if value:
+					buffer = io.BytesIO()
 				timeout = options.short_timeout if value else None
 
 				if not stdin_stream:
@@ -2620,7 +2621,7 @@ class Session:
 
 				agent = textwrap.dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, NET_BUF_SIZE, MESSENGER, STREAM, _exec)
 				payload = base64.b64encode(zlib.compress(agent.encode(), 9)).decode()
-				cmd = f'{_bin} -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
+				cmd = f'{_bin} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
 			elif self.bin['script']:
 				_bin = self.bin['script']
@@ -3138,6 +3139,7 @@ class Session:
 				for item in tar:
 					tar.extract(item, path='{destination}')
 				tar.close()
+				stdin_stream.write(b"")
 				stdin_stream.terminate()
 				"""
 				threading.Thread(target=self.exec, args=(code, ), kwargs={
@@ -3180,8 +3182,8 @@ class Session:
 			tar.close()
 
 			if self.agent:
-				stdin_stream.write(b"") # TO CHECK
-				stdin_stream.terminate()
+				#stdin_stream.write(b"") # TO CHECK
+				#stdin_stream.terminate()
 
 				error_buffer = ''
 				while True:
@@ -3786,11 +3788,11 @@ class Stream:
 
 	def terminate(self):
 		try:
-			if self.lock:
+			if self.lock: # TOCHECK
 				self.lock.acquire()
 			if self.id in self.pool:
 				del self.pool[self.id]
-			if self.lock:
+			if self.lock: # TOCHECK
 				self.lock.release()
 		except (OSError, KeyError):
 			pass
@@ -3806,10 +3808,7 @@ def agent():
 	import struct
 	import signal
 	import termios
-	import warnings
 	import threading
-
-	warnings.warn = lambda *args, **kwargs: None
 
 	if sys.version_info[0] == 2:
 		import Queue as queue
@@ -3911,13 +3910,16 @@ def agent():
 							_value[Messenger.STREAM_BYTES * 2 + 1:Messenger.STREAM_BYTES * 3 + 1], \
 							_value[Messenger.STREAM_BYTES * 3 + 1:]
 
-							stdin_stream = Stream(stdin_stream_id)
-							stdout_stream = Stream(stdout_stream_id)
-							stderr_stream = Stream(stderr_stream_id)
+							if not stdin_stream_id in streams:
+								streams[stdin_stream_id] = Stream(stdin_stream_id)
+							if not stdout_stream_id in streams:
+								streams[stdout_stream_id] = Stream(stdout_stream_id)
+							if not stderr_stream_id in streams:
+								streams[stderr_stream_id] = Stream(stderr_stream_id)
 
-							streams[stdin_stream_id] = stdin_stream
-							streams[stdout_stream_id] = stdout_stream
-							streams[stderr_stream_id] = stderr_stream
+							stdin_stream = streams[stdin_stream_id]
+							stdout_stream = streams[stdout_stream_id]
+							stderr_stream = streams[stderr_stream_id]
 
 							rlist.append(stdout_stream)
 							rlist.append(stderr_stream)
@@ -3958,13 +3960,12 @@ def agent():
 
 						# Incoming streams
 						elif _type == Messenger.STREAM:
-							try:
-								stream_id, data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
-								streams[stream_id] << data
-								if not data:
-									streams[stream_id].terminate()
-							except KeyError:
-								pass
+							stream_id, data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
+							if not stream_id in streams:
+								streams[stream_id] = Stream(stream_id)
+							streams[stream_id] << data
+							if not data:
+								streams[stream_id].terminate()
 
 				# Outgoing streams
 				else:
