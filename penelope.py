@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.5"
+__version__ = "0.12.6"
 
 import os
 import io
@@ -1457,11 +1457,8 @@ class Core:
 								#print((repr(stream_id), repr(data)))
 								try:
 									readable.streams[stream_id] << data
-									if not data:
-										readable.streams[stream_id].terminate()
 								except (OSError, KeyError):
 									logger.debug(f"Cannot write to stream; Stream <{stream_id}> died prematurely")
-
 					else:
 						target.write(data)
 
@@ -2295,9 +2292,9 @@ class Session:
 					r, _, _ = select.select(rlist, [], [], timeout)
 
 					if not r:
-						stdin_stream.terminate()
-						stdout_stream.terminate()
-						stderr_stream.terminate()
+						#stdin_stream.terminate()
+						#stdout_stream.terminate()
+						#stderr_stream.terminate()
 						return False
 
 					for readable in r:
@@ -2318,8 +2315,24 @@ class Session:
 									pass # TEEEEMP
 							stdin_stream.write(data)
 							if not data:
-								stdin_stream << b""
+								#stdin_stream << b""
 								rlist.remove(stdin_src)
+								if rlist == [self.subchannel.control]:
+									break
+
+						if readable is stderr_stream:
+							data = readable.read(NET_BUF_SIZE)
+							if value:
+								buffer.write(data)
+							elif stderr_dst:
+								if hasattr(stderr_dst, 'write'): # FIX
+									stderr_dst.write(data)
+								elif hasattr(stderr_dst, 'sendall'):
+									stderr_dst.sendall(data)
+							if not data:
+								rlist.remove(readable)
+								del self.streams[readable.id]
+
 								if rlist == [self.subchannel.control]:
 									break
 
@@ -2342,30 +2355,19 @@ class Session:
 											rlist.remove(stdout_dst)
 							if not data:
 								rlist.remove(readable)
+								del self.streams[readable.id]
+
 								if rlist == [self.subchannel.control]:
 									break
 
-						if readable is stderr_stream:
-							data = readable.read(NET_BUF_SIZE)
-							if value:
-								buffer.write(data)
-							elif stderr_dst:
-								if hasattr(stderr_dst, 'write'): # FIX
-									stderr_dst.write(data)
-								elif hasattr(stderr_dst, 'sendall'):
-									stderr_dst.sendall(data)
-							if not data:
-								rlist.remove(readable)
-								if rlist == [self.subchannel.control]:
-									break
 					else:
 						continue
 					break
 
-				if not stdin_src:
-					#stdin_stream.write(b"")
-					stdin_stream << b""
-					stdin_stream.terminate() # TODO
+				stdin_stream << b"" # TOCHECK
+				stdin_stream.write(b"")
+				os.close(stdin_stream._read)
+				del self.streams[stdin_stream.id]
 
 				return buffer.getvalue().rstrip().decode() if value else True
 			return None
@@ -3139,8 +3141,6 @@ class Session:
 				for item in tar:
 					tar.extract(item, path='{destination}')
 				tar.close()
-				stdin_stream.write(b"")
-				stdin_stream.terminate()
 				"""
 				threading.Thread(target=self.exec, args=(code, ), kwargs={
 					'python': True,
@@ -3148,6 +3148,7 @@ class Session:
 					'stderr_stream': stderr_stream,
 					'preserve_dir': True
 				}).start()
+				#time.sleep(1)
 
 				tar_destination, mode = stdin_stream, "r|gz"
 			else:
@@ -3182,8 +3183,7 @@ class Session:
 			tar.close()
 
 			if self.agent:
-				#stdin_stream.write(b"") # TO CHECK
-				#stdin_stream.terminate()
+				stdin_stream.write(b"")
 
 				error_buffer = ''
 				while True:
@@ -3735,7 +3735,6 @@ class Messenger:
 		self.input_buffer.seek(0)
 		self.input_buffer.truncate()
 
-
 class Stream:
 	def __init__(self, _id, _session=None):
 		self.id = _id
@@ -3745,12 +3744,8 @@ class Stream:
 		self.session = _session
 
 		if self.session:
-			self.lock = self.session.stream_lock
-			self.pool = self.session.streams
 			self.writefunc = lambda data: self.session.send(Messenger.message(Messenger.STREAM, self.id + data))
 		else:
-			self.lock = None
-			self.pool = streams
 			self.writefunc = lambda data: respond(self.id + data)
 			flags = fcntl.fcntl(self._write, fcntl.F_GETFD) # TEMP FIX
 			fcntl.fcntl(self._write, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
@@ -3767,12 +3762,15 @@ class Stream:
 		while True:
 			data = self.writebuf.get()
 			if not data:
-				os.close(self._write)
+				try:
+					os.close(self._write)
+				except:
+					pass
 				break
 			try:
 				os.write(self._write, data)
 			except:
-				pass
+				break
 
 	def fileno(self):
 		return self._read
@@ -3781,22 +3779,16 @@ class Stream:
 		self.writefunc(data)
 
 	def read(self, n):
-		data = os.read(self._read, n)
-		if not data:
-			os.close(self._read)
-		return data
-
-	def terminate(self):
 		try:
-			if self.lock: # TOCHECK
-				self.lock.acquire()
-			if self.id in self.pool:
-				del self.pool[self.id]
-			if self.lock: # TOCHECK
-				self.lock.release()
-		except (OSError, KeyError):
-			pass
-
+			data = os.read(self._read, n)
+		except:
+			return "".encode()
+		if not data:
+			try:
+				os.close(self._read)
+			except:
+				pass
+		return data
 
 def agent():
 	import os
@@ -3854,7 +3846,6 @@ def agent():
 
 	try:
 		tasks = dict()
-		pipes = dict()
 		streams = dict()
 
 		messenger = Messenger(bufferclass)
@@ -3872,7 +3863,19 @@ def agent():
 		#	fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
 		while True:
-			rfds, wfds, xfds = select.select(rlist, wlist, [])
+			try:
+				rfds, wfds, xfds = select.select(rlist, wlist, [])
+			except OSError:
+				for item in rlist[:]:
+					try:
+						if hasattr(item, 'fileno'):
+							fd = item.fileno()
+						else:
+							fd = item
+						os.stat(fd)
+					except OSError:
+						rlist.remove(item)
+				continue
 
 			for readable in rfds:
 				if readable is control_out:
@@ -3939,6 +3942,7 @@ def agent():
 									os.dup2(stderr_stream._write, 2)
 
 									os.execl("/bin/sh", "sh", "-c", cmd)
+
 									os._exit(1)
 
 								os.close(stdin_stream._read)
@@ -3953,8 +3957,11 @@ def agent():
 										_, e, _ = sys.exc_info()
 										stderr_stream << str(e).encode()
 
-									stdout_stream << ""
-									stderr_stream << ""
+									stdin_stream << "".encode()
+									#os.close(stdin_stream._read)
+									del streams[stdin_stream.id]
+									stdout_stream << "".encode()
+									stderr_stream << "".encode()
 
 								threading.Thread(target=run, args=(stdin_stream, stdout_stream, stderr_stream)).start()
 
@@ -3964,16 +3971,14 @@ def agent():
 							if not stream_id in streams:
 								streams[stream_id] = Stream(stream_id)
 							streams[stream_id] << data
-							if not data:
-								streams[stream_id].terminate()
 
 				# Outgoing streams
 				else:
-					data = os.read(readable.fileno(), NET_BUF_SIZE)
+					data = readable.read(NET_BUF_SIZE)
 					readable.write(data)
 					if not data:
 						rlist.remove(readable)
-						readable.terminate()
+						del streams[readable.id]
 
 			for writable in wfds:
 
