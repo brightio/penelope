@@ -3767,12 +3767,12 @@ class Stream:
 		self.feed_thread = None
 		self.session = _session
 
-		if self.session:
-			self.writefunc = lambda data: self.session.send(Messenger.message(Messenger.STREAM, self.id + data))
-		else:
+		if self.session is None:
 			self.writefunc = lambda data: respond(self.id + data)
 			flags = fcntl.fcntl(self._write, fcntl.F_GETFD) # TEMP FIX
 			fcntl.fcntl(self._write, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
+		else:
+			self.writefunc = lambda data: self.session.send(Messenger.message(Messenger.STREAM, self.id + data))
 
 	def __lshift__(self, data):
 		if not self.writebuf:
