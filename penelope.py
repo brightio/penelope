@@ -1890,7 +1890,7 @@ class Session:
 		return
 
 	def __bool__(self):
-		return self.socket.fileno() != -1# and self.OS)
+		return self.socket.fileno() != -1 # and self.OS)
 
 	def __repr__(self):
 		return (
@@ -2802,7 +2802,7 @@ class Session:
 			self.control_session.exec(f"cd {self.cwd}")
 
 	def detach(self):
-		if self.OS == 'Unix' and (self.agent or self.need_control_session):
+		if self and self.OS == 'Unix' and (self.agent or self.need_control_session):
 			threading.Thread(target=self.sync_cwd).start()
 
 		if threading.current_thread().name != 'Core':
@@ -2826,7 +2826,6 @@ class Session:
 			if options.single_session and len(core.sessions) == 0:
 				core.stop()
 				return
-
 		menu.show()
 
 		return True
