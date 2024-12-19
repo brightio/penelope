@@ -93,38 +93,76 @@ def pathlink(filepath): return (
 
 
 def Open(item, terminal=False):
-    if OS == 'Linux' and not DISPLAY:
+    """
+    Open a file or execute a command in a terminal window.
+
+    Supports Linux, macOS, BSD systems, and Windows. On Linux and BSD, requires an available $DISPLAY for graphical operations.
+    """
+    OS = platform.system()
+    DISPLAY = os.getenv("DISPLAY")  # For graphical environment check
+
+    # Check $DISPLAY for graphical environments on Linux and BSD
+    if OS in ['Linux', 'FreeBSD', 'OpenBSD', 'NetBSD'] and not DISPLAY and not terminal:
         logger.error("No available $DISPLAY")
         return False
 
+    # Determine the program and arguments based on OS and terminal flag
     if not terminal:
-        program = {'Linux': 'xdg-open', 'Darwin': 'open'}[OS]
+        program = {
+            'Linux': 'xdg-open',
+            'Darwin': 'open',
+            'FreeBSD': 'xdg-open',
+            'OpenBSD': 'xdg-open',
+            'NetBSD': 'xdg-open',
+            'Windows': 'start'
+        }.get(OS)
         args = [item]
     else:
-        program = {'Linux': 'x-terminal-emulator', 'Darwin': 'osascript'}[OS]
+        program = {
+            'Linux': 'x-terminal-emulator',
+            'Darwin': 'osascript',
+            'FreeBSD': 'xterm',
+            'OpenBSD': 'xterm',
+            'NetBSD': 'xterm',
+            'Windows': 'cmd.exe'
+        }.get(OS)
         if OS == 'Linux':
             args = ['-e', *shlex.split(item)]
         elif OS == 'Darwin':
             args = ['-e', f'tell app "Terminal" to do script "{item}"']
+        elif OS in ['FreeBSD', 'OpenBSD', 'NetBSD']:
+            args = ['-e', *shlex.split(item)]  # BSD xterm usage
+        elif OS == 'Windows':
+            args = ['/c', item]
 
-    if not shutil.which(program):
+    # Check if the program exists (only for non-Windows OS)
+    if OS != 'Windows' and not shutil.which(program):
         logger.error(f"Cannot open window: '{program}' binary does not exist")
         return False
 
-    process = subprocess.Popen(
-        (program, *args),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE
-    )
-    r, _, _ = select.select([process.stderr], [], [], .01)
-    if process.stderr in r:
-        error = os.read(process.stderr.fileno(), 1024)
-        if error:
-            logger.error(error.decode())
-            return False
+    # Attempt to run the program with the provided arguments
+    try:
+        process = subprocess.Popen(
+            (program, *args),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            shell=(OS == 'Windows')  # Use shell=True for Windows
+        )
 
-    return True
+        # Check for errors in the process
+        if OS != 'Windows':  # Windows subprocess doesn't use stderr the same way
+            r, _, _ = select.select([process.stderr], [], [], .01)
+            if process.stderr in r:
+                error = os.read(process.stderr.fileno(), 1024)
+                if error:
+                    logger.error(error.decode())
+                    return False
+
+        return True
+    except Exception as e:
+        logger.error(f"Failed to open item: {e}")
+        return False
 
 
 def ask(text):
