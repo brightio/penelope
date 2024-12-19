@@ -126,12 +126,10 @@ def Open(item, terminal=False):
             'NetBSD': 'xterm',
             'Windows': 'cmd.exe'
         }.get(OS)
-        if OS == 'Linux':
-            args = ['-e', *shlex.split(item)]
+        if OS in ['Linux', 'FreeBSD', 'OpenBSD', 'NetBSD']:
+            args = ['-e', *shlex.split(item)]  # Linux and *BSD xterm usage
         elif OS == 'Darwin':
             args = ['-e', f'tell app "Terminal" to do script "{item}"']
-        elif OS in ['FreeBSD', 'OpenBSD', 'NetBSD']:
-            args = ['-e', *shlex.split(item)]  # BSD xterm usage
         elif OS == 'Windows':
             args = ['/c', item]
 
