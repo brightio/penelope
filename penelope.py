@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.7"
+__version__ = "0.12.8"
 
 import os
 import io
@@ -2031,7 +2031,6 @@ class Session:
 					self._cwd = self.control_session.exec(f"readlink -f /proc/{self.shell_pid}/cwd", value=True)
 			elif self.OS == 'Windows':
 				self._cwd = self.exec("cd", force_cmd=True, value=True)
-
 		return self._cwd
 
 	@property
@@ -2608,6 +2607,7 @@ class Session:
 			if not self.shell:
 				logger.warning("Cannot detect shell. Abort upgrading...")
 				return False
+			SH = self.bin['sh'] or self.bin['bash']
 
 			socat_cmd = f"{{}} - exec:{self.shell},pty,stderr,setsid,sigint,sane;exit 0"
 			if self.can_deploy_agent:
@@ -2619,7 +2619,7 @@ class Session:
 					_decode = 'decodestring'
 					_exec = 'exec cmd in globals(), locals()'
 
-				agent = textwrap.dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, NET_BUF_SIZE, MESSENGER, STREAM, _exec)
+				agent = textwrap.dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, NET_BUF_SIZE, MESSENGER, STREAM, SH, _exec)
 				payload = base64.b64encode(zlib.compress(agent.encode(), 9)).decode()
 				cmd = f'{_bin} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
@@ -3067,7 +3067,7 @@ class Session:
 
 		# Initialization
 		try:
-			local_items = shlex.split(local_items)
+			local_items = [os.path.expanduser(item) for item in shlex.split(local_items)]
 		except ValueError as e:
 			logger.error(e)
 			return []
@@ -3107,8 +3107,6 @@ class Session:
 					logger.error(f"No such file or directory: {item}")
 		if not resolved_items:
 			return []
-
-		#item = os.path.expanduser(item) # TOCHECK
 
 		if self.OS == 'Unix':
 			# Get remote available space
@@ -3336,7 +3334,7 @@ class Session:
 			with open(local_script, "rb") as input_file, open(output_file_name, "wb") as output_file:
 
 				first_line = input_file.readline().strip()
-				input_file.seek(0) # Maybe it is not needed
+				#input_file.seek(0) # Maybe it is not needed
 				if first_line.startswith(b'#!'):
 					program = first_line[2:].decode()
 				else:
@@ -3768,8 +3766,8 @@ class Stream:
 
 		if self.session is None:
 			self.writefunc = lambda data: respond(self.id + data)
-			flags = fcntl.fcntl(self._write, fcntl.F_GETFD) # TEMP FIX
-			fcntl.fcntl(self._write, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
+			cloexec(self._write)
+			cloexec(self._read)
 		else:
 			self.writefunc = lambda data: self.session.send(Messenger.message(Messenger.STREAM, self.id + data))
 
@@ -3859,6 +3857,10 @@ def agent():
 				respond(streamID + (str(e) + '\n').encode())
 		return inner
 
+	def cloexec(fd):
+		flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+		fcntl.fcntl(fd, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
+
 	shell_pid, master_fd = pty.fork()
 	if shell_pid == pty.CHILD:
 		os.execl(SHELL, SHELL, '-i') # TEMP # TODO
@@ -3877,13 +3879,15 @@ def agent():
 
 		wlock = threading.Lock()
 		control_out, control_in = os.pipe()
-		#flags = fcntl.fcntl(control_out, fcntl.F_GETFD)
-		#inheritance = bool(flags & fcntl.FD_CLOEXEC) # TODO
+		cloexec(control_out)
+		cloexec(control_in)
+
 		rlist = [control_out, master_fd, pty.STDIN_FILENO]
 		wlist = []
-		#for fd in (master_fd, pty.STDIN_FILENO, pty.STDOUT_FILENO): # TODO
-		#	flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-		#	fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+		for fd in (master_fd, pty.STDIN_FILENO, pty.STDOUT_FILENO, pty.STDERR_FILENO): # TODO
+			flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+			fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+			cloexec(fd)
 
 		while True:
 			try:
@@ -3953,21 +3957,11 @@ def agent():
 							if _type == 'S'.encode():
 								pid = os.fork()
 								if pid == 0:
-									#import resource
-									#for fd in range(resource.getrlimit(resource.RLIMIT_NOFILE)[0]):
-									#	if not fd in (stdin_stream._read, stdout_stream._write, stderr_stream._write):
-									#		try:
-									#			os.close(fd)
-									#		except:
-									#			pass
 									os.dup2(stdin_stream._read, 0)
 									os.dup2(stdout_stream._write, 1)
 									os.dup2(stderr_stream._write, 2)
-
-									os.execl("/bin/sh", "sh", "-c", cmd)
-
+									os.execl("{}", "sh", "-c", cmd)
 									os._exit(1)
-
 								os.close(stdin_stream._read)
 								os.close(stdout_stream._write)
 								os.close(stderr_stream._write)
@@ -3980,20 +3974,21 @@ def agent():
 										_, e, _ = sys.exc_info()
 										stderr_stream << str(e).encode()
 
-									stdin_stream << "".encode()
-									#os.close(stdin_stream._read)
-									del streams[stdin_stream.id]
+									os.close(stdin_stream._read)
 									stdout_stream << "".encode()
 									stderr_stream << "".encode()
-
 								threading.Thread(target=run, args=(stdin_stream, stdout_stream, stderr_stream)).start()
 
 						# Incoming streams
 						elif _type == Messenger.STREAM:
 							stream_id, data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
-							if not stream_id in streams:
+							exist = stream_id in streams
+							if data and not exist:
 								streams[stream_id] = Stream(stream_id)
-							streams[stream_id] << data
+							if exist:
+								streams[stream_id] << data
+							if not data and exist:
+								del streams[stream_id]
 
 				# Outgoing streams
 				else:
