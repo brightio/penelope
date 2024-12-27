@@ -1097,10 +1097,10 @@ class MainMenu(BetterCMD):
 				return False
 
 			if subcommand == "add":
-				host = Interfaces().translate(host)
 				Listener(host, port)
 
 			elif subcommand == "stop":
+				host = Interfaces().translate(host)
 				for listener in core.listeners.values():
 					if (listener.host, listener.port) == (host, port):
 						listener.stop()
