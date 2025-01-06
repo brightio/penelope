@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.8"
+__version__ = "0.12.9"
 
 import os
 import io
@@ -1296,17 +1296,14 @@ class ControlQueue:
 		return self.queue.get()
 
 	def clear(self):
-		pass
-		#while not self.queue.empty():
-		#	try:
-		#		self.queue.get_nowait()
-		#	except queue.Empty:
-		#		break
-		#try:
-		#	while True:
-		#		os.read(self._out, 1)
-		#except OSError:
-		#	pass
+		amount = 0
+		while not self.queue.empty():
+			try:
+				self.queue.get_nowait()
+				amount += 1
+			except queue.Empty:
+				break
+		os.read(self._out, amount)
 
 class Core:
 
@@ -2374,6 +2371,7 @@ class Session:
 			return None
 
 		with self.lock:
+			self.subchannel.control.clear()
 			if self.need_control_session and not self.bypass_control_session:
 				args = locals()
 				del args['self']
@@ -2386,7 +2384,6 @@ class Session:
 
 			self.subchannel.active = True
 			self.subchannel.result = None
-			self.subchannel.control.clear()
 			buffer = io.BytesIO()
 			_start = time.perf_counter()
 
@@ -2450,7 +2447,6 @@ class Session:
 			last_data = time.perf_counter()
 			need_check = False
 			while self.subchannel.result is None:
-
 				logger.debug(paint(f"Waiting for data (timeout={timeout})...").blue)
 				readables, _, _ = select.select([self.subchannel.control, self.subchannel], [], [], timeout)
 
@@ -4206,18 +4202,10 @@ def ControlC(num, stack):
 		core.attached_session.detach()
 
 	elif "Menu" in core.threads:
-		#os.write(sys.stdout.fileno(), b'^C\n')
-		#os.write(sys.stdout.fileno(), menu.prompt.encode())
-		if menu.sid:
-			core.sessions[menu.sid].subchannel.control << 'stop'
+		if menu.sid and not core.sessions[menu.sid].agent:
+			core.sessions[menu.sid].control_session.subchannel.control << 'stop'
 	elif not core.sessions:
 		core.stop()
-
-#	elif not menu.active:
-#		#print(threading.enumerate())
-#		core.stop()
-#	else:
-#		raise KeyboardInterrupt
 
 def WinResize(num, stack):
 	if core.attached_session is not None and core.attached_session.type == "PTY":
