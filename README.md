@@ -28,15 +28,23 @@ One useful feature regarding Windows shells is that they can be automatically up
 
 ![meterpreter](https://github.com/user-attachments/assets/b9cda69c-e25c-41e1-abe2-ce18ba13c4ed)
 
+## Install
+
+**Pipx** is required. Installation instructions - https://github.com/pypa/pipx?tab=readme-ov-file#install-pipx
+
+```bash
+pipx install git+https://github.com/brightio/penelope 
+```
+
 ## Usage
 ### Sample Typical Usage
 ```
-./penelope.py                   # Listening for reverse shells on 0.0.0.0:4444
-./penelope.py -a                # Listening for reverse shells on 0.0.0.0:4444 and show reverse shell payloads based on the current Listeners
-./penelope.py 5555              # Listening for reverse shells on 0.0.0.0:5555
-./penelope.py 5555 -i eth0      # Listening for reverse shells on eth0:5555
-./penelope.py 1111 2222 3333    # Listening for reverse shells on 0.0.0.0:1111, 0.0.0.0:2222, 0.0.0.0:3333
-./penelope.py -c target 3333    # Connect to a bind shell on target:3333
+penelope                   # Listening for reverse shells on 0.0.0.0:4444
+penelope -a                # Listening for reverse shells on 0.0.0.0:4444 and show reverse shell payloads based on the current Listeners
+penelope 5555              # Listening for reverse shells on 0.0.0.0:5555
+penelope 5555 -i eth0      # Listening for reverse shells on eth0:5555
+penelope 1111 2222 3333    # Listening for reverse shells on 0.0.0.0:1111, 0.0.0.0:2222, 0.0.0.0:3333
+penelope -c target 3333    # Connect to a bind shell on target:3333
 ```
 
 ### Demonstrating Random Usage
