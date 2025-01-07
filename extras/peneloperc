@@ -1,0 +1,9 @@
+options.default_listener_port = 9999
+options.escape = {'sequence': b'\x10', 'key': 'Control-P'}
+
+class my_custom_module(Module):
+	def run(sesson):
+		"""
+		This is my custom module
+		"""
+		session.exec("ls")

@@ -5,16 +5,17 @@
   <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/>
 </div>
 
-Penelope is a shell handler designed to be easy to use and intended to replace netcat when exploiting RCE vulnerabilities. It is compatible with Linux and macOS and requires Python 3.6 or higher. It is a standalone script that does not require any installation or external dependencies, and it is intended to remain this way.
+Penelope is a shell handler designed to be easy to use and intended to replace netcat when exploiting RCE vulnerabilities. It is compatible with Linux and macOS and requires Python 3.6 or higher. It is a standalone script using only Python's native library, and it is intended to remain this way.
 
 ![penelope](https://github.com/user-attachments/assets/e1b9332f-d224-4aee-ae96-8ec43a8faf67)
 
 Among the main features are:
-- Auto-upgrade shells to PTY (realtime resize included)
+- Auto-upgrade Unix shells to PTY (realtime resize included)
 - Logging interaction with the targets
 - Download files/folders from targets
 - Upload local/remote files/folders to targets
-- Run scripts on targets and get output on a local file in real time.
+- Run scripts on targets and get output on a local file in real time
+- Local port forwarding
 - Spawn shells on multiple tabs and/or hosts
 - Maintain X amount of active shells per host no matter what
 - Multiple sessions
@@ -90,12 +91,11 @@ Verbosity:
 Session Logging:
   -L, --no-log          Do not create session log files
   -T, --no-timestamps   Do not include timestamps in session logs
-  -CT, --no-colored-timestamps    Do not color timestamps in session logs
+  -CT, --no-colored-timestamps
+                        Do not color timestamps in session logs
 
 Misc:
-  -r , --configfile     Configuration file location
   -m , --maintain       Maintain NUM total shells per target
-  -H, --no-history      Disable shell history on target
   -P, --plain           Just land to the main menu
   -S, --single-session  Accommodate only the first created session
   -C, --no-attach       Disable auto attaching sessions upon creation
@@ -131,7 +131,6 @@ If you want to contribute to this project please report bugs, unexpected program
 * socks & http proxy
 * persistence modules
 * team server
-* edit command: open the remote file locally, make changes and upon saving, upload it to the target
 * currently spawn/script/portfwd commands are supported only on Unix shells. Those need to be implemented for Windows shells too.
 * an option switch for disable all logging, not only sessions.
 * main menu autocompletion for short commands
@@ -157,4 +156,4 @@ Penelope was the wife of Odysseus and she is known for her fidelity for him by w
 * [Longlone - @WAY29](https://github.com/WAY29) for indicating the need for compatibility with previous versions of Python (3.6).
 * [Carlos Polop - @carlospolop](https://github.com/carlospolop) for the idea to spawn shells on listeners on other systems.
 * [@darrenmartyn](https://github.com/darrenmartyn) for indicating an alternative method to upgrade the shell to PTY using the script command.
-* [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80) for bug reporting.
+* [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80), [@TheAalCh3m1st](https://github.com/TheAalCh3m1st) for bug reporting.
