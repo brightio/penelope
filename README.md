@@ -91,8 +91,7 @@ Verbosity:
 Session Logging:
   -L, --no-log          Do not create session log files
   -T, --no-timestamps   Do not include timestamps in session logs
-  -CT, --no-colored-timestamps
-                        Do not color timestamps in session logs
+  -CT, --no-colored-timestamps Do not color timestamps in session logs
 
 Misc:
   -m , --maintain       Maintain NUM total shells per target

