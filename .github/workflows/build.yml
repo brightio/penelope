@@ -1,0 +1,25 @@
+# name: Build and Push Image
+
+# on:
+#   push:
+#     branches: [ "main" ]
+
+# jobs:
+#   build-push:
+#     runs-on: ubuntu-latest
+#     env:
+#       IMAGE_NAME: 'penelope'
+#     steps:
+#       - name: Check out code
+#         uses: actions/checkout@v3
+
+#       - name: Log in to registry
+#         run: |
+#           echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "${{ secrets.REGISTRY_URL }}" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+#       - name: Build and push image
+#         run: |
+#           SHORT_SHA="${GITHUB_SHA:0:6}"
+#           docker build -t "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest" -t "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}" .
+#           docker push "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest"
+#           docker push "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}"
