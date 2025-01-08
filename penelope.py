@@ -3629,9 +3629,12 @@ class upload_privesc_scripts(Module):
 		if session.OS == 'Unix':
 			session.upload(BINARIES['linpeas'])
 			session.upload(BINARIES['lse'])
+			session.upload(BINARIES['deepce'])
+
 		elif session.OS == 'Windows':
 			session.upload(BINARIES['winpeas'])
 			session.upload(BINARIES['powerup'])
+			session.upload(BINARIES['privesccheck'])
 
 class peass_ng(Module):
 	def run(session):
@@ -4263,6 +4266,8 @@ BINARIES = {
 	'lse': "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
 	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
 	'ngrok_linux': "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
+	'deepce': "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
+	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1"
 }
 
 # INITIALIZATION
