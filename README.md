@@ -68,7 +68,7 @@ Some Notes:
 - By default you need to press `F12` to detach the PTY shell and go to the Main Menu. If the upgrade was not possible the you ended up with a basic shell, you can detach it with `Ctrl+C`. This also prevents the accidental killing of the shell.
 - The Main Menu supports TAB completion and also short commands. For example instead of `interact 1` you can just type `i 1`.
 
-![Main Menu](https://user-images.githubusercontent.com/65655412/196921489-5d446ff2-1fe9-4789-b6af-11a8ddf81fe7.png)
+![Main Menu](https://github.com/user-attachments/assets/455aa604-0449-4d33-8f13-aa0650f938ec)
 
 ### Command Line Options
 ```
