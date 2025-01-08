@@ -4265,7 +4265,7 @@ BINARIES = {
 	'winpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEAS.bat",
 	'lse': "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
 	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
-	'ngrok_linux': "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
+	'ngrok_linux': "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
 	'deepce': "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
 	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1"
 }
