@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.10"
+__version__ = "0.12.11"
 
 import os
 import io
@@ -811,7 +811,7 @@ class MainMenu(BetterCMD):
 				logger.warning("At least local port is required")
 				return False
 
-		core.sessions[self.sid].portfwd(_type=_type, lhost=lhost, lport=int(lport), rhost=rhost, rport=int(rport))
+		core.sessions[self.sid].portfwd(_type=_type, lhost=lhost, lport=lport, rhost=rhost, rport=int(rport))
 
 	@session(current=True)
 	def do_download(self, remote_items):
@@ -1619,7 +1619,7 @@ class Listener:
 		result = self.bind(port)
 		if not isinstance(result, (str, tuple)):
 			self.start()
-			return
+
 		elif not self.caller == 'spawn':
 			if isinstance(result, tuple):
 				logger.error(result[0])
@@ -1799,7 +1799,7 @@ class Session:
 		self.outbuf = io.BytesIO()
 		self.shell_response_buf = io.BytesIO()
 
-		self.tasks = dict()
+		self.tasks = {"portfwd":[], "scripts":[]}
 		self.subchannel = Channel()
 		self.latency = None
 
@@ -2257,7 +2257,8 @@ class Session:
 		stderr_dst=None,	# stderr stream destination
 		stdin_stream=None,	# stdin_stream object
 		stdout_stream=None,	# stdout_stream object
-		stderr_stream=None	# stderr_stream object
+		stderr_stream=None,	# stderr_stream object
+		agent_control=None	# control queue
 	):
 		if caller() == 'session_end':
 			value = True
@@ -2300,8 +2301,10 @@ class Session:
 				#if stdin_src:
 				#	rlist.append(stdin_src)
 
-				rlist.append(self.subchannel.control)
-				while rlist != [self.subchannel.control]:
+				if not agent_control:
+					agent_control = self.subchannel.control # TEMP
+				rlist.append(agent_control)
+				while rlist != [agent_control]:
 					r, _, _ = select.select(rlist, [], [], timeout)
 					timeout = None
 
@@ -2313,8 +2316,8 @@ class Session:
 
 					for readable in r:
 
-						if readable is self.subchannel.control:
-							command = self.subchannel.control.get()
+						if readable is agent_control:
+							command = agent_control.get()
 							if command == 'stop':
 								# TODO kill task here...
 								break
@@ -3411,16 +3414,20 @@ class Session:
 		return True
 
 	def portfwd(self, _type, lhost, lport, rhost, rport):
+
 		session = self
-		#print(_type, lhost, lport, rhost, rport)
+		control = ControlQueue()
+		stop = threading.Event()
+		task = [(_type, lhost, lport, rhost, rport), control, stop]
+
 		class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 			def handle(self):
 
 				#self.request.setblocking(False)
-
-				stdin_stream = session.new_streamID # TEMP
+				stdin_stream = session.new_streamID
 				stdout_stream = session.new_streamID
 				stderr_stream = session.new_streamID
+				#print((stdin_stream.id, stdout_stream.id, stderr_stream.id))
 
 				if not all([stdin_stream, stdout_stream, stderr_stream]):
 					return
@@ -3466,7 +3473,6 @@ class Session:
 				#stdout_stream.terminate()
 				#stderr_stream.terminate()
 				"""
-
 				session.exec(
 					code,
 					python=True,
@@ -3474,58 +3480,40 @@ class Session:
 					stdout_stream=stdout_stream,
 					stderr_stream=stderr_stream,
 					stdin_src=self.request,
-					stdout_dst=self.request
+					stdout_dst=self.request,
+					agent_control=control
 				)
-
-				"""threading.Thread(target=session.exec, args=(code, ), kwargs={
-					'python': True,
-					'stdin_stream': stdin_stream,
-					'stdout_stream': stdout_stream,
-					'stderr_stream': stderr_stream
-				}).start()
-
-
-
-				rlist = [self.request, stdout_stream]
-				while True:
-					readables, _, _ = select.select(rlist, [], [])
-
-					for readable in readables:
-						if readable is stdout_stream:
-							data = stdout_stream.read(NET_BUF_SIZE)
-							try:
-								self.request.sendall(data)
-							except OSError:
-								break
-							if not data:
-								rlist.remove(stdout_stream)
-
-						if readable is self.request:
-							try:
-								data = self.request.recv(NET_BUF_SIZE)
-							except OSError:
-								break
-							stdin_stream.write(data)
-							if not data:
-								break
-
-					else:
-						continue
-					break
-
-				#stderr_stream.terminate() # TEMP"""
-				#print("FWD Socket terminated")
 
 		class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 			allow_reuse_address = True
 			request_queue_size = 100
 
+			@handle_bind_errors
+			def server_bind(self, lport):
+				self.server_address = (lhost, int(lport))
+				super().server_bind()
+
 		def server_thread():
-			with ThreadedTCPServer((lhost, lport), ThreadedTCPRequestHandler) as server:
+			with ThreadedTCPServer(None, ThreadedTCPRequestHandler, bind_and_activate=False) as server:
+				result = server.server_bind(lport)
+				if isinstance(result, (str, tuple)):
+					if isinstance(result, tuple):
+						logger.error(result[0])
+						print(result[1])
+					else:
+						logger.error(result)
+					return False
+				else:
+					server.server_activate()
+				task.append(server)
+				logger.info(f"Setup Port Forwarding: {lhost}:{lport} {'->' if _type=='L' else '<-'} {rhost}:{rport}")
+				session.tasks['portfwd'].append(task)
 				server.serve_forever()
+			stop.set()
 
-		threading.Thread(target=server_thread).start()
-
+		portfwd_thread = threading.Thread(target=server_thread)
+		task.append(portfwd_thread)
+		portfwd_thread.start()
 
 	def maintain(self):
 		with core.lock:
@@ -3611,7 +3599,14 @@ class Session:
 		if self.is_attached:
 			self.detach()
 
-		# Kill tasks
+		for portfwd in self.tasks['portfwd']:
+			info, control, stop, thread, server = portfwd
+			logger.info(f"Stopping Port Forwarding: {info[1]}:{info[2]} {'->' if info[0]=='L' else '<-'} {info[3]}:{info[4]}")
+			server.shutdown()
+			server.server_close()
+			while not stop.is_set(): # TEMP
+				control << "stop"
+			thread.join()
 
 		return True
 
@@ -3875,7 +3870,6 @@ def agent():
 		pass
 
 	try:
-		tasks = dict()
 		streams = dict()
 
 		messenger = Messenger(bufferclass)
