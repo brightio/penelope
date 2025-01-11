@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.11"
+__version__ = "0.12.12"
 
 import os
 import io
@@ -897,7 +897,7 @@ class MainMenu(BetterCMD):
 
 	@staticmethod
 	def show_modules():
-		table = Table(joinchar=' <-> ')
+		table = Table(joinchar=' │ ')
 		table.header = [paint('MODULE NAME').cyan_UNDERLINE, paint('DESCRIPTION').cyan_UNDERLINE]
 		for module in modules().values():
 			description = module.run.__doc__ or ""
@@ -3616,7 +3616,7 @@ class Module:
 class upload_privesc_scripts(Module):
 	def run(session):
 		"""
-		Upload privilege escalation scripts to the target
+		Upload a set of privilege escalation scripts to the target
 		"""
 		if session.OS == 'Unix':
 			session.upload(BINARIES['linpeas'])
@@ -3636,7 +3636,7 @@ class peass_ng(Module):
 		if session.OS == 'Unix':
 			session.script(BINARIES['linpeas'])
 		elif session.OS == 'Windows':
-			logger.error("This module runs only in Unix shells")
+			logger.error("This module runs only on Unix shells")
 
 class lse(Module):
 	def run(session):
@@ -3646,7 +3646,7 @@ class lse(Module):
 		if session.OS == 'Unix':
 			session.script(BINARIES['lse'])
 		else:
-			logger.error("This module runs only in Unix shells")
+			logger.error("This module runs only on Unix shells")
 
 class meterpreter(Module):
 	def run(session):
@@ -3654,7 +3654,7 @@ class meterpreter(Module):
 		Get a meterpreter shell
 		"""
 		if session.OS == 'Unix':
-			logger.error("This module runs only in Windows shells")
+			logger.error("This module runs only on Windows shells")
 		else:
 			payload_path = f"/dev/shm/{rand(10)}.exe"
 			host = session._host
@@ -3688,7 +3688,7 @@ class ngrok(Module):
 			token = input("Authtoken: ")
 			session.exec(f"ngrok config add-authtoken {token}")
 		else:
-			logger.error("This module runs only in Unix shells")
+			logger.error("This module runs only on Unix shells")
 
 class Messenger:
 	SHELL = 1
