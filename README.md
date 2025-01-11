@@ -12,7 +12,7 @@ Penelope is a shell handler designed to be easy to use and intended to replace n
 ## Session Features
 |Description|Unix with Python>=2.3| Unix without Python>=2.3|Windows|
 |-----------|:-------------------:|:-----------------------:|:-----:|
-|Auto-upgrade shell|PTY|*PTY|readline|
+|Auto-upgrade shell|PTY|PTY(*)|readline|
 |Real-time terminal resize|✅|✅|❌|
 |Logging shell activity|✅|✅|✅|
 |Download remote files/folders|✅|✅|✅|
@@ -22,19 +22,23 @@ Penelope is a shell handler designed to be easy to use and intended to replace n
 |Spawn shells on multiple tabs and/or hosts|✅|✅|❌|
 |Maintain X amount of active shells per host no matter what|✅|✅|❌|
 
-*opens a second TCP connection
+(*) opens a second TCP connection
 
 ## Global Features
+- Streamline interaction with the targets via modules
 - Multiple sessions
 - Multiple listeners
 - Serve files/folders via HTTP (-s switch)
 - Can be imported by python3 exploits and get shell on the same terminal (see [Extras](#Extras))
 
-Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
+### Modules
+![image](https://github.com/user-attachments/assets/9c462bee-df4d-4862-a36a-fa294641bdfb)
 
-One useful feature regarding Windows shells is that they can be automatically upgraded to meterpreter shells by running the "meterpreter" module.
+#### Meterpreter module demonstration
 
 ![meterpreter](https://github.com/user-attachments/assets/b9cda69c-e25c-41e1-abe2-ce18ba13c4ed)
+
+Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
 
 ## Install
 
@@ -133,7 +137,7 @@ If you want to contribute to this project please report bugs, unexpected program
 ## TODO
 
 ### Features
-* remote and local port forwarding
+* remote port forwarding
 * socks & http proxy
 * persistence modules
 * team server
