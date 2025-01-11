@@ -1171,8 +1171,8 @@ class MainMenu(BetterCMD):
 					thread.join()
 			logger.info("Exited!")
 			remaining_threads = [thread for thread in threading.enumerate() if thread.name not in ('MainThread', 'Menu')]
-			if remaining_threads:
-				logger.error(f"Please report this: {remaining_threads}")
+			if DEV_MODE and remaining_threads:
+				logger.error(f"REMAINING THREADS: {remaining_threads}")
 			return True
 		return False
 
@@ -3423,11 +3423,10 @@ class Session:
 		class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 			def handle(self):
 
-				#self.request.setblocking(False)
+				self.request.setblocking(False)
 				stdin_stream = session.new_streamID
 				stdout_stream = session.new_streamID
 				stderr_stream = session.new_streamID
-				#print((stdin_stream.id, stdout_stream.id, stderr_stream.id))
 
 				if not all([stdin_stream, stdout_stream, stderr_stream]):
 					return
@@ -3445,16 +3444,16 @@ class Session:
 							data = stdin_stream.read(NET_BUF_SIZE)
 							if not connected:
 								client.connect(("{rhost}", {rport}))
+								client.setblocking(False)
 								frlist.append(client)
 								connected = True
-								#client.setblocking(False)
 							try:
 								client.sendall(data)
 							except OSError:
 								break
 							if not data:
 								frlist.remove(stdin_stream)
-
+								break
 						if readable is client:
 							try:
 								data = client.recv(NET_BUF_SIZE)
@@ -3465,13 +3464,10 @@ class Session:
 							except OSError:
 								frlist.remove(client) # TEMP
 								break
-
 					else:
 						continue
 					break
 				client.close()
-				#stdout_stream.terminate()
-				#stderr_stream.terminate()
 				"""
 				session.exec(
 					code,
@@ -3483,6 +3479,7 @@ class Session:
 					stdout_dst=self.request,
 					agent_control=control
 				)
+				os.close(stderr_stream._read) #TEMP
 
 		class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 			allow_reuse_address = True
@@ -3601,7 +3598,7 @@ class Session:
 
 		for portfwd in self.tasks['portfwd']:
 			info, control, stop, thread, server = portfwd
-			logger.info(f"Stopping Port Forwarding: {info[1]}:{info[2]} {'->' if info[0]=='L' else '<-'} {info[3]}:{info[4]}")
+			logger.warning(f"Stopping Port Forwarding: {info[1]}:{info[2]} {'->' if info[0]=='L' else '<-'} {info[3]}:{info[4]}")
 			server.shutdown()
 			server.server_close()
 			while not stop.is_set(): # TEMP
@@ -3776,7 +3773,7 @@ class Stream:
 			self.writebuf = queue.Queue()
 		self.writebuf.put(data)
 		if not self.feed_thread:
-			self.feed_thread = threading.Thread(target=self.feed, name="feed stream -> " + repr(self.id))
+			self.feed_thread = threading.Thread(daemon=True, target=self.feed, name="feed stream -> " + repr(self.id))
 			self.feed_thread.start()
 
 	def feed(self):
@@ -3858,8 +3855,11 @@ def agent():
 		return inner
 
 	def cloexec(fd):
-		flags = fcntl.fcntl(fd, fcntl.F_GETFD)
-		fcntl.fcntl(fd, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
+		try:
+			flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+			fcntl.fcntl(fd, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
+		except:
+			pass
 
 	shell_pid, master_fd = pty.fork()
 	if shell_pid == pty.CHILD:
@@ -3973,7 +3973,10 @@ def agent():
 										_, e, _ = sys.exc_info()
 										stderr_stream << str(e).encode()
 
-									os.close(stdin_stream._read)
+									try:
+										os.close(stdin_stream._read)
+									except:
+										pass
 									stdout_stream << "".encode()
 									stderr_stream << "".encode()
 								threading.Thread(target=run, args=(stdin_stream, stdout_stream, stderr_stream)).start()
@@ -4395,10 +4398,11 @@ cmdlogger.addHandler(stdout_handler)
 
 DEV_MODE = False
 if DEV_MODE:
-	stdout_handler.addFilter(lambda record: True if record.levelno != logging.DEBUG else False)
-	logger.setLevel('DEBUG')
-	options.max_maintain = 50
-	options.no_bins = 'python,python3,script'
+	#stdout_handler.addFilter(lambda record: True if record.levelno != logging.DEBUG else False)
+	#logger.setLevel('DEBUG')
+	#options.max_maintain = 50
+	#options.no_bins = 'python,python3,script'
+	pass
 
 def get_glob_size(_glob, block_size):
 	import glob
