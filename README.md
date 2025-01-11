@@ -9,15 +9,22 @@ Penelope is a shell handler designed to be easy to use and intended to replace n
 
 ![penelope](https://github.com/user-attachments/assets/e1b9332f-d224-4aee-ae96-8ec43a8faf67)
 
-Among the main features are:
-- Auto-upgrade Unix shells to PTY (realtime resize included)
-- Logging interaction with the targets
-- Download files/folders from targets
-- Upload local/remote files/folders to targets
-- Run scripts on targets and get output on a local file in real time
-- Local port forwarding
-- Spawn shells on multiple tabs and/or hosts
-- Maintain X amount of active shells per host no matter what
+## Session Features
+|Description|Unix with Python>=2.3| Unix without Python>=2.3|Windows|
+|-----------|:-------------------:|:-----------------------:|:-----:|
+|Auto-upgrade shell|PTY|*PTY|readline|
+|Real-time terminal resize|✅|✅|❌|
+|Logging shell activity|✅|✅|✅|
+|Download remote files/folders|✅|✅|✅|
+|Upload local/HTTP files/folders|✅|✅|✅|
+|In-memory local/HTTP script execution with real-time output downloading|✅|❌|❌|
+|Local port forwarding|✅|❌|❌|
+|Spawn shells on multiple tabs and/or hosts|✅|✅|❌|
+|Maintain X amount of active shells per host no matter what|✅|✅|❌|
+
+*opens a second TCP connection
+
+## Global Features
 - Multiple sessions
 - Multiple listeners
 - Serve files/folders via HTTP (-s switch)
