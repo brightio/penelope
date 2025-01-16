@@ -3690,6 +3690,16 @@ class ngrok(Module):
 		else:
 			logger.error("This module runs only on Unix shells")
 
+class linuxexploitsuggester(Module):
+	def run(session):
+		"""
+		Run the latest version of linux-exploit-suggester in the background
+		"""
+		if session.OS == 'Unix':
+			session.script(BINARIES['linuxexploitsuggester'])
+		else:
+			logger.error("This module runs only on Unix shells")
+
 class Messenger:
 	SHELL = 1
 	RESIZE = 2
@@ -4264,7 +4274,8 @@ BINARIES = {
 	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
 	'ngrok_linux': "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
 	'deepce': "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
-	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1"
+	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
+ 	'linuxexploitsuggester': "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh"
 }
 
 # INITIALIZATION
