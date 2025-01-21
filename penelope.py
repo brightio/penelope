@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.14"
+__version__ = "0.12.15"
 
 import os
 import io
@@ -48,9 +48,7 @@ from json import dumps
 from code import interact
 from zlib import compress
 from errno import EADDRINUSE, EADDRNOTAVAIL
-from random import choice
 from select import select
-from string import ascii_letters
 from pathlib import Path
 from datetime import datetime
 from textwrap import indent, dedent
@@ -69,14 +67,14 @@ if not sys.version_info >= (3, 6):
 
 ################################## PYTHON MISSING BATTERIES ####################################
 
+from random import choice
+from string import ascii_letters
 rand = lambda _len: ''.join(choice(ascii_letters) for i in range(_len))
 caller = lambda: inspect.stack()[2].function
 bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
-pathlink = lambda filepath: (
-	f'\x1b]8;;file://{filepath.parents[0]}\x07{filepath.parents[0]}'
-	f'{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{filepath}\x07{filepath.name}\x1b]8;;\x07'
-)
+pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{path}\x07{path.name}\x1b]8;;\x07'
+normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 
 def Open(item, terminal=False):
 	if OS == 'Linux' and not DISPLAY:
@@ -109,7 +107,6 @@ def Open(item, terminal=False):
 		if error:
 			logger.error(error.decode())
 			return False
-
 	return True
 
 def ask(text):
@@ -2878,9 +2875,10 @@ class Session:
 
 				code = fr"""
 				from glob import glob
+				normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 				items = []
 				for part in shlex.split(r"{remote_items}"):
-					_items = glob(os.path.expanduser(part))
+					_items = glob(normalize_path(part))
 					if _items:
 						items.extend(_items)
 					else:
@@ -2968,9 +2966,10 @@ class Session:
 				# Get the remote absolute paths
 				response = self.exec(f"""
 				from glob import glob
+				normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 				remote_paths = ''
 				for part in shlex.split(r"{remote_items}"):
-					result = glob(os.path.expanduser(part))
+					result = glob(normalize_path(part))
 					if result:
 						for item in result:
 							if os.path.exists(item):
@@ -3062,7 +3061,7 @@ class Session:
 
 		# Initialization
 		try:
-			local_items = [os.path.expanduser(item) for item in shlex.split(local_items)]
+			local_items = [normalize_path(item) for item in shlex.split(local_items)]
 		except ValueError as e:
 			logger.error(e)
 			return []
@@ -3320,7 +3319,7 @@ class Session:
 			with open(local_script, "wb") as input_file:
 				input_file.write(data)
 		else:
-			local_script = Path(local_script)
+			local_script = Path(normalize_path(local_script))
 
 		output_file_name = local_script_folder / (prefix + "output.txt")
 
@@ -4043,7 +4042,7 @@ def agent():
 
 class FileServer:
 	def __init__(self, *items, port=None, host=None, password=None, quiet=False):
-		self.port = port or 8000
+		self.port = port or options.default_fileserver_port
 		self.host = host or options.default_interface
 		self.host = Interfaces().translate(self.host)
 		self.items = items
@@ -4058,7 +4057,7 @@ class FileServer:
 			self.filemap[f'/{self.password}[root]'] = '/'
 			return '/[root]'
 
-		item = os.path.abspath(item)
+		item = os.path.abspath(normalize_path(item))
 
 		if not os.path.exists(item):
 			if not self.quiet:
@@ -4070,7 +4069,7 @@ class FileServer:
 				if _item == item:
 					return _urlpath
 
-		urlpath = f"/{self.password}{os.path.basename(os.path.normpath(item))}"
+		urlpath = f"/{self.password}{os.path.basename(item)}"
 		while urlpath in self.filemap:
 			root, ext = os.path.splitext(urlpath)
 			urlpath = root + '_' + ext
@@ -4078,8 +4077,9 @@ class FileServer:
 		return urlpath
 
 	def remove(self, item):
+		item = os.path.abspath(normalize_path(item))
 		if item in self.filemap:
-			del self.filemap[f"/{os.path.basename(os.path.normpath(item))}"]
+			del self.filemap[f"/{os.path.basename(item)}"]
 		else:
 			if not self.quiet:
 				logger.warning(f"{item} is not served.")
@@ -4277,6 +4277,7 @@ class Options:
 		self.basedir = Path.home() / f'.{__program__}'
 		self.default_listener_port = 4444
 		self.default_interface = "0.0.0.0"
+		self.default_fileserver_port = 8000
 		self.hints = False
 		self.no_log = False
 		self.no_timestamps = False
@@ -4396,6 +4397,7 @@ if DEV_MODE:
 def get_glob_size(_glob, block_size):
 	from glob import glob
 	from math import ceil
+	normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 	def size_on_disk(filepath):
 		try:
 			return ceil(float(os.lstat(filepath).st_size) / block_size) * block_size
@@ -4403,7 +4405,7 @@ def get_glob_size(_glob, block_size):
 			return 0
 	total_size = 0
 	for part in shlex.split(_glob):
-		for item in glob(os.path.expanduser(part)):
+		for item in glob(normalize_path(part)):
 			if os.path.isfile(item):
 				total_size += size_on_disk(item)
 			elif os.path.isdir(item):
