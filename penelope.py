@@ -37,6 +37,7 @@ import tarfile
 import logging
 import zipfile
 import inspect
+import warnings
 import platform
 import threading
 import subprocess
@@ -2947,8 +2948,10 @@ class Session:
 				return []
 			tar.extract = handle_exceptions(tar.extract)
 
-			for item in tar:
-				tar.extract(item, local_download_folder)
+			with warnings.catch_warnings():
+				warnings.simplefilter("ignore", category=DeprecationWarning)
+				for item in tar:
+					tar.extract(item, local_download_folder)
 			tar.close()
 
 			if self.agent:
@@ -2991,7 +2994,7 @@ class Session:
 				if os.path.exists(local_path):
 					downloaded.append(local_path)
 				else:
-					logger.error(f"{paint('Download Failed').RED_white} => {local_path}")
+					logger.error(f"{paint('Download Failed').RED_white} {path}")
 
 		elif self.OS == 'Windows':
 			remote_tempfile = f"{self.tmp}\\{rand(10)}.zip"
