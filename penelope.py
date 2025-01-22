@@ -3155,6 +3155,7 @@ class Session:
 				for item in tar:
 					tar.extract(item, path='{destination}')
 				tar.close()
+				stderr_stream << "OK".encode()
 				"""
 				threading.Thread(target=self.exec, args=(code, ), kwargs={
 					'python': True,
@@ -3196,7 +3197,6 @@ class Session:
 			tar.close()
 
 			if self.agent:
-				stdin_stream.write(b"")
 				os.close(stdin_stream._read)
 				os.close(stdin_stream._write)
 				del self.streams[stdin_stream.id]
@@ -3209,6 +3209,8 @@ class Session:
 						while '\n' in error_buffer:
 							line, error_buffer = error_buffer.split('\n', 1)
 							logger.error(line)
+						if error_buffer.endswith("OK"):
+							stdin_stream.write(b"")
 					else:
 						break
 				os.close(stdout_stream._read)
@@ -3292,10 +3294,10 @@ class Session:
 
 		# Present uploads
 		altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
-
 		for item in altnames:
 			uploaded_path = shlex.quote(str(item)) if self.OS == 'Unix' else f'"{item}"'
 			logger.info(f"{paint('Upload OK').GREEN_white} {paint(uploaded_path).yellow}")
+
 		return altnames
 
 	def script(self, local_script):
