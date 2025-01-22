@@ -2052,7 +2052,7 @@ class Session:
 					if response:
 						self._bin = dict(zip(binaries, response.decode().splitlines()))
 
-					missing = [b for b in binaries if not self._bin[b].startswith("/")]
+					missing = [b for b in binaries if not os.path.isabs(self._bin[b])]
 
 					if missing:
 						logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method").red)
@@ -2269,6 +2269,7 @@ class Session:
 
 				_type = 'S'.encode() if not python else 'P'.encode()
 				self.send(Messenger.message(Messenger.EXEC, _type + stdin_stream.id + stdout_stream.id + stderr_stream.id + cmd.encode()))
+				logger.debug(cmd)
 				#print(stdin_stream.id, stdout_stream.id, stderr_stream.id)
 
 				rlist = []
@@ -2840,8 +2841,13 @@ class Session:
 			available_bytes = shutil.disk_usage(local_download_folder).free
 			if self.agent:
 				block_size = os.statvfs(local_download_folder).f_frsize
-				remote_size = int(float(self.exec(f"{inspect.getsource(get_glob_size)}"
-					f"stdout_stream << str(get_glob_size(r'{remote_items}', {block_size})).encode()", python=True, value=True)))
+				response = self.exec(f"{inspect.getsource(get_glob_size)}"
+					f"stdout_stream << str(get_glob_size({repr(remote_items)}, {block_size})).encode()", python=True, value=True)
+				try:
+					remote_size = int(float(response))
+				except:
+					logger.error(response)
+					return []
 			else:
 				cmd = f"du -ck {remote_items}"
 				response = self.exec(cmd, timeout=None, value=True)
@@ -2875,7 +2881,7 @@ class Session:
 				from glob import glob
 				normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 				items = []
-				for part in shlex.split(r"{remote_items}"):
+				for part in shlex.split({repr(remote_items)}):
 					_items = glob(normalize_path(part))
 					if _items:
 						items.extend(_items)
@@ -2911,7 +2917,7 @@ class Session:
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
 				temp = self.tmp + "/" + rand(8)
-				cmd = f'tar cz $(for file in {remote_items};do readlink -f "$file";done) | base64 -w0 > {temp}'
+				cmd = rf'for file in {remote_items};do readlink -f "$file";done | xargs -d "\n" tar cz | base64 -w0 > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot create archive")
@@ -2968,7 +2974,7 @@ class Session:
 				from glob import glob
 				normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 				remote_paths = ''
-				for part in shlex.split(r"{remote_items}"):
+				for part in shlex.split({repr(remote_items)}):
 					result = glob(normalize_path(part))
 					if result:
 						for item in result:
@@ -2979,7 +2985,7 @@ class Session:
 				stdout_stream << remote_paths.encode()
 				""", python=True, value=True)
 			else:
-				cmd = f'for file in {remote_items}; do if [ -e "$file" ]; then readlink -f "$file"; else echo $file; fi; done'
+				cmd = f'for file in {remote_items}; do if [ -e "$file" ]; then readlink -f "$file"; else echo "$file"; fi; done'
 				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot get remote paths")
@@ -2991,10 +2997,10 @@ class Session:
 			downloaded = []
 			for path in remote_paths:
 				local_path = local_download_folder / path[1:]
-				if os.path.exists(local_path):
+				if os.path.isabs(path) and os.path.exists(local_path):
 					downloaded.append(local_path)
 				else:
-					logger.error(f"{paint('Download Failed').RED_white} {path}")
+					logger.error(f"{paint('Download Failed').RED_white} {shlex.quote(path)}")
 
 		elif self.OS == 'Windows':
 			remote_tempfile = f"{self.tmp}\\{rand(10)}.zip"
@@ -3036,7 +3042,7 @@ class Session:
 				logger.error("The item does not exist or access is denied")
 
 		for item in downloaded:
-			logger.info(f"{paint('Download OK').GREEN_white} {paint(shlex.quote(pathlink(item))).yellow}") # PROBLEM with ../ TODO normalize
+			logger.info(f"{paint('Download OK').GREEN_white} {paint(shlex.quote(pathlink(item))).yellow}")
 
 		return downloaded
 
@@ -3088,19 +3094,16 @@ class Session:
 					resolved_items.append((filename, item))
 				except Exception as e:
 					logger.error(e)
-
-			elif item.startswith(os.path.sep):
-				items = list(Path(os.path.sep).glob(item.lstrip(os.path.sep)))
-				if items:
-					resolved_items.extend(items)
-				else:
-					logger.error(f"No such file or directory: {item}")
 			else:
-				items = list(Path().glob(item))
+				if os.path.isabs(item):
+					items = list(Path('/').glob(item.lstrip('/')))
+				else:
+					items = list(Path().glob(item))
 				if items:
 					resolved_items.extend(items)
 				else:
 					logger.error(f"No such file or directory: {item}")
+
 		if not resolved_items:
 			return []
 
