@@ -2889,9 +2889,19 @@ class Session:
 						items.append(part)
 				import tarfile
 				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream)
-				tar.add = handle_exceptions(tar.add, stderr_stream.id)
+				def handle_exceptions(func):
+					def inner(*args, **kwargs):
+						try:
+							func(*args, **kwargs)
+						except:
+							stderr_stream << (str(sys.exc_info()[1]) + '\n').encode()
+					return inner
+				tar.add = handle_exceptions(tar.add)
 				for item in items:
-					tar.add(os.path.abspath(item))
+					try:
+						tar.add(os.path.abspath(item))
+					except:
+						stderr_stream << (str(sys.exc_info()[1]) + '\n').encode()
 				tar.close()
 				"""
 
@@ -2910,7 +2920,7 @@ class Session:
 						error_buffer += data.decode()
 						while '\n' in error_buffer:
 							line, error_buffer = error_buffer.split('\n', 1)
-							logger.error(line)
+							logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
 					else:
 						break
 
@@ -2952,12 +2962,14 @@ class Session:
 			except:
 				logger.error("Invalid data returned")
 				return []
-			tar.extract = handle_exceptions(tar.extract)
 
 			with warnings.catch_warnings():
 				warnings.simplefilter("ignore", category=DeprecationWarning)
 				for item in tar:
-					tar.extract(item, local_download_folder)
+					try:
+						tar.extract(item, local_download_folder)
+					except Exception as e:
+						logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
 			tar.close()
 
 			if self.agent:
@@ -3150,12 +3162,13 @@ class Session:
 				code = rf"""
 				import tarfile
 				tar = tarfile.open(name='', mode='r|gz', fileobj=stdin_stream)
-				tar.extract = handle_exceptions(tar.extract, stderr_stream.id)
 				tar.errorlevel = 1
 				for item in tar:
-					tar.extract(item, path='{destination}')
+					try:
+						tar.extract(item, path='{destination}')
+					except:
+						stderr_stream << (str(sys.exc_info()[1]) + '\n').encode()
 				tar.close()
-				stderr_stream << "OK".encode()
 				"""
 				threading.Thread(target=self.exec, args=(code, ), kwargs={
 					'python': True,
@@ -3170,6 +3183,14 @@ class Session:
 				tar_destination, mode = tar_buffer, "r:gz"
 
 			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, format=tarfile.GNU_FORMAT)
+
+			def handle_exceptions(func):
+				def inner(*args, **kwargs):
+					try:
+						func(*args, **kwargs)
+					except Exception as e:
+						logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
+				return inner
 			tar.add = handle_exceptions(tar.add)
 
 			altnames = []
@@ -3192,14 +3213,10 @@ class Session:
 				else:
 					altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
 					tar.add(item, arcname=altname)
-
 				altnames.append(altname)
 			tar.close()
 
 			if self.agent:
-				os.close(stdin_stream._read)
-				os.close(stdin_stream._write)
-				del self.streams[stdin_stream.id]
 				error_buffer = ''
 				while True:
 					r, _, _ = select([stderr_stream], [], [])
@@ -3208,12 +3225,14 @@ class Session:
 						error_buffer += data.decode()
 						while '\n' in error_buffer:
 							line, error_buffer = error_buffer.split('\n', 1)
-							logger.error(line)
-						if error_buffer.endswith("OK"):
-							stdin_stream.write(b"")
+							logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
 					else:
 						break
+				stdin_stream.write(b"")
+				os.close(stdin_stream._read)
+				os.close(stdin_stream._write)
 				os.close(stdout_stream._read)
+				del self.streams[stdin_stream.id]
 				del self.streams[stdout_stream.id]
 				del self.streams[stderr_stream.id]
 
@@ -3856,15 +3875,6 @@ def agent():
 			os.write(control_in, "1".encode())
 		wlock.release()
 
-	def handle_exceptions(func, streamID):
-		def inner(*args, **kwargs):
-			try:
-				func(*args, **kwargs)
-			except:
-				_, e, _ = sys.exc_info()
-				respond(streamID + (str(e) + '\n').encode())
-		return inner
-
 	def cloexec(fd):
 		try:
 			flags = fcntl.fcntl(fd, fcntl.F_GETFD)
@@ -3981,9 +3991,7 @@ def agent():
 									try:
 										{}
 									except:
-										_, e, _ = sys.exc_info()
-										stderr_stream << str(e).encode()
-
+										stderr_stream << (str(sys.exc_info()[1]) + "\n").encode()
 									try:
 										os.close(stdin_stream._read)
 									except:
@@ -4223,15 +4231,6 @@ def ControlC(num, stack):
 def WinResize(num, stack):
 	if core.attached_session is not None and core.attached_session.type == "PTY":
 		core.attached_session.update_pty_size()
-
-def handle_exceptions(func):
-	def inner(*args, **kwargs):
-		try:
-			func(*args, **kwargs)
-		except:
-			_, e, _ = sys.exc_info()
-			logger.error(e)
-	return inner
 
 def custom_excepthook(*args):
 	print("\n", paint('Oops...').RED, '🐞\n', paint().yellow, '─' * 80, sep='')
