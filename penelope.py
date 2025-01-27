@@ -2963,13 +2963,20 @@ class Session:
 				logger.error("Invalid data returned")
 				return []
 
+			def add_w(func):
+				def inner(*args, **kwargs):
+					args[0].mode |= 0o200
+					func(*args, **kwargs)
+				return inner
+
+			tar._extract_member = add_w(tar._extract_member)
+
 			with warnings.catch_warnings():
 				warnings.simplefilter("ignore", category=DeprecationWarning)
-				for item in tar:
-					try:
-						tar.extract(item, local_download_folder)
-					except Exception as e:
-						logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
+				try:
+					tar.extractall(local_download_folder)
+				except Exception as e:
+					logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
 			tar.close()
 
 			if self.agent:
@@ -3613,16 +3620,16 @@ class Session:
 
 
 BINARIES = {
-	'socat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/socat",
-	'ncat': "https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/ncat",
-	'linpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh",
-	'winpeas': "https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEAS.bat",
-	'lse': "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
-	'powerup': "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
-	'ngrok_linux': "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
-	'deepce': "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
-	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
-	'linuxexploitsuggester': "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh"
+'linpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
+'winpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
+'socat':        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/socat",
+'ncat':         "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/ncat",
+'lse':          "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
+'powerup':      "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
+'deepce':       "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
+'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
+'les':          "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh",
+'ngrok_linux':  "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
 }
 
 
@@ -3714,7 +3721,7 @@ class linuxexploitsuggester(Module):
 		Run the latest version of linux-exploit-suggester in the background
 		"""
 		if session.OS == 'Unix':
-			session.script(BINARIES['linuxexploitsuggester'])
+			session.script(BINARIES['les'])
 		else:
 			logger.error("This module runs only on Unix shells")
 
