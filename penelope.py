@@ -1975,7 +1975,7 @@ class Session:
 				self.shell_pid = self.exec("echo $$", value=True)
 				self.bypass_control_session = False
 				if not (isinstance(self.shell_pid, str) and self.shell_pid.isnumeric()):
-					logger.error("Cannot get the PID of the shell. Response: {self.shell_pid}")
+					logger.error(f"Cannot get the PID of the shell. Response: {self.shell_pid}")
 					logger.error("I am killing it...")
 					self.kill()
 					return False
@@ -2429,7 +2429,7 @@ class Session:
 								f"echo $env:{token[2]}$env:{token[0]}\r\n".encode()
 							)
 						if self.subtype == 'cmd' and len(cmd) > MAX_CMD_PROMPT_LEN: # TODO check the maxlength on powershell
-							logger.error("Max cmd prompt length: {MAX_CMD_PROMPT_LEN} characters")
+							logger.error(f"Max cmd prompt length: {MAX_CMD_PROMPT_LEN} characters")
 							return False
 
 					self.subchannel.pattern = re.compile(
@@ -3224,6 +3224,7 @@ class Session:
 			tar.close()
 
 			if self.agent:
+				stdin_stream.write(b"")
 				error_buffer = ''
 				while True:
 					r, _, _ = select([stderr_stream], [], [])
@@ -3235,7 +3236,6 @@ class Session:
 							logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
 					else:
 						break
-				stdin_stream.write(b"")
 				os.close(stdin_stream._read)
 				os.close(stdin_stream._write)
 				os.close(stdout_stream._read)
