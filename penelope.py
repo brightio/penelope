@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.12.16"
+__version__ = "0.13.0"
 
 import os
 import io
@@ -55,7 +55,6 @@ from datetime import datetime
 from textwrap import indent, dedent
 from binascii import Error as binascii_error
 from functools import wraps
-from itertools import islice
 from collections import deque, defaultdict
 from http.server import SimpleHTTPRequestHandler
 from urllib.parse import unquote
@@ -66,6 +65,47 @@ if not sys.version_info >= (3, 6):
 	print("(!) Penelope requires Python version 3.6 or higher (!)")
 	sys.exit()
 
+class LineBuffer:
+	def __init__(self, length):
+		self.len = length
+		self.lines = deque(maxlen=self.len)
+
+	def __lshift__(self, data):
+		if isinstance(data, str):
+			data = data.encode()
+		if self.lines and not self.lines[-1].endswith(b'\n'):
+			current_partial = self.lines.pop()
+		else:
+			current_partial = b''
+		self.lines.extend((current_partial + data).splitlines(keepends=True))
+		return self
+
+	def __bytes__(self):
+		return b''.join(self.lines)
+
+def stdout(data, record=True):
+	sys.stdout.write(data)
+	sys.stdout.flush()
+	if record:
+		core.output_line_buffer << data.encode()
+
+def my_input(text=""):
+	text = "\r" + text
+	core.output_line_buffer << text.encode()
+	core.wait_input = True
+	response = original_input(text)
+	core.wait_input = False
+	return response
+original_input = input
+input = my_input
+
+TRACE_LEVEL_NUM = 25
+logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
+logging.TRACE = TRACE_LEVEL_NUM
+def trace(self, message, *args, **kwargs):
+    if self.isEnabledFor(TRACE_LEVEL_NUM):
+        self._log(TRACE_LEVEL_NUM, message, args, **kwargs)
+logging.Logger.trace = trace
 ################################## PYTHON MISSING BATTERIES ####################################
 
 from random import choice
@@ -113,7 +153,6 @@ def Open(item, terminal=False):
 def ask(text):
 	try:
 		return input(f"{paint(f'[?] {text}: ').yellow}")
-
 	except EOFError:
 		return ask(text)
 
@@ -242,44 +281,133 @@ class Table:
 				fillchar = ' '
 				if index in [*self.fillchar][1:]:
 					fillchar = self.fillchar[0]
-
 				row[index] = element + fillchar * (self.col_max_lens[index] - len(element))
 
+
+class Size:
+	units = ("", "K", "M", "G", "T", "P", "E", "Z", "Y")
+	def __init__(self, _bytes):
+		self.bytes = _bytes
+
+	def __str__(self):
+		index = 0
+		new_size = self.bytes
+		while new_size >= 1024 and index < len(__class__.units) - 1:
+			new_size /= 1024
+			index += 1
+		return f"{new_size:.1f} {__class__.units[index]}Bytes"
+
+	@classmethod
+	def from_str(cls, string):
+		if string.isnumeric():
+			_bytes = int(string)
+		else:
+			try:
+				num, unit = int(string[:-1]), string[-1]
+				_bytes = num * 1024 ** __class__.units.index(unit)
+			except:
+				logger.error("Invalid size specified")
+				sys.exit()
+		return cls(_bytes)
+
+
+from datetime import timedelta
+from threading import Thread, RLock, current_thread
 class PBar:
 	pbars = []
 
-	def __init__(self, end, caption="", max_width=None):
+	def __init__(self, end, caption="", barlen=None, queue=None, metric=None):
+		self.end = end
+		if type(self.end) is not int: self.end = len(self.end)
+		self.active = True if self.end > 0 else False
 		self.pos = 0
-		self.end = end # end > 0 # TODO
-		self.active = True
+		self.percent = 0
 		self.caption = caption
-		self.max_width = max_width
+		self.bar = '#'
+		self.barlen = barlen
+		self.percent_prev = -1
+		self.queue = queue
+		self.metric = metric
+		self.check_interval = 1
+		if self.queue: self.trace_thread = Thread(target=self.trace); self.trace_thread.start(); __class__.render_lock = RLock()
+		if self.metric: Thread(target=self.watch_speed, daemon=True).start()
+		else: self.metric = lambda x: f"{x:,}"
 		__class__.pbars.append(self)
+		print("\x1b[?25l", end='', flush=True)
+		self.render()
 
-	@property
-	def percent(self):
-		return int(self.pos * 100 / self.end)
+	def __bool__(self):
+		return self.active
+
+	def __enter__(self):
+		return self
+
+	def __exit__(self, exc_type, exc_value, traceback):
+		self.terminate()
+
+	def trace(self):
+		while True:
+			data = self.queue.get()
+			self.queue.task_done()
+			if isinstance(data, int): self.update(data)
+			elif data is None: break
+			else: self.print(data)
+
+	def watch_speed(self):
+		self.pos_prev = 0
+		self.elapsed = 0
+		while self:
+			time.sleep(self.check_interval)
+			self.elapsed += self.check_interval
+			self.speed = self.pos - self.pos_prev
+			self.pos_prev = self.pos
+			self.speed_avg = self.pos / self.elapsed
+			if self.speed_avg: self.eta = int(self.end / self.speed_avg) - self.elapsed
+			if self: self.render()
 
 	def update(self, step=1):
+		if not self: return False
 		self.pos += step
-		if self.pos > self.end:
-			self.pos = self.end
-		if self.active:
-			self.render()
+		if self.pos >= self.end: self.pos = self.end
+		self.percent = int(self.pos * 100 / self.end)
+		if self.pos >= self.end: self.terminate()
+		if self.percent > self.percent_prev: self.render()
+
+	def render_one(self):
+		self.percent_prev = self.percent
+		left = f"{self.caption}["
+		elapsed = "" if not hasattr(self, 'elapsed') else f" | Elapsed {timedelta(seconds=self.elapsed)}"
+		speed = "" if not hasattr(self, 'speed') else f" | {self.metric(self.speed)}/s"
+		eta = "" if not hasattr(self, 'eta') else f" | ETA {timedelta(seconds=self.eta)}"
+		right = f"] {str(self.percent).rjust(3)}% ({self.metric(self.pos)}/{self.metric(self.end)}){speed}{elapsed}{eta}"
+		bar_space = self.barlen or os.get_terminal_size().columns - len(left) - len(right)
+		bars = int(self.percent * bar_space / 100) * self.bar
+		print(f'\x1b[2K{left}{bars.ljust(bar_space, ".")}{right}\n', end='', flush=True)
 
 	def render(self):
-		percent = self.percent
-		self.active = False if percent == 100 else True
-		cursor = "\x1b[?25l" if self.active else "\x1b[?25h" # __exit__ TODO
-		left = f"{self.caption} ["
-		right = f"] {str(percent).rjust(3)}%"
-		up = f"\x1b[A" if self.active else ""
-		bar_space = self.max_width if self.max_width else os.get_terminal_size().columns - len(left) - len(right)
-		bars = int(percent * bar_space / 100) * "#"
-		print(f'{cursor}{left}{bars.ljust(bar_space, ".")}{right}{up}')
+		if hasattr(__class__, 'render_lock'): __class__.render_lock.acquire()
+		for pbar in __class__.pbars: pbar.render_one()
+		print(f"\x1b[{len(__class__.pbars)}A", end='', flush=True)
+		if hasattr(__class__, 'render_lock'): __class__.render_lock.release()
+
+	def print(self, data):
+		if hasattr(__class__, 'render_lock'): __class__.render_lock.acquire()
+		print(f"\x1b[2K{data}", flush=True)
+		self.render()
+		if hasattr(__class__, 'render_lock'): __class__.render_lock.release()
 
 	def terminate(self):
-		print("\x1b[?25h")
+		if self.queue and current_thread() != self.trace_thread: self.queue.join(); self.queue.put(None)
+		if hasattr(__class__, 'render_lock'): __class__.render_lock.acquire()
+		if not self: return
+		self.active = False
+		if hasattr(self, 'eta'): del self.eta
+		if not any(__class__.pbars):
+			self.render()
+			print("\x1b[?25h" + '\n' * len(__class__.pbars), end='', flush=True)
+			__class__.pbars.clear()
+		if hasattr(__class__, 'render_lock'): __class__.render_lock.release()
+
 
 class paint:
 	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
@@ -317,18 +445,32 @@ class paint:
 
 class CustomFormatter(logging.Formatter):
 	TEMPLATES = {
-		logging.CRITICAL:	{'color':"RED",		'prefix':"[!!!]"},
-		logging.ERROR:		{'color':"red",		'prefix':"[-]"},
-		logging.WARNING:	{'color':"yellow",	'prefix':"[!]"},
-		logging.INFO:		{'color':"green",	'prefix':"[+]"},
-		logging.DEBUG:		{'color':"magenta",	'prefix':"[DEBUG]"}
+		logging.CRITICAL: {'color':"RED",     'prefix':"[!!!]"},
+		logging.ERROR:    {'color':"red",     'prefix':"[-]"},
+		logging.WARNING:  {'color':"yellow",  'prefix':"[!]"},
+		logging.TRACE:    {'color':"cyan",    'prefix':"[•]"},
+		logging.INFO:     {'color':"green",   'prefix':"[+]"},
+		logging.DEBUG:    {'color':"magenta", 'prefix':"[DEBUG]"}
 	}
 	def format(self, record):
 		template = __class__.TEMPLATES[record.levelno]
+
 		thread = ""
 		if record.levelno is logging.DEBUG or options.debug:
 			thread = paint(" ") + paint(threading.current_thread().name).white_CYAN
-		text = f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}"
+
+		prefix = "\r"
+		suffix = "\r\n"
+
+		if core.wait_input:
+			prefix += "\x1b[2K"
+			suffix += bytes(core.output_line_buffer).decode() + readline.get_line_buffer()
+
+		elif core.attached_session:
+			prefix += "\x1b[2K"
+			suffix += bytes(core.output_line_buffer).decode()
+
+		text = f"{prefix}{template['prefix']}{thread} {logging.Formatter.format(self, record)}{suffix}"
 		return str(getattr(paint(text), template['color']))
 
 class BetterCMD:
@@ -338,15 +480,14 @@ class BetterCMD:
 		self.cmdqueue = []
 		self.completekey = 'tab'
 		self.lastcmd = ''
-		self.active = False
+		self.active = threading.Event()
+		self.stop = False
 
 	def show(self):
 		print()
-#		self.cmdloop()
-		threading.Thread(target=self.cmdloop, name='Menu').start()
+		self.active.set()
 
-	def cmdloop(self):
-
+	def start(self):
 		self.preloop()
 		if readline:
 			readline.set_completer(self.complete)
@@ -354,26 +495,30 @@ class BetterCMD:
 
 		if self.banner:
 			print(self.banner)
-			self.banner = None
 
 		stop = None
-		while not stop:
-			if self.cmdqueue:
-				line = self.cmdqueue.pop(0)
-			else:
-				try:
-					self.active = True
+		while not self.stop:
+			try:
+				self.active.wait()
+				if self.cmdqueue:
+					line = self.cmdqueue.pop(0)
+				else:
 					line = input(self.prompt)
-					self.active = False
-				except EOFError:
-					line = 'EOF'
-				#except KeyboardInterrupt:
-				#	self.interrupt()
-				#	continue
 
-			line = self.precmd(line)
-			stop = self.onecmd(line)
-			stop = self.postcmd(stop, line)
+				original_handler = signal.signal(signal.SIGINT, lambda num, stack: self.interrupt())
+				line = self.precmd(line)
+				stop = self.onecmd(line)
+				stop = self.postcmd(stop, line)
+				signal.signal(signal.SIGINT, original_handler)
+				if stop:
+					self.active.clear()
+			except EOFError:
+				stop = self.onecmd('EOF')
+			except KeyboardInterrupt:
+				self.interrupt()
+				print("^C")
+			except Exception:
+				custom_excepthook(*sys.exc_info())
 		self.postloop()
 
 	def onecmd(self, line):
@@ -387,10 +532,10 @@ class BetterCMD:
 			return func(arg)
 
 	def default(self, line):
-		logger.error(f"Invalid command")
+		cmdlogger.error(f"Invalid command")
 
-#	def interrupt(self):
-#		print("^C")
+	def interrupt(self):
+		pass
 
 	def parseline(self, line):
 		line = line.lstrip()
@@ -401,7 +546,7 @@ class BetterCMD:
 			hist_len = readline.get_current_history_length()
 
 			if not index.isnumeric() or not (0 < int(index) < hist_len):
-				logger.error("Invalid command number")
+				cmdlogger.error("Invalid command number")
 				readline.remove_history_item(hist_len - 1)
 				return None, None, line
 
@@ -462,6 +607,14 @@ class BetterCMD:
 		else:
 			cmdlogger.error("'reset' command doesn't exist on the system")
 
+	def do_exit(self, line):
+		"""
+
+		Exit cmd
+		"""
+		self.stop = True
+		self.active.clear()
+
 	def do_history(self, line):
 		"""
 
@@ -480,7 +633,6 @@ class BetterCMD:
 
 		Open debug console
 		"""
-		self.active = True
 		__class__.write_history(options.cmd_histfile)
 		__class__.load_history(options.debug_histfile)
 		interact(banner=paint(
@@ -563,13 +715,13 @@ class MainMenu(BetterCMD):
 
 		except EOFError:
 			return __class__.confirm(text)
+
 		except KeyboardInterrupt:
 			print("^C")
 
 	def set_id(self, ID):
 		self.sid = ID
-		session_part = f"{paint('Session').green} {paint('[' + str(self.sid) + ']').red} "\
-				if self.sid else ''
+		session_part = f"{paint('Session').green} {paint('[' + str(self.sid) + ']').red} " if self.sid else ''
 		self.prompt = f"{paint(f'┍┽ {__program__} ┾┑').magenta} {session_part}> "
 
 	def session(current=False, extra=[]):
@@ -600,10 +752,12 @@ class MainMenu(BetterCMD):
 			return newfunc
 		return inner
 
-	#def interrupt(self):
-	#	super().interrupt()
-	#	if menu.sid:
-	#		core.sessions[menu.sid].subchannel.control << 'stop'
+	def interrupt(self):
+		if core.attached_session and not core.attached_session.readline:
+			core.attached_session.detach()
+		else:
+			if menu.sid and not core.sessions[menu.sid].agent: # TEMP
+				core.sessions[menu.sid].control_session.subchannel.control << 'stop'
 
 	def show_help(self, command):
 		help_prompt = re.compile(r"Run 'help [^\']*' for more information") # TODO
@@ -756,7 +910,7 @@ class MainMenu(BetterCMD):
 			0.0.0.0:8080 -> 192.168.0.1:80	Forward 0.0.0.0:8080 to 192.168.0.1:80
 		"""
 		if not line:
-			logger.warning("No parameters...")
+			cmdlogger.warning("No parameters...")
 			return False
 
 		match = re.search(r"((?:.*)?)(<-|->)((?:.*)?)", line)
@@ -765,7 +919,7 @@ class MainMenu(BetterCMD):
 			arrow = match.group(2)
 			group2 = match.group(3)
 		else:
-			logger.warning("Invalid syntax")
+			cmdlogger.warning("Invalid syntax")
 			return False
 
 		if arrow == '->':
@@ -779,10 +933,10 @@ class MainMenu(BetterCMD):
 					rport = match.group(2)
 					lport = rport
 				if not rport:
-					logger.warning("At least remote port is required")
+					cmdlogger.warning("At least remote port is required")
 					return False
 			else:
-				logger.warning("At least remote port is required")
+				cmdlogger.warning("At least remote port is required")
 				return False
 
 			if group1:
@@ -791,7 +945,7 @@ class MainMenu(BetterCMD):
 					lhost = match.group(1)
 					lport = match.group(2)
 				else:
-					logger.warning("Invalid syntax")
+					cmdlogger.warning("Invalid syntax")
 					return False
 
 		elif arrow == '<-':
@@ -803,7 +957,7 @@ class MainMenu(BetterCMD):
 			if group1:
 				lhost, lport = group1.split(':')
 			else:
-				logger.warning("At least local port is required")
+				cmdlogger.warning("At least local port is required")
 				return False
 
 		core.sessions[self.sid].portfwd(_type=_type, lhost=lhost, lport=lport, rhost=rhost, rport=int(rport))
@@ -911,7 +1065,7 @@ class MainMenu(BetterCMD):
 			if module:
 				module.run(core.sessions[self.sid])
 			else:
-				logger.warning(f"Module '{module_name}' does not exist")
+				cmdlogger.warning(f"Module '{module_name}' does not exist")
 		else:
 			self.show_modules()
 
@@ -1159,14 +1313,15 @@ class MainMenu(BetterCMD):
 		Exit Penelope
 		"""
 		if __class__.confirm(f"Exit Penelope?{self.active_sessions}"):
+			super().do_exit(line)
 			core.stop()
 			for thread in threading.enumerate():
 				if thread.name == 'Core':
 					thread.join()
-			logger.info("Exited!")
-			remaining_threads = [thread for thread in threading.enumerate() if thread.name not in ('MainThread', 'Menu')]
-			if DEV_MODE and remaining_threads:
-				logger.error(f"REMAINING THREADS: {remaining_threads}")
+			cmdlogger.info("Exited!")
+			remaining_threads = [thread for thread in threading.enumerate()]
+			if options.dev_mode and remaining_threads:
+				cmdlogger.error(f"REMAINING THREADS: {remaining_threads}")
 			return True
 		return False
 
@@ -1238,13 +1393,15 @@ class MainMenu(BetterCMD):
 		elif line == '.':
 			return self.onecmd('dir')
 		else:
-			parts = line.split()
+			parts = line.split(" ", 1)
 			candidates = [command for command in self.raw_commands if command.startswith(parts[0])]
 			if not candidates:
 				cmdlogger.warning(f"No such command: '{line}'. Issue 'help' for all available commands")
 			elif len(candidates) == 1:
-				cmd = f"{candidates[0]} {' '.join(parts[1:])}"
-				print(f"\x1b[1A{self.prompt}{cmd}")
+				cmd = candidates[0]
+				if len(parts) == 2:
+					cmd += " " + parts[1]
+				stdout(f"\x1b[1A\x1b[2K{self.prompt}{cmd}\n", False)
 				return self.onecmd(cmd)
 			else:
 				cmdlogger.warning(f"Ambiguous command. Can mean any of: {candidates}")
@@ -1341,6 +1498,9 @@ class Core:
 		self.fileservers = {}
 		self.forwardings = {}
 
+		self.output_line_buffer = LineBuffer(1)
+		self.wait_input = False
+
 	def __getattr__(self, name):
 
 		if name == 'hosts':
@@ -1410,7 +1570,7 @@ class Core:
 						if session.readline:
 							continue
 
-						data = os.read(sys.stdin.fileno(), NET_BUF_SIZE)
+						data = os.read(sys.stdin.fileno(), options.network_buffer_size)
 
 						if session.subtype == 'cmd':
 							self._cmd = data
@@ -1435,7 +1595,7 @@ class Core:
 				# The sessions
 				elif readable.__class__ is Session:
 					try:
-						data = readable.socket.recv(NET_BUF_SIZE)
+						data = readable.socket.recv(options.network_buffer_size)
 						if not data:
 							raise OSError
 
@@ -1469,7 +1629,7 @@ class Core:
 					shell_output = readable.shell_response_buf.getvalue() # TODO
 					if shell_output:
 						if readable.is_attached:
-							os.write(sys.stdout.fileno(), shell_output)
+							stdout(shell_output.decode())
 
 						readable.record(shell_output)
 
@@ -1704,21 +1864,6 @@ class Listener:
 		return '\n'.join(output)
 
 
-class LineBuffer:
-
-	def __init__(self):
-		self.len = 100
-		self.buffer = deque(maxlen=self.len)
-
-	def __lshift__(self, data):
-		if data:
-			self.buffer.extendleft(data.splitlines(keepends=True))
-
-	def __bytes__(self):
-		lines = os.get_terminal_size().lines
-		return b''.join(list(islice(self.buffer, 0, lines-1))[::-1])
-
-
 class Channel:
 
 	def __init__(self, raw=False, expect = []):
@@ -1732,7 +1877,7 @@ class Channel:
 		return self._read
 
 	def read(self):
-		return os.read(self._read, NET_BUF_SIZE)
+		return os.read(self._read, options.network_buffer_size)
 
 	def write(self, data):
 		os.write(self._write, data)
@@ -1777,7 +1922,7 @@ class Session:
 		self.prompt = None
 		self.new = True
 
-		self.last_lines = LineBuffer()
+		self.last_lines = LineBuffer(options.attach_lines)
 		self.lock = threading.Lock()
 		self.wlock = threading.Lock()
 
@@ -1789,7 +1934,6 @@ class Session:
 		self.latency = None
 
 		self.alternate_buffer = False
-		self.need_resize = False
 		self.agent = False
 		self.messenger = Messenger(io.BytesIO)
 
@@ -1813,8 +1957,6 @@ class Session:
 		logger.debug(f"Assigned session ID: {self.id}")
 		core.rlist.append(self)
 		core.sessions[self.id] = self
-
-		self.script = self.run_in_background(self.script)
 
 		if self.determine():
 
@@ -1854,15 +1996,15 @@ class Session:
 			attach_conditions = [
 				# Is a reverse shell and the Menu is not active and reached the maintain value
 				#self.listener and not menu.active and len(core.hosts[self.name]) == options.maintain,
-				self.listener and not "Menu" in core.threads and len(core.hosts[self.name]) == options.maintain,
+				self.listener and not menu.active.is_set() and len(core.hosts[self.name]) == options.maintain,
 
 				# Is a bind shell and is not spawned from the Menu
 				#not self.listener and not menu.active,
-				not self.listener and not "Menu" in core.threads,
+				not self.listener and not menu.active.is_set(),
 
 				# Is a bind shell and is spawned from the connect Menu command
 				#not self.listener and menu.active and menu.lastcmd.startswith('connect')
-				not self.listener and "Menu" in core.threads and menu.lastcmd.startswith('connect')
+				not self.listener and menu.active.is_set() and menu.lastcmd.startswith('connect')
 			]
 
 			if hasattr(listener_menu, 'active') and listener_menu.active:
@@ -1877,11 +2019,13 @@ class Session:
 						# Attach the newly created session
 						self.attach()
 
+				else:
+					menu.show()
 				# If auto-attach is disabled and the menu is not active
 				#elif not menu.active:
-				elif not "Menu" in core.threads:
+				#elif not menu.active.is_set():
 					# Then show the menu
-					menu.show()
+					#menu.show()
 		else:
 			self.kill()
 		return
@@ -2216,14 +2360,6 @@ class Session:
 					self.prompt = re.sub(var_value1.encode() + var_value2.encode(), b"", self.prompt)
 		return True
 
-	def run_in_background(self, func):
-		def wrapper(*args, **kwargs):
-			if self.agent:
-				threading.Thread(target=func, args=args, kwargs=kwargs).start()
-			else:
-				return func(*args, **kwargs)
-		return wrapper
-
 	def exec(
 		self,
 		cmd=None, 		# The command line to run
@@ -2309,10 +2445,10 @@ class Session:
 
 						if readable is stdin_src:
 							if hasattr(stdin_src, 'read'): # FIX
-								data = stdin_src.read(NET_BUF_SIZE)
+								data = stdin_src.read(options.network_buffer_size)
 							elif hasattr(stdin_src, 'recv'):
 								try:
-									data = stdin_src.recv(NET_BUF_SIZE)
+									data = stdin_src.recv(options.network_buffer_size)
 								except OSError:
 									pass # TEEEEMP
 							stdin_stream.write(data)
@@ -2321,7 +2457,7 @@ class Session:
 								rlist.remove(stdin_src)
 
 						if readable is stdout_stream:
-							data = readable.read(NET_BUF_SIZE)
+							data = readable.read(options.network_buffer_size)
 							if value:
 								buffer.write(data)
 							elif stdout_dst:
@@ -2342,7 +2478,7 @@ class Session:
 								del self.streams[readable.id]
 
 						if readable is stderr_stream:
-							data = readable.read(NET_BUF_SIZE)
+							data = readable.read(options.network_buffer_size)
 							if value:
 								buffer.write(data)
 							elif stderr_dst:
@@ -2612,7 +2748,7 @@ class Session:
 					_decode = 'decodestring'
 					_exec = 'exec cmd in globals(), locals()'
 
-				agent = dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, NET_BUF_SIZE, MESSENGER, STREAM, SH, _exec)
+				agent = dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, options.network_buffer_size, MESSENGER, STREAM, SH, _exec)
 				payload = base64.b64encode(compress(agent.encode(), 9)).decode()
 				cmd = f'{_bin} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
@@ -2754,6 +2890,9 @@ class Session:
 		if core.attached_session is not None:
 			return False
 
+		#core.output_line_buffer.lines.pop()
+		#core.wait_input = False
+
 		if self.type == 'PTY':
 			escape_key = options.escape['key']
 		elif self.readline:
@@ -2767,13 +2906,14 @@ class Session:
 			f"{paint(escape_key).MAGENTA} "
 		)
 
+		if not options.no_log:
+			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} 📜")
+		stdout('─' * 40 + "\r\n")
+
 		core.attached_session = self
 		core.rlist.append(sys.stdin)
 
-		if not options.no_log:
-			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} 📜")
-
-		os.write(sys.stdout.fileno(), bytes(self.last_lines))
+		stdout(bytes(self.last_lines).decode())
 
 		if self.type == 'PTY':
 			tty.setraw(sys.stdin)
@@ -2811,7 +2951,7 @@ class Session:
 
 		if self.id in core.sessions:
 			print()
-			logger.warning("Session detached...")
+			logger.warning("Session detached ⇲")
 			menu.set_id(self.id)
 		else:
 			if options.single_session and len(core.sessions) == 0:
@@ -2915,7 +3055,7 @@ class Session:
 				error_buffer = ''
 				while True:
 					r, _, _ = select([stderr_stream], [], [])
-					data = stderr_stream.read(NET_BUF_SIZE)
+					data = stderr_stream.read(options.network_buffer_size)
 					if data:
 						error_buffer += data.decode()
 						while '\n' in error_buffer:
@@ -3228,7 +3368,7 @@ class Session:
 				error_buffer = ''
 				while True:
 					r, _, _ = select([stderr_stream], [], [])
-					data = stderr_stream.read(NET_BUF_SIZE)
+					data = stderr_stream.read(options.network_buffer_size)
 					if data:
 						error_buffer += data.decode()
 						while '\n' in error_buffer:
@@ -3323,6 +3463,7 @@ class Session:
 		for item in altnames:
 			uploaded_path = shlex.quote(str(item)) if self.OS == 'Unix' else f'"{item}"'
 			logger.info(f"{paint('Upload OK').GREEN_white} {paint(uploaded_path).yellow}")
+			print()
 
 		return altnames
 
@@ -3357,21 +3498,27 @@ class Session:
 		output_file_name = local_script_folder / (prefix + "output.txt")
 
 		try:
-			with open(local_script, "rb") as input_file, open(output_file_name, "wb") as output_file:
+			input_file = open(local_script, "rb")
+			output_file = open(output_file_name, "wb")
+			first_line = input_file.readline().strip()
+			#input_file.seek(0) # Maybe it is not needed
+			if first_line.startswith(b'#!'):
+				program = first_line[2:].decode()
+			else:
+				logger.error("No shebang found")
+				return False
 
-				first_line = input_file.readline().strip()
-				#input_file.seek(0) # Maybe it is not needed
-				if first_line.startswith(b'#!'):
-					program = first_line[2:].decode()
-				else:
-					logger.error("No shebang found")
-					return False
+			tail_cmd = f'tail -n+0 -f {output_file_name}'
+			Open(tail_cmd, terminal=True)
+			print(tail_cmd)
 
-				tail_cmd = f'\ntail -n+0 -f {output_file_name}'
-				Open(tail_cmd, terminal=True)
-				print(tail_cmd)
+			thread = threading.Thread(target=self.exec, args=(program, ), kwargs={
+				'stdin_src': input_file,
+				'stdout_dst': output_file,
+				'stderr_dst': output_file
+			})
+			thread.start()
 
-				self.exec(program, stdin_src=input_file, stdout_dst=output_file, stderr_dst=output_file)
 		except Exception as e:
 			logger.error(e)
 			return False
@@ -3458,7 +3605,7 @@ class Session:
 
 					for readable in readables:
 						if readable is stdin_stream:
-							data = stdin_stream.read(NET_BUF_SIZE)
+							data = stdin_stream.read({options.network_buffer_size})
 							if not connected:
 								client.connect(("{rhost}", {rport}))
 								client.setblocking(False)
@@ -3473,7 +3620,7 @@ class Session:
 								break
 						if readable is client:
 							try:
-								data = client.recv(NET_BUF_SIZE)
+								data = client.recv({options.network_buffer_size})
 								stdout_stream.write(data)
 								if not data:
 									frlist.remove(client) # TEMP
@@ -3562,10 +3709,9 @@ class Session:
 					module.run(self)
 
 			core.control << f'self.sessions[{self.id}].kill()'
-			if thread_name == 'Menu':
-				menu.kill_wait = queue.Queue()
-				logger.error(menu.kill_wait.get())
-				del menu.kill_wait
+
+			if hasattr(menu, 'sid') and hasattr(self, 'id') and menu.sid == self.id:
+				menu.set_id(None)
 
 			self.maintain()
 			return
@@ -3593,13 +3739,7 @@ class Session:
 			if not core.hosts[self.name]:
 				message += f" We lost {paint(self.name).white_RED} 💔"
 
-		if hasattr(menu, 'kill_wait'):
-			menu.kill_wait.put(message)
-		else:
-			logger.error(message)
-
-		if hasattr(menu, 'sid') and hasattr(self, 'id') and menu.sid == self.id:
-			menu.set_id(None)
+		logger.error(message)
 
 		if hasattr(self, 'logfile'):
 			self.logfile.close()
@@ -4120,7 +4260,7 @@ class FileServer:
 			for urlpath, filepath in self.filemap.items():
 				table += (paint(f"{'📁' if os.path.isdir(filepath) else '📄'} ").green + paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath)
 			output.append(str(table))
-			output.append("-" * len(output[1]))
+			output.append("─" * len(output[1]))
 
 		return '\n'.join(output)
 
@@ -4225,34 +4365,22 @@ class FileServer:
 			logger.warning(f"Shutting down Fileserver #{self.id}")
 		self.httpd.shutdown()
 
-def ControlC(num, stack):
-	if core.attached_session and not core.attached_session.readline:
-		core.attached_session.detach()
-
-	elif "Menu" in core.threads:
-		if menu.sid and not core.sessions[menu.sid].agent:
-			core.sessions[menu.sid].control_session.subchannel.control << 'stop'
-	elif not core.sessions:
-		core.stop()
-
 def WinResize(num, stack):
 	if core.attached_session is not None and core.attached_session.type == "PTY":
 		core.attached_session.update_pty_size()
 
 def custom_excepthook(*args):
-	print("\n", paint('Oops...').RED, '🐞\n', paint().yellow, '─' * 80, sep='')
 	if len(args) == 1 and hasattr(args[0], 'exc_type'):
 		exc_type, exc_value, exc_traceback = args[0].exc_type, args[0].exc_value, args[0].exc_traceback
 	elif len(args) == 3:
 		exc_type, exc_value, exc_traceback = args
 	else:
 		return
+	print("\n", paint('Oops...').RED, '🐞\n', paint().yellow, '─' * 80, sep='')
 	sys.__excepthook__(exc_type, exc_value, exc_traceback)
 	print('─' * 80, f"\n{paint('Penelope version:').red} {paint(__version__).green}")
 	print(f"{paint('Python version:').red} {paint(sys.version).green}")
-	print(f"{paint('System:').red} {paint(platform.version()).green}")
-	if not menu.active:
-		menu.show()
+	print(f"{paint('System:').red} {paint(platform.version()).green}\n")
 
 sys.excepthook = custom_excepthook
 threading.excepthook = custom_excepthook
@@ -4262,7 +4390,6 @@ OS = platform.system()
 OSes = {'Unix':'🐧', 'Windows':'💻'}
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
 DISPLAY = 'DISPLAY' in os.environ
-NET_BUF_SIZE = 16384
 MAX_CMD_PROMPT_LEN = 335
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 MESSENGER = inspect.getsource(Messenger)
@@ -4271,16 +4398,13 @@ AGENT = inspect.getsource(agent)
 
 # INITIALIZATION
 os.umask(0o007)
-signal.signal(signal.SIGINT, ControlC)
+#signal.signal(signal.SIGINT, ControlC)
 signal.signal(signal.SIGWINCH, WinResize)
 try:
 	import readline
 except ImportError:
 	readline = None
 
-## CREATE BASIC OBJECTS
-core = Core()
-menu = MainMenu()
 
 # OPTIONS
 class Options:
@@ -4301,6 +4425,7 @@ class Options:
 		self.no_attach = False
 		self.no_upgrade = False
 		self.debug = False
+		self.dev_mode = False
 		self.latency = .01
 		self.histlength = 2000
 		self.long_timeout = 60
@@ -4310,12 +4435,14 @@ class Options:
 		self.proxy = ''
 		self.upload_chunk_size = 51200
 		self.download_chunk_size = 1048576
+		self.network_buffer_size = 16384
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
 		self.logfile = f"{__program__}.log"
 		self.debug_logfile = "debug.log"
 		self.cmd_histfile = 'cmd_history'
 		self.debug_histfile = 'cmd_debug_history'
 		self.useragent = "Wget/1.21.2"
+		self.attach_lines = 20
 
 	def __getattribute__(self, option):
 		if option in ("logfile", "debug_logfile", "cmd_histfile", "debug_histfile"):
@@ -4381,14 +4508,17 @@ options = Options()
 ## LOGGERS
 stdout_handler = logging.StreamHandler()
 stdout_handler.setFormatter(CustomFormatter())
+stdout_handler.terminator = ''
 
 file_handler = logging.FileHandler(options.logfile)
 file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
 file_handler.setLevel('INFO') # ??? TODO
+file_handler.terminator = ''
 
 debug_file_handler = logging.FileHandler(options.debug_logfile)
 debug_file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
 debug_file_handler.addFilter(lambda record: True if record.levelno == logging.DEBUG else False)
+debug_file_handler.terminator = ''
 
 logger = logging.getLogger(__program__)
 logger.addHandler(stdout_handler)
@@ -4399,8 +4529,7 @@ cmdlogger = logging.getLogger(f"{__program__}_cmd")
 cmdlogger.setLevel(logging.INFO)
 cmdlogger.addHandler(stdout_handler)
 
-DEV_MODE = False
-if DEV_MODE:
+if options.dev_mode:
 	#stdout_handler.addFilter(lambda record: True if record.levelno != logging.DEBUG else False)
 	#logger.setLevel('DEBUG')
 	#options.max_maintain = 50
@@ -4439,7 +4568,7 @@ def url_to_bytes(URL):
 
 	req = Request(URL, headers={'User-Agent': options.useragent})
 
-	logger.info(paint(f"--- ⇣  Downloading {URL}").blue)
+	logger.trace(paint(f"Download URL: {URL}").cyan)
 	ctx = ssl.create_default_context() if options.verify_ssl_cert else ssl._create_unverified_context()
 
 	while True:
@@ -4470,7 +4599,17 @@ def url_to_bytes(URL):
 		filename = URL.split('/')[-1]
 	else:
 		filename = URL.split('/')[-2]
-	data = response.read()
+
+	size = int(response.headers.get('Content-Length'))
+	data = bytearray()
+	pbar = PBar(size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+	while True:
+		chunk = response.read(options.network_buffer_size)
+		if not chunk:
+			break
+		data.extend(chunk)
+		pbar.update(len(chunk))
+
 	return filename, data
 
 def listener_menu():
@@ -4478,21 +4617,20 @@ def listener_menu():
 		return False
 
 	listener_menu.active = True
-	func = None
+	func = lambda: _
 	listener_menu.control_r, listener_menu.control_w = os.pipe()
 
 	listener_menu.finishing = threading.Event()
 
 	while True:
 		tty.setraw(sys.stdin)
-		sys.stdout.write(
+		stdout(
 			f"\r\x1b[?25l{paint('➤ ').white} "
 			f"💀 {paint('Show Payloads').magenta} (p) "
 			f"🏠 {paint('Main Menu').green} (m) "
 			f"🔄 {paint('Clear').yellow} (Ctrl-L) "
 			f"🚫 {paint('Quit').red} (q/Ctrl-C)\r\n"
 		)
-		sys.stdout.flush()
 
 		r, _, _ = select([sys.stdin, listener_menu.control_r], [], [])
 		termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
@@ -4510,15 +4648,14 @@ def listener_menu():
 				os.system("clear")
 			elif command in ('q', '\x03'):
 				func = core.stop
+				menu.stop = True
 				break
-			sys.stdout.write('\x1b[1A')
+			stdout('\x1b[1A')
 			continue
 		break
 
-	sys.stdout.write("\x1b[?25h\r")
-	sys.stdout.flush()
-	if func:
-		func()
+	stdout("\x1b[?25h\r")
+	func()
 	os.close(listener_menu.control_r)
 	listener_menu.active = False
 	listener_menu.finishing.set()
@@ -4555,6 +4692,11 @@ def fonts_installed():
 if not fonts_installed():
 	logger.warning("For showing emojis please install 'fonts-noto-color-emoji'")
 
+## CREATE BASIC OBJECTS
+core = Core()
+menu = MainMenu()
+start = menu.start
+
 def main():
 
 	## COMMAND LINE OPTIONS
@@ -4571,10 +4713,6 @@ def main():
 	hints.add_argument("-a", "--hints", help="Show sample payloads for reverse shell based on the registered Listeners", action="store_true")
 	hints.add_argument("-l", "--interfaces", help="Show the available network interfaces", action="store_true")
 	hints.add_argument("-h", "--help", action="help", help="show this help message and exit")
-
-	verbosity = parser.add_argument_group("Verbosity")
-	verbosity.add_argument("-Q", "--silent", help="Be a bit less verbose", action="store_true")
-	verbosity.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
 
 	log = parser.add_argument_group("Session Logging")
 	log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
@@ -4596,8 +4734,12 @@ def main():
 	debug = parser.add_argument_group("Debug")
 	debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
 	debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
+	debug.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
+	debug.add_argument("-dd", "--dev-mode", help="Developer mode", action="store_true")
 
 	parser.parse_args(None, options)
+
+	original_handler = signal.signal(signal.SIGINT, lambda num, stack: core.stop())
 
 	# Version
 	if options.version:
@@ -4629,12 +4771,18 @@ def main():
 	for port in options.ports:
 		# Bind shell
 		if options.connect:
-			Connect(options.connect, port)
+			if not Connect(options.connect, port):
+				return
 		# Reverse Listener
 		else:
 			Listener(host=options.interface, port=port)
+			if not core.listeners:
+				return
 
 	listener_menu()
+	signal.signal(signal.SIGINT, original_handler)
+	return True
 
 if __name__ == "__main__":
-	main()
+	if main():
+		menu.start()
