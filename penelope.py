@@ -58,7 +58,7 @@ from functools import wraps
 from collections import deque, defaultdict
 from http.server import SimpleHTTPRequestHandler
 from urllib.parse import unquote
-from configparser import ConfigParser
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 ################################## PYTHON MISSING BATTERIES ####################################
@@ -460,8 +460,7 @@ def stdout(data, record=True):
 		core.output_line_buffer << data.encode()
 
 def my_input(text=""):
-	#text = "\r" + text
-	core.output_line_buffer << text.encode()
+	core.output_line_buffer << b"\n" + text.encode()
 	core.wait_input = True
 	response = original_input(text)
 	core.wait_input = False
@@ -2904,7 +2903,7 @@ class Session:
 
 		if not options.no_log:
 			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} 📜")
-		stdout('─' * 40 + "\r\n")
+		stdout('─' * 80 + "\r\n")
 
 		core.attached_session = self
 		core.rlist.append(sys.stdin)
@@ -4416,9 +4415,9 @@ def url_to_bytes(URL):
 		try:
 			response = urlopen(req, context=ctx, timeout=options.short_timeout)
 			break
-		except (urllib.error.HTTPError, TimeoutError) as e:
+		except (HTTPError, TimeoutError) as e:
 			logger.error(e)
-		except urllib.error.URLError as e:
+		except URLError as e:
 			logger.error(e.reason)
 			if type(e.reason) == ssl.SSLCertVerificationError:
 				answer = ask("Cannot verify SSL Certificate. Download anyway? (y/N)")
