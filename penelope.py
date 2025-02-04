@@ -4140,6 +4140,17 @@ class lse(Module):
 			logger.error("This module runs only on Unix shells")
 
 
+class linuxexploitsuggester(Module):
+	def run(session):
+		"""
+		Run the latest version of linux-exploit-suggester in the background
+		"""
+		if session.OS == 'Unix':
+			session.script(URLS['les'])
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
 class meterpreter(Module):
 	def run(session):
 		"""
@@ -4180,17 +4191,6 @@ class ngrok(Module):
 			session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin")
 			token = input("Authtoken: ")
 			session.exec(f"ngrok config add-authtoken {token}")
-		else:
-			logger.error("This module runs only on Unix shells")
-
-
-class linuxexploitsuggester(Module):
-	def run(session):
-		"""
-		Run the latest version of linux-exploit-suggester in the background
-		"""
-		if session.OS == 'Unix':
-			session.script(URLS['les'])
 		else:
 			logger.error("This module runs only on Unix shells")
 
