@@ -508,8 +508,8 @@ class BetterCMD:
 			except EOFError:
 				stop = self.onecmd('EOF')
 			except KeyboardInterrupt:
-				self.interrupt()
 				print("^C")
+				self.interrupt()
 			except Exception:
 				custom_excepthook(*sys.exc_info())
 		self.postloop()
@@ -707,6 +707,7 @@ class MainMenu(BetterCMD):
 			return answer.lower() == 'y'
 
 		except EOFError:
+			print()
 			return __class__.confirm(text)
 
 		except KeyboardInterrupt:
@@ -3022,6 +3023,10 @@ class Session:
 					else:
 						items.append(part)
 				import tarfile
+				if hasattr(tarfile, 'DEFAULT_FORMAT'):
+					tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
+				else:
+					tarfile.TarFile.posix = True
 				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream)
 				def handle_exceptions(func):
 					def inner(*args, **kwargs):
@@ -3302,6 +3307,10 @@ class Session:
 
 				code = rf"""
 				import tarfile
+				if hasattr(tarfile, 'DEFAULT_FORMAT'):
+					tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
+				else:
+					tarfile.TarFile.posix = True
 				tar = tarfile.open(name='', mode='r|gz', fileobj=stdin_stream)
 				tar.errorlevel = 1
 				for item in tar:
@@ -3323,7 +3332,7 @@ class Session:
 				tar_buffer = io.BytesIO()
 				tar_destination, mode = tar_buffer, "r:gz"
 
-			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, format=tarfile.GNU_FORMAT)
+			tar = tarfile.open(mode='w|gz', fileobj=tar_destination)
 
 			def handle_exceptions(func):
 				def inner(*args, **kwargs):
@@ -4784,11 +4793,12 @@ MESSENGER = inspect.getsource(Messenger)
 STREAM = inspect.getsource(Stream)
 AGENT = inspect.getsource(agent)
 
-# Engine initialization
+# Python modifications
 original_input = input
 input = my_input
 sys.excepthook = custom_excepthook
 threading.excepthook = custom_excepthook
+tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 os.umask(0o007)
 signal.signal(signal.SIGWINCH, WinResize)
 try:
