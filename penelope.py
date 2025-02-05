@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.0"
+__version__ = "0.13.1"
 
 import os
 import io
@@ -447,17 +447,16 @@ class LineBuffer:
 			current_partial = self.lines.pop()
 		else:
 			current_partial = b''
-		self.lines.extend((current_partial + data).splitlines(keepends=True))
+		self.lines.extend((current_partial + data).split(b'\n'))
 		return self
 
 	def __bytes__(self):
-		return b''.join(self.lines)
+		return b'\n'.join(self.lines)
 
 def stdout(data, record=True):
-	sys.stdout.write(data)
-	sys.stdout.flush()
+	os.write(sys.stdout.fileno(), data)
 	if record:
-		core.output_line_buffer << data.encode()
+		core.output_line_buffer << data
 
 def my_input(text=""):
 	core.output_line_buffer << b"\n" + text.encode()
@@ -1395,7 +1394,7 @@ class MainMenu(BetterCMD):
 				cmd = candidates[0]
 				if len(parts) == 2:
 					cmd += " " + parts[1]
-				stdout(f"\x1b[1A\x1b[2K{self.prompt}{cmd}\n", False)
+				stdout(f"\x1b[1A\x1b[2K{self.prompt}{cmd}\n".encode(), False)
 				return self.onecmd(cmd)
 			else:
 				cmdlogger.warning(f"Ambiguous command. Can mean any of: {candidates}")
@@ -1624,7 +1623,7 @@ class Core:
 					shell_output = readable.shell_response_buf.getvalue() # TODO
 					if shell_output:
 						if readable.is_attached:
-							stdout(shell_output.decode())
+							stdout(shell_output)
 
 						readable.record(shell_output)
 
@@ -2903,12 +2902,12 @@ class Session:
 
 		if not options.no_log:
 			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} 📜")
-		stdout('─' * 80 + "\r\n")
+		print('─' * 80)
 
 		core.attached_session = self
 		core.rlist.append(sys.stdin)
 
-		stdout(bytes(self.last_lines).decode())
+		stdout(bytes(self.last_lines))
 
 		if self.type == 'PTY':
 			tty.setraw(sys.stdin)
@@ -4469,7 +4468,7 @@ def listener_menu():
 			f"💀 {paint('Show Payloads').magenta} (p) "
 			f"🏠 {paint('Main Menu').green} (m) "
 			f"🔄 {paint('Clear').yellow} (Ctrl-L) "
-			f"🚫 {paint('Quit').red} (q/Ctrl-C)\r\n"
+			f"🚫 {paint('Quit').red} (q/Ctrl-C)\r\n".encode()
 		)
 
 		r, _, _ = select([sys.stdin, listener_menu.control_r], [], [])
@@ -4490,11 +4489,11 @@ def listener_menu():
 				func = core.stop
 				menu.stop = True
 				break
-			stdout('\x1b[1A')
+			stdout(b"\x1b[1A")
 			continue
 		break
 
-	stdout("\x1b[?25h\r")
+	stdout(b"\x1b[?25h\r")
 	func()
 	os.close(listener_menu.control_r)
 	listener_menu.active = False
