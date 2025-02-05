@@ -4040,6 +4040,8 @@ def agent():
 										os.close(stdin_stream._read)
 									except:
 										pass
+
+									del streams[stdin_stream_id]
 									stdout_stream << "".encode()
 									stderr_stream << "".encode()
 								threading.Thread(target=run, args=(stdin_stream, stdout_stream, stderr_stream)).start()
@@ -4047,13 +4049,9 @@ def agent():
 						# Incoming streams
 						elif _type == Messenger.STREAM:
 							stream_id, data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
-							exist = stream_id in streams
-							if data and not exist:
+							if not stream_id in streams:
 								streams[stream_id] = Stream(stream_id)
-							if exist:
-								streams[stream_id] << data
-							if not data and exist:
-								del streams[stream_id]
+							streams[stream_id] << data
 
 				# Outgoing streams
 				else:
