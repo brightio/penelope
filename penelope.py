@@ -482,17 +482,19 @@ class BetterCMD:
 
 	def start(self):
 		self.preloop()
-		if readline:
-			readline.set_completer(self.complete)
-			readline.parse_and_bind(self.completekey + ": complete")
-
 		if self.banner:
 			print(self.banner)
+
+		if readline:
+			readline.set_completer(self.complete)
+			readline.set_completer_delims(" \t\n\"'><=;|&(:")
+			readline.parse_and_bind(self.completekey + ": complete")
 
 		stop = None
 		while not self.stop:
 			try:
 				self.active.wait()
+
 				if self.cmdqueue:
 					line = self.cmdqueue.pop(0)
 				else:
@@ -639,7 +641,7 @@ class BetterCMD:
 		return []
 
 	def completenames(self, text, *ignored):
-		dotext = 'do_'+text
+		dotext = 'do_' + text
 		return [a[3:] for a in dir(self.__class__) if a.startswith(dotext)]
 
 	def complete(self, text, state):
@@ -665,6 +667,12 @@ class BetterCMD:
 			return self.completion_matches[state]
 		except IndexError:
 			return None
+	@staticmethod
+	def file_completer(text):
+		matches = glob(text + '*')
+		matches = [m + '/' if os.path.isdir(m) else m for m in matches]
+		matches = [f"'{m}'" if ' ' in m else m for m in matches]
+		return matches
 
 ##########################################################################################################
 
@@ -715,8 +723,8 @@ class MainMenu(BetterCMD):
 
 	def set_id(self, ID):
 		self.sid = ID
-		session_part = f"{paint('Session').green} {paint('[' + str(self.sid) + ']').red} " if self.sid else ''
-		self.prompt = f"{paint(f'┍┽ {__program__} ┾┑').magenta} {session_part}> "
+		session_part = f"{paint('─(').cyan}{paint('Session').green} {paint('[' + str(self.sid) + ']').red}{paint(')').cyan}" if self.sid else ''
+		self.prompt = f"{paint(f'(').cyan}{paint('Penelope').magenta}{paint(f')').cyan}{session_part}{paint('>').cyan} "
 
 	def session(current=False, extra=[]):
 		def inner(func):
@@ -1272,6 +1280,9 @@ class MainMenu(BetterCMD):
 
 			connect 192.168.0.101 5555
 		"""
+		if not line:
+			cmdlogger.warning("No target specified")
+			return False
 		try:
 			address, port = line.split(' ')
 
@@ -1320,14 +1331,12 @@ class MainMenu(BetterCMD):
 		return False
 
 	def do_EOF(self, line):
-		#Unselect session when one is selected
-		#if self.sid:
-		#	self.set_id(None)
-		#	print()
-		#else:
-		#	return self.do_exit(line)
-		print("exit")
-		return self.do_exit(line)
+		if self.sid:
+			self.set_id(None)
+			print()
+		else:
+			print("exit")
+			return self.do_exit(line)
 
 	def do_modules(self, line):
 		"""
@@ -1417,10 +1426,8 @@ class MainMenu(BetterCMD):
 		if begidx > 15:
 			...#print(line, text)
 
-	# Default cmd module is unable to do that. I will make my own cmd class
-	#def complete_upload(self, text, line, begidx, endidx):
-	#	print("text: ", shlex.quote(text))
-	#	return [item for item in glob.glob(shlex.quote(text) + '*')]
+	def complete_upload(self, text, line, begidx, endidx):
+		return __class__.file_completer(text)
 
 	def complete_use(self, text, line, begidx, endidx):
 		return self.sessions(text, "none")
@@ -2903,7 +2910,7 @@ class Session:
 
 		if not options.no_log:
 			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} 📜")
-		print('─' * 80)
+		print(paint('─').DIM * shutil.get_terminal_size()[0])
 
 		core.attached_session = self
 		core.rlist.append(sys.stdin)
@@ -4691,7 +4698,8 @@ def main():
 	# Main Menu
 	elif options.plain:
 		menu.show()
-		return
+		signal.signal(signal.SIGINT, original_handler)
+		return True
 
 	# File Server
 	elif options.serve:
