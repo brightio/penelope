@@ -491,20 +491,21 @@ class BetterCMD:
 			readline.parse_and_bind(self.completekey + ": complete")
 
 		stop = None
+		global keyboard_interrupt
 		while not self.stop:
 			try:
 				self.active.wait()
 
+				signal.signal(signal.SIGINT, keyboard_interrupt)
 				if self.cmdqueue:
 					line = self.cmdqueue.pop(0)
 				else:
 					line = input(self.prompt)
 
-				original_handler = signal.signal(signal.SIGINT, lambda num, stack: self.interrupt())
+				signal.signal(signal.SIGINT, lambda num, stack: self.interrupt())
 				line = self.precmd(line)
 				stop = self.onecmd(line)
 				stop = self.postcmd(stop, line)
-				signal.signal(signal.SIGINT, original_handler)
 				if stop:
 					self.active.clear()
 			except EOFError:
@@ -671,7 +672,7 @@ class BetterCMD:
 	def file_completer(text):
 		matches = glob(text + '*')
 		matches = [m + '/' if os.path.isdir(m) else m for m in matches]
-		matches = [f"'{m}'" if ' ' in m else m for m in matches]
+		#matches = [f"'{m}'" if ' ' in m else m for m in matches]
 		return matches
 
 ##########################################################################################################
@@ -723,8 +724,8 @@ class MainMenu(BetterCMD):
 
 	def set_id(self, ID):
 		self.sid = ID
-		session_part = f"{paint('─(').cyan}{paint('Session').green} {paint('[' + str(self.sid) + ']').red}{paint(')').cyan}" if self.sid else ''
-		self.prompt = f"{paint(f'(').cyan}{paint('Penelope').magenta}{paint(f')').cyan}{session_part}{paint('>').cyan} "
+		session_part = f"{paint('─(').cyan_DIM}{paint('Session').green} {paint('[' + str(self.sid) + ']').red}{paint(')').cyan_DIM}" if self.sid else ''
+		self.prompt = f"{paint(f'(').cyan_DIM}{paint('Penelope').magenta}{paint(f')').cyan_DIM}{session_part}{paint('>').cyan_DIM} "
 
 	def session(current=False, extra=[]):
 		def inner(func):
@@ -1048,14 +1049,20 @@ class MainMenu(BetterCMD):
 
 	@staticmethod
 	def show_modules():
-		table = Table(joinchar=' │ ')
-		table.header = [paint('MODULE NAME').cyan_UNDERLINE, paint('DESCRIPTION').cyan_UNDERLINE]
+		categories = defaultdict(list)
 		for module in modules().values():
-			description = module.run.__doc__ or ""
-			if description:
-				description = module.run.__doc__.strip().splitlines()[0]
-			table += [paint(module.__name__).red, description]
-		print("\n", indent(str(table), '  '), "\n", sep="")
+			categories[module.category].append(module)
+
+		print()
+		for category in categories:
+			print("  " + str(paint(category).BLUE))
+			table = Table(joinchar=' │ ')
+			for module in categories[category]:
+				description = module.run.__doc__ or ""
+				if description:
+					description = module.run.__doc__.strip().splitlines()[0]
+				table += [paint(module.__name__).red, description]
+			print(indent(str(table), '  '), "\n", sep="")
 
 	@session(current=True)
 	def do_run(self, module_name):
@@ -4112,9 +4119,10 @@ class Module:
 	enabled = True
 	on_session_start = False
 	on_session_end = False
-
+	category = "Misc"
 
 class upload_privesc_scripts(Module):
+	category = "Privilege Escalation"
 	def run(session):
 		"""
 		Upload a set of privilege escalation scripts to the target
@@ -4131,6 +4139,7 @@ class upload_privesc_scripts(Module):
 
 
 class peass_ng(Module):
+	category = "Privilege Escalation"
 	def run(session):
 		"""
 		Run the latest version of PEASS-ng in the background
@@ -4142,6 +4151,7 @@ class peass_ng(Module):
 
 
 class lse(Module):
+	category = "Privilege Escalation"
 	def run(session):
 		"""
 		Run the latest version of linux-smart-enumeration in the background
@@ -4153,6 +4163,7 @@ class lse(Module):
 
 
 class linuxexploitsuggester(Module):
+	category = "Privilege Escalation"
 	def run(session):
 		"""
 		Run the latest version of linux-exploit-suggester in the background
@@ -4194,6 +4205,7 @@ class meterpreter(Module):
 
 
 class ngrok(Module):
+	category = "Pivoting"
 	def run(session):
 		"""
 		Setup ngrok
@@ -4465,6 +4477,26 @@ def url_to_bytes(URL):
 
 	return filename, data
 
+def check_urls():
+	global URLS
+	urls = URLS.values()
+	space_num = len(max(urls, key=len))
+	all_ok = True
+	for url in urls:
+		req = Request(url, method="HEAD", headers={'User-Agent': options.useragent})
+		try:
+			with urlopen(req, timeout=5) as response:
+				status_code = response.getcode()
+		except HTTPError as e:
+			all_ok = False
+			status_code = e.code
+		except:
+			return None
+		if __name__ == '__main__':
+			color = 'RED' if status_code >= 400 else 'GREEN'
+			print(f"{paint(url).cyan}{paint('.').DIM * (space_num - len(url))} => {getattr(paint(status_code), color)}")
+	return all_ok
+
 def listener_menu():
 	if not core.listeners:
 		return False
@@ -4672,6 +4704,7 @@ def main():
 	debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
 	debug.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
 	debug.add_argument("-dd", "--dev-mode", help="Developer mode", action="store_true")
+	debug.add_argument("-cu", "--check-urls", help="Check health of hardcoded URLs", action="store_true")
 
 	parser.parse_args(None, options)
 
@@ -4683,7 +4716,8 @@ def main():
 		#options.max_maintain = 50
 		#options.no_bins = 'python,python3,script'
 
-	original_handler = signal.signal(signal.SIGINT, lambda num, stack: core.stop())
+	global keyboard_interrupt
+	signal.signal(signal.SIGINT, lambda num, stack: core.stop())
 
 	# Version
 	if options.version:
@@ -4695,10 +4729,15 @@ def main():
 		print(Interfaces())
 		return
 
+	# Interfaces
+	elif options.check_urls:
+		check_urls()
+		return
+
 	# Main Menu
 	elif options.plain:
 		menu.show()
-		signal.signal(signal.SIGINT, original_handler)
+		signal.signal(signal.SIGINT, keyboard_interrupt)
 		return True
 
 	# File Server
@@ -4725,7 +4764,7 @@ def main():
 				return
 
 	listener_menu()
-	signal.signal(signal.SIGINT, original_handler)
+	signal.signal(signal.SIGINT, keyboard_interrupt)
 	return True
 
 
@@ -4807,6 +4846,7 @@ threading.excepthook = custom_excepthook
 tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 os.umask(0o007)
 signal.signal(signal.SIGWINCH, WinResize)
+keyboard_interrupt = signal.signal(signal.SIGINT, signal.SIG_DFL)
 try:
 	import readline
 except ImportError:
