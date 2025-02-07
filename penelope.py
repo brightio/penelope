@@ -459,6 +459,7 @@ def stdout(data, record=True):
 		core.output_line_buffer << data
 
 def my_input(text=""):
+	signal.signal(signal.SIGINT, keyboard_interrupt)
 	core.output_line_buffer << b"\n" + text.encode()
 	core.wait_input = True
 	response = original_input(text)
@@ -495,8 +496,6 @@ class BetterCMD:
 		while not self.stop:
 			try:
 				self.active.wait()
-
-				signal.signal(signal.SIGINT, keyboard_interrupt)
 				if self.cmdqueue:
 					line = self.cmdqueue.pop(0)
 				else:
@@ -1687,6 +1686,10 @@ class Core:
 
 		self.control << 'self.started = False'
 
+		menu.stop = True
+		menu.cmdqueue.append("")
+		menu.active.set()
+
 def handle_bind_errors(func):
 	@wraps(func)
 	def wrapper(*args, **kwargs):
@@ -2030,11 +2033,6 @@ class Session:
 
 				else:
 					menu.show()
-				# If auto-attach is disabled and the menu is not active
-				#elif not menu.active:
-				#elif not menu.active.is_set():
-					# Then show the menu
-					#menu.show()
 		else:
 			self.kill()
 		return
@@ -4444,7 +4442,8 @@ def url_to_bytes(URL):
 			logger.error(e)
 		except URLError as e:
 			logger.error(e.reason)
-			if type(e.reason) == ssl.SSLCertVerificationError:
+			if (hasattr(ssl, 'SSLCertVerificationError') and type(e.reason) == ssl.SSLCertVerificationError) or\
+				(isinstance(e.reason, ssl.SSLError) and "CERTIFICATE_VERIFY_FAILED" in str(e)):
 				answer = ask("Cannot verify SSL Certificate. Download anyway? (y/N)")
 				if answer.lower() == 'y': # Trust the cert
 					ctx = ssl._create_unverified_context()
@@ -4731,13 +4730,14 @@ def main():
 
 	# Interfaces
 	elif options.check_urls:
+		signal.signal(signal.SIGINT, signal.SIG_DFL)
 		check_urls()
 		return
 
 	# Main Menu
 	elif options.plain:
-		menu.show()
 		signal.signal(signal.SIGINT, keyboard_interrupt)
+		menu.show()
 		return True
 
 	# File Server
@@ -4846,7 +4846,7 @@ threading.excepthook = custom_excepthook
 tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 os.umask(0o007)
 signal.signal(signal.SIGWINCH, WinResize)
-keyboard_interrupt = signal.signal(signal.SIGINT, signal.SIG_DFL)
+keyboard_interrupt = signal.getsignal(signal.SIGINT)
 try:
 	import readline
 except ImportError:
