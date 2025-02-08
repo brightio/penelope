@@ -843,7 +843,7 @@ class MainMenu(BetterCMD):
 				for host, sessions in core.hosts.items():
 					print('\n➤  ' + OSes[sessions[0].OS] + " " + str(paint(host).RED + ' 💀'))
 					table = Table(joinchar=' | ')
-					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'Source')]
+					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source')]
 					for session in sessions:
 						if self.sid == session.id:
 							ID = paint('[' + str(session.id) + ']').red
@@ -851,8 +851,8 @@ class MainMenu(BetterCMD):
 							ID = paint('<' + str(session.id) + '>').yellow_BLINK
 						else:
 							ID = paint(' ' + str(session.id)).yellow
-						source = 'Reverse shell from ' + str(session.listener) if session.listener else f'Bind shell (port {session.port})'
-						table += [ID, paint(session.type).CYAN if session.type == 'PTY' else session.type, source]
+						source = session.listener or f'Connect({session._host}:{session.port})'
+						table += [ID, paint(session.type).CYAN if session.type == 'PTY' else session.type, session.user or 'N/A', source]
 					print("\n", indent(str(table), "    "), "\n", sep="")
 			else:
 				print()
@@ -1929,7 +1929,6 @@ class Session:
 		self.readline = None
 
 		self.version = None
-		self.user = None
 
 		self.prompt = None
 		self.new = True
@@ -1961,6 +1960,7 @@ class Session:
 		self._cwd = None
 		self._bsd = None
 		self._tty = None
+		self._user = None
 		self._can_deploy_agent = None
 
 		self.bypass_control_session = False
@@ -2005,23 +2005,20 @@ class Session:
 			if options.single_session and self.listener:
 				self.listener.stop()
 
-			attach_conditions = [
-				# Is a reverse shell and the Menu is not active and reached the maintain value
-				#self.listener and not menu.active and len(core.hosts[self.name]) == options.maintain,
-				self.listener and not menu.active.is_set() and len(core.hosts[self.name]) == options.maintain,
-
-				# Is a bind shell and is not spawned from the Menu
-				#not self.listener and not menu.active,
-				not self.listener and not menu.active.is_set(),
-
-				# Is a bind shell and is spawned from the connect Menu command
-				#not self.listener and menu.active and menu.lastcmd.startswith('connect')
-				not self.listener and menu.active.is_set() and menu.lastcmd.startswith('connect')
-			]
-
 			if hasattr(listener_menu, 'active') and listener_menu.active:
 				os.close(listener_menu.control_w)
 				listener_menu.finishing.wait()
+
+			attach_conditions = [
+				# Is a reverse shell and the Menu is not active and reached the maintain value
+				self.listener and not menu.active.is_set() and len(core.hosts[self.name]) == options.maintain,
+
+				# Is a bind shell and is not spawned from the Menu
+				not self.listener and not menu.active.is_set(),
+
+				# Is a bind shell and is spawned from the connect Menu command
+				not self.listener and menu.active.is_set() and menu.lastcmd.startswith('connect')
+			]
 
 			# If no other session is attached
 			if core.attached_session is None:
@@ -2030,9 +2027,11 @@ class Session:
 					if any(attach_conditions):
 						# Attach the newly created session
 						self.attach()
-
 				else:
-					menu.show()
+					if self.id == 1:
+						menu.set_id(self.id)
+					if not menu.active.is_set():
+						menu.show()
 		else:
 			self.kill()
 		return
@@ -2180,6 +2179,35 @@ class Session:
 			elif self.OS == 'Windows':
 				self._cwd = self.exec("cd", force_cmd=True, value=True)
 		return self._cwd
+
+	@property
+	def user(self):
+		if self._user is None:
+			if self.OS == 'Unix':
+				if self.bsd:
+					self._user = self.control_session.exec(f"ps -o user= -p {self.shell_pid}", value=True)
+				elif self.agent:
+					self._user = self.exec(
+					"""
+					file = open("/proc/" + str(shell_pid) + "/status", "r")
+					for line in file:
+						if line.startswith("Uid:"):
+							uid = int(line.split()[1])
+							from pwd import getpwuid
+							stdout_stream << getpwuid(uid).pw_name.encode()
+					file.close()
+					""", python=True, value=True)
+					if not self._user:
+						self._user = False
+				else:
+					self._user = self.control_session.exec(
+					f"cat /proc/{self.shell_pid}/status|awk '/Uid:/ {{print $2}}'|xargs -I{{}} getent passwd {{}}|cut -d: -f1",
+					value=True)
+			elif self.OS == 'Windows':
+				self._user = False
+				if not self.type == 'PTY':
+					self._user = self.exec("whoami", force_cmd=True, value=True)
+		return self._user
 
 	@property
 	def is_attached(self):
@@ -2862,7 +2890,7 @@ class Session:
 
 		while core.attached_session == self:
 			try:
-				cmd = input("\033[s\033[u") # TODO
+				cmd = original_input("\033[s\033[u") # TODO
 				if self.subtype == 'cmd':
 					assert len(cmd) <= MAX_CMD_PROMPT_LEN
 				readline.set_history_length(options.histlength)
