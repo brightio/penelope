@@ -601,7 +601,7 @@ class BetterCMD:
             return func(arg)
 
     def default(self, line):
-        cmdlogger.error(f"Invalid command")
+        cmdlogger.error("Invalid command")
 
     def interrupt(self):
         pass
@@ -825,7 +825,7 @@ class MainMenu(BetterCMD):
             if self.sid
             else ""
         )
-        self.prompt = f"{paint(f'(').cyan_DIM}{paint('Penelope').magenta}{paint(f')').cyan_DIM}{session_part}{paint('>').cyan_DIM} "
+        self.prompt = f"{paint('(').cyan_DIM}{paint('Penelope').magenta}{paint(')').cyan_DIM}{session_part}{paint('>').cyan_DIM} "
 
     def session(current=False, extra=[]):
         def inner(func):
@@ -1699,9 +1699,9 @@ class Core:
                 if readable is self.control:
                     command = self.control.get()
                     if command:
-                        logger.debug(f"About to execute {command}")
+                        logger.debug("About to execute {command}")
                     else:
-                        logger.debug(f"Core break")
+                        logger.debug("Core break")
                     try:
                         exec(command)
                     except KeyError:  # TODO
@@ -1757,7 +1757,7 @@ class Core:
                             raise OSError
 
                     except OSError:
-                        logger.debug(f"Died while reading")
+                        logger.debug("Died while reading")
                         readable.kill()
                         threading.Thread(target=readable.maintain).start()
                         break
@@ -1813,7 +1813,7 @@ class Core:
                     try:
                         sent = writable.socket.send(writable.outbuf.getvalue())
                     except OSError:
-                        logger.debug(f"Died while writing")
+                        logger.debug("Died while writing")
                         writable.kill()
                         threading.Thread(target=writable.maintain).start()
                         break
@@ -1830,7 +1830,7 @@ class Core:
         options.maintain = 0
 
         if self.sessions:
-            logger.warning(f"Killing sessions...")
+            logger.warning("Killing sessions...")
             for session in reversed(list(self.sessions.copy().values())):
                 session.kill()
 
@@ -2089,7 +2089,7 @@ class Session:
 
             except socket.herror:
                 self.hostname = None
-                logger.debug(f"Cannot resolve hostname")
+                logger.debug("Cannot resolve hostname")
         else:
             self.hostname = target
 
@@ -2492,18 +2492,18 @@ class Session:
     def tmp(self):
         if self._tmp is None:
             if self.OS == "Unix":
-                logger.debug(f"Trying to find a writable directory on target")
+                logger.debug("Trying to find a writable directory on target")
                 tmpname = rand(10)
                 common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
                 for directory in common_dirs:
                     if not self.exec(
-                        f"echo {tmpname} > {directory}/{tmpname}", value=True
+                        "echo {tmpname} > {directory}/{tmpname}", value=True
                     ):
                         self.exec(f"rm {directory}/{tmpname}")
                         self._tmp = directory
                         break
                 else:
-                    candidate_dirs = self.exec(f"find / -type d -writable 2>/dev/null")
+                    candidate_dirs = self.exec("find / -type d -writable 2>/dev/null")
                     if candidate_dirs:
                         for directory in candidate_dirs.decode().splitlines():
                             if directory in common_dirs:
@@ -2613,7 +2613,7 @@ class Session:
                 self.echoing = True
                 self.prompt = response.splitlines()[-1].encode()
                 self.version = re.search(
-                    rf"Microsoft Windows \[Version (.*)\]", response, re.DOTALL
+                    r"Microsoft Windows \[Version (.*)\]", response, re.DOTALL
                 )[1]
 
             elif (
@@ -2977,7 +2977,7 @@ class Session:
                     elif expect_func:
                         if expect_func(buffer.getvalue()):
                             logger.debug(
-                                paint(f"The expected strings found in data").yellow
+                                paint("The expected strings found in data").yellow
                             )
                             self.subchannel.result = buffer.getvalue()
                         else:
@@ -5228,12 +5228,12 @@ class Options:
                 value = 1
             # if value == 1: show(f"Maintain value should be 2 or above")
             if value > 1 and self.single_session:
-                show(f"Single Session mode disabled because Maintain is enabled")
+                show("Single Session mode disabled because Maintain is enabled")
                 self.single_session = False
 
         elif option == "single_session":
             if self.maintain > 1 and value:
-                show(f"Single Session mode disabled because Maintain is enabled")
+                show("Single Session mode disabled because Maintain is enabled")
                 value = False
 
         elif option == "no_bins":
