@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.2"
+__version__ = "0.13.3"
 
 import os
 import io
@@ -2188,7 +2188,7 @@ class Session:
 			if self.OS == 'Unix':
 				cmd = (
 				    f"readlink /proc/{self.shell_pid}/cwd 2>/dev/null || "
-				    f"lsof -p {self.shell_pid} 2>/dev/null | awk '$4==\"cwd\" {{print $NF;exit}}' | grep . || "
+				    f"lsof -p {self.shell_pid} 2>/dev/null | awk '$4==\"cwd\" {{print $9;exit}}' | grep . || "
 				    f"procstat -f {self.shell_pid} 2>/dev/null | awk '$3==\"cwd\" {{print $NF;exit}}' | grep . || "
 				    f"pwdx {self.shell_pid} 2>/dev/null | awk '{{print $2;exit}}' | grep ."
 				)
