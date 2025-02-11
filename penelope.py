@@ -2130,6 +2130,15 @@ class Session:
 			return None # TODO self.spawn()
 		return self
 
+	def get_system_info(self):
+		if self.OS == 'Unix':
+			response = self.exec("uname -psn", agent_typing=True, value=True)
+
+		elif self.OS == 'Windows':
+			response = None # TODO
+
+		return response or ''
+
 	def get_shell_info(self, silent=False):
 		self.shell_pid = self.get_shell_pid()
 		self.user = self.get_user()
@@ -2305,7 +2314,10 @@ class Session:
 		var_name1, var_name2, var_value1, var_value2 = (rand(4) for _ in range(4))
 
 		def expect(data):
-			data = data.decode()
+			try:
+				data = data.decode()
+			except:
+				return False
 			if var_value1 + var_value2 in data:
 				return True
 			elif f"'{var_name1}' is not recognized as an internal or external command" in data:
@@ -2340,7 +2352,10 @@ class Session:
 				self.prompt = response.splitlines()[-1].encode()
 		else:
 			def expect(data):
-				data = data.decode()
+				try:
+					data = data.decode()
+				except:
+					return False
 				if var_value1 + var_value2 in data:
 					return True
 
@@ -2972,6 +2987,7 @@ class Session:
 			if options.single_session and len(core.sessions) == 0:
 				core.stop()
 				return
+			menu.set_id(None)
 		menu.show()
 
 		return True
@@ -3735,7 +3751,7 @@ class Session:
 
 			core.control << f'self.sessions[{self.id}].kill()'
 
-			if hasattr(menu, 'sid') and hasattr(self, 'id') and menu.sid == self.id:
+			if menu.sid == self.id:
 				menu.set_id(None)
 
 			self.maintain()
