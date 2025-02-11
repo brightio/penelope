@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.1"
+__version__ = "0.13.2"
 
 import os
 import io
@@ -79,18 +79,18 @@ def ask(text):
 
 
 def Open(item, terminal=False):
-	if OS == 'Linux' and not DISPLAY:
+	if myOS == 'Linux' and not DISPLAY:
 		logger.error("No available $DISPLAY")
 		return False
 
 	if not terminal:
-		program = {'Linux':'xdg-open', 'Darwin':'open'}[OS]
+		program = {'Linux':'xdg-open', 'Darwin':'open'}[myOS]
 		args = [item]
 	else:
-		program = {'Linux':'x-terminal-emulator', 'Darwin':'osascript'}[OS]
-		if OS == 'Linux':
+		program = {'Linux':'x-terminal-emulator', 'Darwin':'osascript'}[myOS]
+		if myOS == 'Linux':
 			args = ['-e', *shlex.split(item)]
-		elif OS == 'Darwin':
+		elif myOS == 'Darwin':
 			args = ['-e', f'tell app "Terminal" to do script "{item}"']
 
 	if not shutil.which(program):
@@ -439,8 +439,8 @@ class CustomFormatter(logging.Formatter):
 		elif core.attached_session:
 			suffix += bytes(core.output_line_buffer).decode()
 
-		text = f"{prefix}{template['prefix']}{thread} {logging.Formatter.format(self, record)}{suffix}"
-		return str(getattr(paint(text), template['color']))
+		text = f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}"
+		return f"{prefix}{getattr(paint(text), template['color'])}{suffix}"
 
 
 class LineBuffer:
@@ -849,7 +849,7 @@ class MainMenu(BetterCMD):
 		else:
 			if core.sessions:
 				for host, sessions in core.hosts.items():
-					print('\n➤  ' + OSes[sessions[0].OS] + " " + str(paint(host).RED + ' 💀'))
+					print('\n➤  ' + (OSes.get(sessions[0].OS, None) or '❔') + " " + str(paint(host).RED + ' 💀'))
 					table = Table(joinchar=' | ')
 					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source')]
 					for session in sessions:
@@ -1164,6 +1164,7 @@ class MainMenu(BetterCMD):
 		"""
 		folder = core.sessions[self.sid].directory if self.sid else options.basedir
 		Open(folder)
+		print(folder)
 
 	@session(current=True)
 	def do_exec(self, cmdline):
@@ -1628,8 +1629,12 @@ class Core:
 
 					if readable.agent:
 						for _type, _value in readable.messenger.feed(data):
-							#print(_type,_value)
+							#print(_type, _value)
 							if _type == Messenger.SHELL:
+								if not _value: # TEMP
+									readable.kill()
+									threading.Thread(target=readable.maintain).start()
+									break
 								target.write(_value)
 
 							elif _type == Messenger.STREAM:
@@ -1914,6 +1919,8 @@ class Session:
 		self.target, self.port = target, port
 		self.ip = _socket.getpeername()[0]
 		self._host, self._port = self.socket.getsockname()
+		self.listener = listener
+		self.source = 'reverse' if listener else 'bind'
 
 		if target == self.ip:
 			try:
@@ -1926,7 +1933,6 @@ class Session:
 			self.hostname = target
 
 		self.name = f"{self.hostname}~{self.ip}" if self.hostname else self.ip
-		self.listener = listener
 
 		self.OS = None
 		self.type = None
@@ -1963,12 +1969,12 @@ class Session:
 		self.streams_max = 2 ** (8 * Messenger.STREAM_BYTES)
 
 		self.shell_pid = None
+		self.user = None
+		self.tty = None
+
 		self._bin = defaultdict(lambda: "")
 		self._tmp = None
 		self._cwd = None
-		self._bsd = None
-		self._tty = None
-		self._user = None
 		self._can_deploy_agent = None
 
 		self.bypass_control_session = False
@@ -2124,41 +2130,53 @@ class Session:
 			return None # TODO self.spawn()
 		return self
 
+	def get_shell_info(self, silent=False):
+		self.shell_pid = self.get_shell_pid()
+		self.user = self.get_user()
+		if self.OS == 'Unix':
+			self.tty = self.get_tty(silent=silent)
+
 	def get_shell_pid(self):
 		if self.OS == 'Unix':
-			if self.agent:
-				self.shell_pid = self.exec("stdout_stream << str(shell_pid).encode()", python=True, value=True)
-			else:
-				self.bypass_control_session = True
-				self.shell_pid = self.exec("echo $$", value=True)
-				self.bypass_control_session = False
-				if not (isinstance(self.shell_pid, str) and self.shell_pid.isnumeric()):
-					logger.error(f"Cannot get the PID of the shell. Response: {self.shell_pid}")
-					logger.error("I am killing it...")
-					self.kill()
-					return False
-		elif self.OS == 'Windows':
-			self.shell_pid = None #TODO
+			self.bypass_control_session = True
+			response = self.exec("echo $$", agent_typing=True, value=True)
+			self.bypass_control_session = False
 
-	@property
-	def tty(self):
-		if self._tty is None:
-			try:
-				self.bypass_control_session = True
-				self._tty = self.exec(f"tty", value=True) # TODO check binary
-				self.bypass_control_session = False
-				if not "/" in self._tty:
-					self._tty = None
-			except:
-				pass
-		return self._tty
+		elif self.OS == 'Windows':
+			return None # TODO
+
+		if not (isinstance(response, str) and response.isnumeric()):
+			logger.error(f"Cannot get the PID of the shell. Response:\r\n{paint(response).white}")
+			return False
+		return response
+
+	def get_user(self):
+		if self.OS == 'Unix':
+			self.bypass_control_session = True
+			response = self.exec("echo \"$(id -un)($(id -u))\"", agent_typing=True, value=True)
+			self.bypass_control_session = False
+
+		elif self.OS == 'Windows':
+			if self.type == 'PTY':
+				return None # TODO
+			response = self.exec("whoami", value=True)
+
+		return response
+
+	def get_tty(self, silent=False):
+		self.bypass_control_session = True
+		response = self.exec("tty", agent_typing=True, value=True) # TODO check binary
+		self.bypass_control_session = False
+		if not (isinstance(response, str) and '/' in response):
+			if not silent:
+				logger.error(f"Cannot get the TTY of the shell. Response:\r\n{paint(response).white}")
+			return False
+		return response
 
 	@property
 	def cwd(self):
 		if self._cwd is None:
 			if self.OS == 'Unix':
-				if not self.shell_pid: #TEMP
-					self.get_shell_pid()
 				cmd = (
 				    f"readlink /proc/{self.shell_pid}/cwd 2>/dev/null || "
 				    f"lsof -p {self.shell_pid} 2>/dev/null | awk '$4==\"cwd\" {{print $NF;exit}}' | grep . || "
@@ -2168,35 +2186,11 @@ class Session:
 				self._cwd = self.control_session.exec(cmd, value=True)
 			elif self.OS == 'Windows':
 				self._cwd = self.exec("cd", force_cmd=True, value=True)
-		return self._cwd
-
-	@property
-	def user(self):
-		if self._user is None:
-			if self.OS == 'Unix':
-				if self.agent:
-					self._user = self.exec(
-					"""
-					from getpass import getuser
-					stdout_stream << getuser().encode()
-					""", python=True, value=True)
-				else:
-					self._user = self.control_session.exec(
-					f"cat /proc/{self.shell_pid}/status|awk '/Uid:/ {{print $2}}'|xargs -I{{}} getent passwd {{}}|cut -d: -f1",
-					value=True)
-			elif self.OS == 'Windows':
-				self._user = False
-				if not self.type == 'PTY':
-					self._user = self.exec("whoami", force_cmd=True, value=True)
-		return self._user
+		return self._cwd or ''
 
 	@property
 	def is_attached(self):
 		return core.attached_session is self
-
-	@property
-	def source(self):
-		return 'reverse' if self.listener else 'bind'
 
 	@property
 	def bin(self):
@@ -2327,10 +2321,6 @@ class Session:
 				self.OS = 'Unix'
 				self.interactive = not response == var_value1 + var_value2 + "\n"
 				self.echoing = f"echo ${var_name1}${var_name2}" in response
-				self.get_shell_pid()
-				if self.tty:
-					self.type = 'PTY'
-					self.pty_ready = True
 
 			elif f"'{var_name1}' is not recognized as an internal or external command" in response:
 				self.OS = 'Windows'
@@ -2374,6 +2364,12 @@ class Session:
 					self.prompt = response.splitlines()[-2].encode()
 				else:
 					self.prompt = re.sub(var_value1.encode() + var_value2.encode(), b"", self.prompt)
+
+		self.get_shell_info(silent=True)
+		if self.tty:
+			self.type = 'PTY'
+		if self.type == 'PTY':
+			self.pty_ready = True
 		return True
 
 	def exec(
@@ -2811,6 +2807,9 @@ class Session:
 					self.attach()
 				else:
 					new_session.attach()
+
+				new_session.get_shell_info()
+
 				return True
 
 			if self.pty_ready:
@@ -2845,7 +2844,7 @@ class Session:
 			self.echoing =		 True
 			self.prompt =		response
 
-			self.get_shell_pid()
+			self.get_shell_info()
 
 		elif self.OS == "Windows":
 			if self.type != 'PTY':
@@ -3751,7 +3750,8 @@ class Session:
 		if self in core.wlist:
 			core.wlist.remove(self)
 		try:
-			self.socket.shutdown(socket.SHUT_RDWR)
+			self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)) # RST
+			#self.socket.shutdown(socket.SHUT_RDWR) # FIN
 		except OSError:
 			pass
 
@@ -3977,39 +3977,36 @@ def agent():
 			cloexec(fd)
 
 		while True:
-			try:
-				rfds, wfds, xfds = select(rlist, wlist, [])
-			except OSError:
-				for item in rlist[:]:
-					try:
-						if hasattr(item, 'fileno'):
-							fd = item.fileno()
-						else:
-							fd = item
-						os.stat(fd)
-					except OSError:
-						rlist.remove(item)
-				continue
+			rfds, wfds, _ = select(rlist, wlist, [])
 
 			for readable in rfds:
 				if readable is control_out:
 					os.read(control_out, 1)
 
 				elif readable is master_fd:
-					data = os.read(master_fd, NET_BUF_SIZE)
-					respond(data, Messenger.SHELL) # TOCHECK
+					try:
+						data = os.read(master_fd, NET_BUF_SIZE)
+					except:
+						data = ''.encode()
+					respond(data, Messenger.SHELL)
 					if not data:
 						rlist.remove(master_fd)
-						os.close(master_fd)
+						try:
+							os.close(master_fd)
+						except:
+							pass
 
 				elif readable is pty.STDIN_FILENO:
-					data = os.read(pty.STDIN_FILENO, NET_BUF_SIZE)
+					try:
+						data = os.read(pty.STDIN_FILENO, NET_BUF_SIZE)
+					except:
+						data = None
 					if not data:
-						raise OSError
+						rlist.remove(pty.STDIN_FILENO)
+						break
 
 					messages = messenger.feed(data)
 					for _type, _value in messages:
-						#open("/tmp/" + "debug", "a").write(repr((_type, _value)) + "\n")
 						if _type == Messenger.SHELL:
 							ttybuf.seek(0, 2)
 							ttybuf.write(_value)
@@ -4084,38 +4081,44 @@ def agent():
 						rlist.remove(readable)
 						del streams[readable.id]
 
-			for writable in wfds:
+			else:
+				for writable in wfds:
 
-				if writable is pty.STDOUT_FILENO:
-					sendbuf = outbuf
-					wlock.acquire()
+					if writable is pty.STDOUT_FILENO:
+						sendbuf = outbuf
+						wlock.acquire()
 
-				elif writable is master_fd:
-					sendbuf = ttybuf
+					elif writable is master_fd:
+						sendbuf = ttybuf
 
-				try:
-					sent = os.write(writable, sendbuf.getvalue())
-				except OSError:
+					try:
+						sent = os.write(writable, sendbuf.getvalue())
+					except OSError:
+						wlist.remove(writable)
+						if sendbuf is outbuf:
+							wlock.release()
+						continue
+
+					sendbuf.seek(sent)
+					remaining = sendbuf.read()
+					sendbuf.seek(0)
+					sendbuf.truncate()
+					sendbuf.write(remaining)
+					if not remaining:
+						wlist.remove(writable)
 					if sendbuf is outbuf:
 						wlock.release()
-					break
-
-				sendbuf.seek(sent)
-				remaining = sendbuf.read()
-				sendbuf.seek(0)
-				sendbuf.truncate()
-				sendbuf.write(remaining)
-				if not remaining:
-					wlist.remove(writable)
-				if sendbuf is outbuf:
-					wlock.release()
+				continue
+			break
 	except:
 		_, e, t = sys.exc_info()
 		import traceback
 		traceback.print_exc()
 		traceback.print_stack()
-
-	os.close(master_fd)
+	try:
+		os.close(master_fd)
+	except:
+		pass
 	os.waitpid(shell_pid, 0)[1]
 	os.kill(os.getppid(), signal.SIGKILL) # TODO
 
@@ -4526,8 +4529,8 @@ def listener_menu():
 		tty.setraw(sys.stdin)
 		stdout(
 			f"\r\x1b[?25l{paint('➤ ').white} "
-			f"💀 {paint('Show Payloads').magenta} (p) "
 			f"🏠 {paint('Main Menu').green} (m) "
+			f"💀 {paint('Payloads').magenta} (p) "
 			f"🔄 {paint('Clear').yellow} (Ctrl-L) "
 			f"🚫 {paint('Quit').red} (q/Ctrl-C)\r\n".encode()
 		)
@@ -4536,14 +4539,14 @@ def listener_menu():
 
 		if sys.stdin in r:
 			command = sys.stdin.read(1).lower()
-			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
-			if command == 'p':
+			if command == 'm':
+				func = menu.show
+				break
+			elif command == 'p':
+				termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
 				print()
 				for listener in core.listeners.values():
 					print(listener.hints, end='\n\n')
-			elif command == 'm':
-				func = menu.show
-				break
 			elif command == '\x0C':
 				os.system("clear")
 			elif command in ('q', '\x03'):
@@ -4554,6 +4557,7 @@ def listener_menu():
 			continue
 		break
 
+	termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
 	stdout(b"\x1b[?25h\r")
 	func()
 	os.close(listener_menu.control_r)
@@ -4571,11 +4575,17 @@ def load_rc():
 	os.chmod(RC, 0o600)
 
 def fonts_installed():
-	if os.path.isfile("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"):
-		return True
-	if OS != "Linux":
-		return True
-	if os.path.isfile("/usr/share/fonts/noto/NotoColorEmoji.ttf"):
+	possible_paths = (
+		"/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+		"/usr/share/fonts/noto/NotoColorEmoji.ttf",
+		"/usr/local/share/fonts/noto/NotoColorEmoji.ttf",
+		"/usr/local/share/fonts/noto-emoji/NotoColorEmoji.ttf"
+	)
+
+	for path in possible_paths:
+		if os.path.isfile(path):
+			return True
+	if myOS == "Darwin":
 		return True
 	try:
 		if "Noto Color Emoji" in subprocess.run(["fc-list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout:
@@ -4704,7 +4714,7 @@ def main():
 
 	misc = parser.add_argument_group("Misc")
 	misc.add_argument("-m", "--maintain", help="Maintain NUM total shells per target", type=int, metavar='')
-	misc.add_argument("-P", "--plain", help="Just land to the main menu", action="store_true")
+	misc.add_argument("-M", "--menu", help="Just land to the Main Menu", action="store_true")
 	misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
 	misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
 	misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
@@ -4751,7 +4761,7 @@ def main():
 		return
 
 	# Main Menu
-	elif options.plain:
+	elif options.menu:
 		signal.signal(signal.SIGINT, keyboard_interrupt)
 		menu.show()
 		return True
@@ -4830,7 +4840,7 @@ cmdlogger.setLevel(logging.INFO)
 cmdlogger.addHandler(stdout_handler)
 
 # Set constants
-OS = platform.system()
+myOS = platform.system()
 OSes = {'Unix':'🐧', 'Windows':'💻'}
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
 DISPLAY = 'DISPLAY' in os.environ
