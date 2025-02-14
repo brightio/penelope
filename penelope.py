@@ -51,6 +51,7 @@ from zlib import compress
 from errno import EADDRINUSE, EADDRNOTAVAIL
 from select import select
 from pathlib import Path
+from argparse import ArgumentParser
 from datetime import datetime
 from textwrap import indent, dedent
 from binascii import Error as binascii_error
@@ -488,7 +489,7 @@ def my_input(text="", histfile=None, histlen=None, completer=lambda text, state:
 
 	core.output_line_buffer << b"\n" + text.encode()
 	core.wait_input = True
-	response = original_input("\r" + text)
+	response = original_input(text)
 	core.wait_input = False
 
 	if readline:
@@ -1081,14 +1082,17 @@ class MainMenu(BetterCMD):
 			print(indent(str(table), '  '), "\n", sep="")
 
 	@session(current=True)
-	def do_run(self, module_name):
+	def do_run(self, line):
 		"""
 		[module name]
 		Run a module. Run 'help run' to view the available modules"""
+		parts = line.split(" ", 1)
+		module_name = parts[0]
 		if module_name:
 			module = modules().get(module_name)
 			if module:
-				module.run(core.sessions[self.sid])
+				args = parts[1] if len(parts) == 2 else ''
+				module.run(core.sessions[self.sid], args)
 			else:
 				cmdlogger.warning(f"Module '{module_name}' does not exist")
 		else:
@@ -2936,15 +2940,7 @@ class Session:
 	def readline_loop(self):
 		while core.attached_session == self:
 			try:
-				#self.prompt = ''
-				#last_lines = bytes(self.last_lines).decode()
-				#if last_lines:
-				#	self.prompt = last_lines.splitlines()[-1]
-				#self.prompt = self.last_lines.lines[-1].decode()
-				#print(repr(self.prompt))
 				cmd = input("\033[s\033[u", self.histfile, options.histlength, None, "\t") # TODO
-
-				#cmd = input(self.prompt, self.histfile, options.histlength, None, "\t") # TODO
 				if self.subtype == 'cmd':
 					assert len(cmd) <= MAX_CMD_PROMPT_LEN
 				#self.record(b"\n" + cmd.encode(), _input=True)
@@ -2955,17 +2951,7 @@ class Session:
 			except AssertionError:
 				logger.error(f"Maximum prompt length is {MAX_CMD_PROMPT_LEN} characters. Current prompt is {len(cmd)}")
 			else:
-				#def xxx(data):
-					#print("P: ", repr(self.prompt.encode()))
-					#print("D: ", repr(data))
-					#print(bool(self.prompt.encode() in data))
-				#	return self.prompt.encode() in data
 				self.send(cmd.encode() + b"\n")
-				#self.exec(cmd, raw=True, expect_func=lambda data: self.prompt.encode() in data)
-				#output = self.exec(cmd, raw=True, expect_func=lambda data: self.prompt.encode() in data)
-				#print(repr(output))
-				#if output:
-				#	stdout(output)
 
 	def attach(self):
 		if threading.current_thread().name != 'Core':
@@ -4225,9 +4211,10 @@ class Module:
 	on_session_end = False
 	category = "Misc"
 
+
 class upload_privesc_scripts(Module):
 	category = "Privilege Escalation"
-	def run(session):
+	def run(session, args):
 		"""
 		Upload a set of privilege escalation scripts to the target
 		"""
@@ -4244,19 +4231,59 @@ class upload_privesc_scripts(Module):
 
 class peass_ng(Module):
 	category = "Privilege Escalation"
-	def run(session):
+	def run(session, args):
 		"""
 		Run the latest version of PEASS-ng in the background
 		"""
 		if session.OS == 'Unix':
-			session.script(URLS['linpeas'])
+			parser = ArgumentParser(description="peass-ng module", add_help=False)
+			parser.add_argument("-a", "--ai", help="Analyze linpeas results with chatGPT", action="store_true")
+			arguments = parser.parse_args(shlex.split(args))
+			if arguments.ai:
+				try:
+					from openai import OpenAI
+					#api_key = input("Please enter your chatGPT API key: ")
+					#assert len(api_key) > 10
+				except Exception as e:
+					logger.error(e)
+					return False
+
+			output_file = session.script(URLS['linpeas'])
+
+			if arguments.ai:
+				api_key = input("Please enter your chatGPT API key: ")
+				assert len(api_key) > 10
+
+				with open(output_file, "r") as file:
+					content = file.read()
+
+				client = OpenAI(api_key=api_key)
+				stream = client.chat.completions.create(
+				    model="gpt-4o-mini",
+				    messages=[
+					{"role": "system", "content": "You are a helpful assistant helping me to perform penetration test to protect the systems"},
+					{
+					    "role": "user",
+					    "content": f"I am pasting here the results of linpeas. Based on the output, I want you to tell me all possible ways the further exploit this system. I want you to be very specific on your analysis and not write generalities and uneccesary information. I want to focus only on your specific suggestions.\n\n\n {content}"
+					}
+				    ],
+				stream=True
+				)
+
+				print('\n═════════════════ chatGPT analysis START ════════════════')
+				for chunk in stream:
+					if chunk.choices[0].delta.content:
+						#print(chunk.choices[0].delta.content, end="", flush=True)
+						stdout(chunk.choices[0].delta.content.encode())
+				print('\n═════════════════ chatGPT analysis END ════════════════')
+
 		elif session.OS == 'Windows':
 			logger.error("This module runs only on Unix shells")
 
 
 class lse(Module):
 	category = "Privilege Escalation"
-	def run(session):
+	def run(session, args):
 		"""
 		Run the latest version of linux-smart-enumeration in the background
 		"""
@@ -4268,7 +4295,7 @@ class lse(Module):
 
 class linuxexploitsuggester(Module):
 	category = "Privilege Escalation"
-	def run(session):
+	def run(session, args):
 		"""
 		Run the latest version of linux-exploit-suggester in the background
 		"""
@@ -4279,7 +4306,7 @@ class linuxexploitsuggester(Module):
 
 
 class meterpreter(Module):
-	def run(session):
+	def run(session, args):
 		"""
 		Get a meterpreter shell
 		"""
@@ -4310,7 +4337,7 @@ class meterpreter(Module):
 
 class ngrok(Module):
 	category = "Pivoting"
-	def run(session):
+	def run(session, args):
 		"""
 		Setup ngrok
 		"""
@@ -4791,7 +4818,6 @@ class Options:
 def main():
 
 	## Command line options
-	from argparse import ArgumentParser
 	parser = ArgumentParser(description="Penelope Shell Handler", add_help=False)
 
 	parser.add_argument("ports", nargs='*', help="Ports to listen/connect to, depending on -i/-c options. Default: 4444")
