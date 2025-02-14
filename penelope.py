@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.3"
+__version__ = "0.13.4"
 
 import os
 import io
@@ -70,13 +70,6 @@ bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
 pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{path}\x07{path.name}\x1b]8;;\x07'
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
-
-def ask(text):
-	try:
-		return original_input(f"{paint(f'[?] {text}: ').yellow}")
-	except EOFError:
-		return ask(text)
-
 
 def Open(item, terminal=False):
 	if myOS == 'Linux' and not DISPLAY:
@@ -466,21 +459,59 @@ def stdout(data, record=True):
 	if record:
 		core.output_line_buffer << data
 
-def my_input(text=""):
-	signal.signal(signal.SIGINT, keyboard_interrupt)
+def ask(text):
+	try:
+		return input(f"{paint(f'[?] {text}').yellow}")
+
+	except EOFError:
+		print()
+		return ask(text)
+
+	except KeyboardInterrupt:
+		print("^C")
+		return ''
+
+def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
+	if threading.current_thread().name == 'MainThread':
+		signal.signal(signal.SIGINT, keyboard_interrupt)
+
+	if readline:
+		readline.set_completer(completer)
+		readline.set_completer_delims(completer_delims or default_readline_delims)
+		readline.clear_history()
+		if histfile:
+			try:
+				readline.read_history_file(histfile)
+			except Exception as e:
+				cmdlogger.debug(f"Error loading history file: {e}")
+		#readline.set_auto_history(True)
+
 	core.output_line_buffer << b"\n" + text.encode()
 	core.wait_input = True
-	response = original_input(text)
+	response = original_input("\r" + text)
 	core.wait_input = False
+
+	if readline:
+		#readline.set_completer(None)
+		#readline.set_completer_delims(default_readline_delims)
+		if histfile:
+			try:
+				readline.set_history_length(options.histlength)
+				#readline.add_history(response)
+				readline.write_history_file(histfile)
+			except Exception as e:
+				cmdlogger.debug(f"Error writing to history file: {e}")
+		#readline.set_auto_history(False)
+
 	return response
 
-
 class BetterCMD:
-	def __init__(self, prompt=None, banner=None):
+	def __init__(self, prompt=None, banner=None, histfile=None, histlen=None):
 		self.prompt = prompt
 		self.banner = banner
+		self.histfile = histfile
+		self.histlen = histlen
 		self.cmdqueue = []
-		self.completekey = 'tab'
 		self.lastcmd = ''
 		self.active = threading.Event()
 		self.stop = False
@@ -494,20 +525,14 @@ class BetterCMD:
 		if self.banner:
 			print(self.banner)
 
-		if readline:
-			readline.set_completer(self.complete)
-			readline.set_completer_delims(" \t\n\"'><=;|&(:")
-			readline.parse_and_bind(self.completekey + ": complete")
-
 		stop = None
-		global keyboard_interrupt
 		while not self.stop:
 			try:
 				self.active.wait()
 				if self.cmdqueue:
 					line = self.cmdqueue.pop(0)
 				else:
-					line = input("\r" + self.prompt)
+					line = input(self.prompt, self.histfile, self.histlen, self.complete, " \t\n\"'><=;|&(:")
 
 				signal.signal(signal.SIGINT, lambda num, stack: self.interrupt())
 				line = self.precmd(line)
@@ -564,38 +589,14 @@ class BetterCMD:
 			elif len(parts) == 2:
 				return parts[0], parts[1], line
 
-	@staticmethod
-	def set_auto_history(state):
-		if readline:
-			readline.set_auto_history(state)
-
-	@staticmethod
-	def load_history(histfile):
-		if readline:
-			readline.clear_history()
-			try:
-				readline.read_history_file(histfile)
-			except Exception as e:
-				cmdlogger.debug(f"Error loading history file: {e}")
-
-	@staticmethod
-	def write_history(histfile):
-		if readline:
-			readline.set_history_length(options.histlength)
-			try:
-				readline.write_history_file(histfile)
-			except Exception as e:
-				cmdlogger.debug(f"Error writing to history file: {e}")
-
 	def precmd(self, line):
-		__class__.write_history(options.cmd_histfile)
 		return line
 
 	def postcmd(self, stop, line):
 		return stop
 
 	def preloop(self):
-		__class__.load_history(options.cmd_histfile)
+		pass
 
 	def postloop(self):
 		pass
@@ -636,14 +637,26 @@ class BetterCMD:
 
 		Open debug console
 		"""
-		__class__.write_history(options.cmd_histfile)
-		__class__.load_history(options.debug_histfile)
+		import rlcompleter
+
+		if readline:
+			readline.clear_history()
+			try:
+				readline.read_history_file(options.debug_histfile)
+			except Exception as e:
+				cmdlogger.debug(f"Error loading history file: {e}")
+
 		interact(banner=paint(
 			"===> Entering debugging console...").CYAN, local=globals(),
 			exitmsg=paint("<=== Leaving debugging console..."
 		).CYAN)
-		__class__.write_history(options.debug_histfile)
-		__class__.load_history(options.cmd_histfile)
+
+		if readline:
+			readline.set_history_length(options.histlength)
+			try:
+				readline.write_history_file(options.debug_histfile)
+			except Exception as e:
+				cmdlogger.debug(f"Error writing to history file: {e}")
 
 	def completedefault(self, *ignored):
 		return []
@@ -686,8 +699,8 @@ class BetterCMD:
 
 class MainMenu(BetterCMD):
 
-	def __init__(self):
-		super().__init__()
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
 		self.set_id(None)
 		self.commands = {
 			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'script', 'portfwd'],
@@ -713,21 +726,6 @@ class MainMenu(BetterCMD):
 		options = list(map(str, core.sessions))
 		options.extend(extra)
 		return [option for option in options if option.startswith(text)]
-
-	@staticmethod
-	def confirm(text):
-		try:
-			__class__.set_auto_history(False)
-			answer = input(f"{paint(f'[?] {text} (y/N): ').yellow}")
-			__class__.set_auto_history(True)
-			return answer.lower() == 'y'
-
-		except EOFError:
-			print()
-			return __class__.confirm(text)
-
-		except KeyboardInterrupt:
-			print("^C")
 
 	def set_id(self, ID):
 		self.sid = ID
@@ -908,7 +906,7 @@ class MainMenu(BetterCMD):
 				cmdlogger.warning("No sessions to kill")
 				return False
 			else:
-				if __class__.confirm(f"Kill all sessions{self.active_sessions}"):
+				if ask(f"Kill all sessions{self.active_sessions} (y/N): ").lower() == 'y':
 					for session in reversed(list(core.sessions.copy().values())):
 						session.kill()
 				return
@@ -1343,7 +1341,7 @@ class MainMenu(BetterCMD):
 
 		Exit Penelope
 		"""
-		if __class__.confirm(f"Exit Penelope?{self.active_sessions}"):
+		if ask(f"Exit Penelope?{self.active_sessions} (y/N): ").lower() == 'y':
 			super().do_exit(line)
 			core.stop()
 			for thread in threading.enumerate():
@@ -1609,9 +1607,8 @@ class Core:
 							else:
 								session.detach()
 						else:
-							if session.type == 'Basic': # TODO # need to see
-								session.record(data,
-									_input=not session.interactive)
+							if session.type == 'Basic' and not hasattr(self, 'readline'): # TODO # need to see
+								session.record(data, _input=not session.interactive)
 
 							elif session.agent:
 								data = Messenger.message(Messenger.SHELL, data)
@@ -2423,6 +2420,7 @@ class Session:
 			self.type = 'PTY'
 		if self.type == 'PTY':
 			self.pty_ready = True
+			print(1111)
 		return True
 
 	def exec(
@@ -2751,7 +2749,7 @@ class Session:
 			f"\n  4) None of the above\n"
 		)
 		print(paint(options).magenta)
-		answer = ask("Select action")
+		answer = ask("Select action: ")
 
 		if answer == "1":
 			return self.upload(
@@ -2761,7 +2759,7 @@ class Session:
 			)[0]
 
 		elif answer == "2":
-			local_path = ask(f"Enter {name} local path")
+			local_path = ask(f"Enter {name} local path: ")
 			if local_path:
 				if os.path.exists(local_path):
 					return self.upload(
@@ -2773,7 +2771,7 @@ class Session:
 					logger.error("The local path does not exist...")
 
 		elif answer == "3":
-			remote_path = ask(f"Enter {name} remote path")
+			remote_path = ask(f"Enter {name} remote path: ")
 			if remote_path:
 				if not self.exec(f"test -f {remote_path} || echo x"):
 					return remote_path
@@ -2891,8 +2889,7 @@ class Session:
 				f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}',
 				separate=self.can_deploy_agent,
 				expect_func=lambda data: not self.can_deploy_agent or b"\x01" in data,
-				raw=True,
-				timeout=3
+				raw=True
 			)
 			if not isinstance(response, bytes):
 				logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
@@ -2937,27 +2934,38 @@ class Session:
 			pass
 
 	def readline_loop(self):
-		readline.clear_history()
-		if self.histfile.exists():
-			readline.read_history_file(self.histfile)
-
 		while core.attached_session == self:
 			try:
-				cmd = original_input("\033[s\033[u") # TODO
+				#self.prompt = ''
+				#last_lines = bytes(self.last_lines).decode()
+				#if last_lines:
+				#	self.prompt = last_lines.splitlines()[-1]
+				#self.prompt = self.last_lines.lines[-1].decode()
+				#print(repr(self.prompt))
+				cmd = input("\033[s\033[u", self.histfile, options.histlength, None, "\t") # TODO
+
+				#cmd = input(self.prompt, self.histfile, options.histlength, None, "\t") # TODO
 				if self.subtype == 'cmd':
 					assert len(cmd) <= MAX_CMD_PROMPT_LEN
-				readline.set_history_length(options.histlength)
-				try:
-					readline.write_history_file(self.histfile)
-				except FileNotFoundError:
-					cmdlogger.debug(f"History file '{self.histfile}' does not exist")
+				#self.record(b"\n" + cmd.encode(), _input=True)
+
 			except EOFError:
 				self.detach()
 				break
 			except AssertionError:
 				logger.error(f"Maximum prompt length is {MAX_CMD_PROMPT_LEN} characters. Current prompt is {len(cmd)}")
 			else:
+				#def xxx(data):
+					#print("P: ", repr(self.prompt.encode()))
+					#print("D: ", repr(data))
+					#print(bool(self.prompt.encode() in data))
+				#	return self.prompt.encode() in data
 				self.send(cmd.encode() + b"\n")
+				#self.exec(cmd, raw=True, expect_func=lambda data: self.prompt.encode() in data)
+				#output = self.exec(cmd, raw=True, expect_func=lambda data: self.prompt.encode() in data)
+				#print(repr(output))
+				#if output:
+				#	stdout(output)
 
 	def attach(self):
 		if threading.current_thread().name != 'Core':
@@ -4548,12 +4556,12 @@ def url_to_bytes(URL):
 			logger.error(e.reason)
 			if (hasattr(ssl, 'SSLCertVerificationError') and type(e.reason) == ssl.SSLCertVerificationError) or\
 				(isinstance(e.reason, ssl.SSLError) and "CERTIFICATE_VERIFY_FAILED" in str(e)):
-				answer = ask("Cannot verify SSL Certificate. Download anyway? (y/N)")
+				answer = ask("Cannot verify SSL Certificate. Download anyway? (y/N): ")
 				if answer.lower() == 'y': # Trust the cert
 					ctx = ssl._create_unverified_context()
 					continue
 			else:
-				answer = ask("Connection error. Try again? (Y/n)")
+				answer = ask("Connection error. Try again? (Y/n): ")
 				if answer.lower() == 'n': # Trust the cert
 					pass
 				else:
@@ -4965,12 +4973,15 @@ signal.signal(signal.SIGWINCH, WinResize)
 keyboard_interrupt = signal.getsignal(signal.SIGINT)
 try:
 	import readline
+	readline.parse_and_bind("tab: complete")
+	default_readline_delims = readline.get_completer_delims()
 except ImportError:
 	readline = None
+	default_readline_delims = None
 
 ## Create basic objects
 core = Core()
-menu = MainMenu()
+menu = MainMenu(histfile=options.cmd_histfile, histlen=options.histlength)
 start = menu.start
 
 # Check for installed emojis
