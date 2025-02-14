@@ -507,7 +507,7 @@ class BetterCMD:
 				if self.cmdqueue:
 					line = self.cmdqueue.pop(0)
 				else:
-					line = input(self.prompt)
+					line = input("\r" + self.prompt)
 
 				signal.signal(signal.SIGINT, lambda num, stack: self.interrupt())
 				line = self.precmd(line)
@@ -855,7 +855,7 @@ class MainMenu(BetterCMD):
 		else:
 			if core.sessions:
 				for host, sessions in core.hosts.items():
-					print('\n➤  ' + (OSes.get(sessions[0].OS, None) or '❔') + " " + str(paint(host).RED + ' 💀'))
+					print('\n➤  ' + str(paint(host).RED))
 					table = Table(joinchar=' | ')
 					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source')]
 					for session in sessions:
@@ -2000,7 +2000,7 @@ class Session:
 
 			logger.debug(f"OS: {self.OS}")
 			logger.debug(f"Type: {self.type}")
-			logger.debug(f"Type: {self.subtype}")
+			logger.debug(f"Subtype: {self.subtype}")
 			logger.debug(f"Interactive: {self.interactive}")
 			logger.debug(f"Echoing: {self.echoing}")
 
@@ -2008,8 +2008,8 @@ class Session:
 				core.session_wait.put(self.id)
 
 			logger.info(
-				f"Got {self.source} shell from {OSes[self.OS]} "
-				f"{paint(self.name).white_RED}{paint().green} 😍️ - "
+				f"Got {self.source} shell from "
+				f"{paint(self.name).white_RED}{paint().green} 😍️ "
 				f"Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
 			)
 
@@ -2152,16 +2152,16 @@ class Session:
 		return response or ''
 
 	def get_shell_info(self, silent=False):
+		self.bypass_control_session = True
 		self.shell_pid = self.get_shell_pid()
 		self.user = self.get_user()
 		if self.OS == 'Unix':
 			self.tty = self.get_tty(silent=silent)
+		self.bypass_control_session = False
 
 	def get_shell_pid(self):
 		if self.OS == 'Unix':
-			self.bypass_control_session = True
 			response = self.exec("echo $$", agent_typing=True, value=True)
-			self.bypass_control_session = False
 
 		elif self.OS == 'Windows':
 			return None # TODO
@@ -2173,9 +2173,7 @@ class Session:
 
 	def get_user(self):
 		if self.OS == 'Unix':
-			self.bypass_control_session = True
 			response = self.exec("echo \"$(id -un)($(id -u))\"", agent_typing=True, value=True)
-			self.bypass_control_session = False
 
 		elif self.OS == 'Windows':
 			if self.type == 'PTY':
@@ -2185,9 +2183,7 @@ class Session:
 		return response
 
 	def get_tty(self, silent=False):
-		self.bypass_control_session = True
 		response = self.exec("tty", agent_typing=True, value=True) # TODO check binary
-		self.bypass_control_session = False
 		if not (isinstance(response, str) and '/' in response):
 			if not silent:
 				logger.error(f"Cannot get the TTY of the shell. Response:\r\n{paint(response).white}")
@@ -2365,6 +2361,7 @@ class Session:
 				self.OS = 'Unix'
 				self.interactive = not response == var_value1 + var_value2 + "\n"
 				self.echoing = f"echo ${var_name1}${var_name2}" in response
+				self.prompt = response.split(var_value1 + var_value2)[-1].lstrip().encode()
 
 			elif f"'{var_name1}' is not recognized as an internal or external command" in response:
 				self.OS = 'Windows'
@@ -2856,12 +2853,13 @@ class Session:
 							if readline:
 								logger.info("Readline support enabled")
 								self.readline = True
+								self.type = 'Readline'
 								return True
 							else:
 								logger.error("Falling back to basic shell support")
 								return False
 
-			if not self.can_deploy_agent and not self.spare_control_sessions: #### TODO
+			if not self.can_deploy_agent and not self.spare_control_sessions:
 				logger.warning("Python agent cannot be deployed. I need to maintain at least one basic session to handle the PTY")
 				core.session_wait_host = self.name
 				self.spawn()
@@ -2889,15 +2887,12 @@ class Session:
 				self.exec(f"exec {self.shell}", raw=True)
 				self.echoing = False
 
-			def expect(data):
-				if not self.can_deploy_agent or b"\x01" in data: # TO FIX
-					return True
-
 			response = self.exec(
 				f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}',
 				separate=self.can_deploy_agent,
-				expect_func=expect,
-				raw=True
+				expect_func=lambda data: not self.can_deploy_agent or b"\x01" in data,
+				raw=True,
+				timeout=3
 			)
 			if not isinstance(response, bytes):
 				logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
@@ -2914,6 +2909,11 @@ class Session:
 			self.prompt = response
 
 			self.get_shell_info()
+
+			if _bin == self.bin['script']:
+				self.bypass_control_session = True
+				self.exec("stty sane")
+				self.bypass_control_session = False
 
 		elif self.OS == "Windows":
 			if self.type != 'PTY':
@@ -2977,6 +2977,7 @@ class Session:
 					self.record(self.prompt)
 
 			core.control << f'self.sessions[{self.id}].attach()'
+			menu.active.clear() # Redundant but safeguard
 			return True
 
 		if core.attached_session is not None:
@@ -4930,7 +4931,6 @@ cmdlogger.addHandler(stdout_handler)
 
 # Set constants
 myOS = platform.system()
-OSes = {'Unix':'🐧', 'Windows':'💻'}
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
 DISPLAY = 'DISPLAY' in os.environ
 MAX_CMD_PROMPT_LEN = 335
