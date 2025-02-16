@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.4"
+__version__ = "0.13.5"
 
 import os
 import io
@@ -854,7 +854,7 @@ class MainMenu(BetterCMD):
 		else:
 			if core.sessions:
 				for host, sessions in core.hosts.items():
-					print('\n➤  ' + str(paint(host).RED))
+					print('\n➤  ' + sessions[0].name_colored)
 					table = Table(joinchar=' | ')
 					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source')]
 					for session in sessions:
@@ -1523,6 +1523,7 @@ class Core:
 		self.fileserverID = 0
 		self.fileserver_lock = threading.Lock()
 
+		self.hosts = defaultdict(list)
 		self.sessions = {}
 		self.listeners = {}
 		self.fileservers = {}
@@ -1533,13 +1534,7 @@ class Core:
 
 	def __getattr__(self, name):
 
-		if name == 'hosts':
-			hosts = defaultdict(list)
-			for session in self.sessions.values():
-				hosts[session.name].append(session)
-			return hosts
-
-		elif name == 'new_listenerID':
+		if name == 'new_listenerID':
 			with self.listener_lock:
 				self.listenerID += 1
 				return self.listenerID
@@ -1553,7 +1548,6 @@ class Core:
 			with self.fileserver_lock:
 				self.fileserverID += 1
 				return self.fileserverID
-
 		else:
 			raise AttributeError(name)
 
@@ -1943,9 +1937,10 @@ class Session:
 				logger.debug(f"Cannot resolve hostname")
 		else:
 			self.hostname = target
-
 		self.name = f"{self.hostname}~{self.ip}" if self.hostname else self.ip
+		self.name_colored = f"{paint(self.name).white_RED}"
 
+		self.id = None
 		self.OS = None
 		self.type = 'Basic'
 		self.subtype = None
@@ -1992,36 +1987,43 @@ class Session:
 		self.bypass_control_session = False
 		self.upgrade_attempted = False
 
-		self.id = core.new_sessionID
-		logger.debug(f"Assigned session ID: {self.id}")
 		core.rlist.append(self)
-		core.sessions[self.id] = self
 
 		if self.determine():
-
 			logger.debug(f"OS: {self.OS}")
 			logger.debug(f"Type: {self.type}")
 			logger.debug(f"Subtype: {self.subtype}")
 			logger.debug(f"Interactive: {self.interactive}")
 			logger.debug(f"Echoing: {self.echoing}")
 
+			self.get_system_info()
+			self.name = f"{self.hostname}~{self.ip}_{self.system}_{self.arch}"
+			self.name_colored = (
+				f"{paint(self.hostname).white_BLUE}{paint('-').white_DIM}"
+				f"{paint(self.ip).white_RED}{paint('-').white_DIM}"
+				f"{paint(self.system + '-' + self.arch).cyan}"
+			)
+			self.id = core.new_sessionID
+			core.hosts[self.name].append(self)
+			core.sessions[self.id] = self
+
 			if self.name == core.session_wait_host:
 				core.session_wait.put(self.id)
 
 			logger.info(
 				f"Got {self.source} shell from "
-				f"{paint(self.name).white_RED}{paint().green} 😍️ "
+				f"{self.name_colored}{paint().green} 😍️ "
 				f"Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
 			)
 
 			self.directory = options.basedir / self.name
 			if not options.no_log:
 				self.directory.mkdir(parents=True, exist_ok=True)
-				self.logpath = self.directory / f"{self.name}.log"
+				self.logpath = self.directory / f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}.log'
 				self.histfile = self.directory / "readline_history"
 				self.logfile = open(self.logpath, 'ab', buffering=0)
-				if not options.no_timestamps and not self.logpath.exists():
-					self.logfile.write(datetime.now().strftime(paint("%Y-%m-%d %H:%M:%S: ").magenta).encode())
+				if not options.no_timestamps:
+					self.logfile.write(str(paint(datetime.now().strftime("%Y-%m-%d %H:%M:%S: ")).magenta).encode())
 
 			for module in modules().values():
 				if module.enabled and module.on_session_start:
@@ -2145,12 +2147,21 @@ class Session:
 
 	def get_system_info(self):
 		if self.OS == 'Unix':
-			response = self.exec("uname -psn", agent_typing=True, value=True)
+			response = self.exec('echo -e "$(uname -n)\t$(uname -s)\t$(uname -p)"', agent_typing=True, value=True)
+			self.hostname, self.system, self.arch = response.split("\t")
 
 		elif self.OS == 'Windows':
-			response = None # TODO
+			self.systeminfo = self.exec('systeminfo', value=True)
 
-		return response or ''
+			def extract_value(pattern):
+				match = re.search(pattern, self.systeminfo, re.MULTILINE)
+				return match.group(1).replace(" ", "_").rstrip() if match else None
+
+			self.hostname = extract_value(r"^Host Name:\s+(.+)")
+			self.system = extract_value(r"^OS Name:\s+(.+)")
+			self.arch = extract_value(r"^System Type:\s+(.+)")
+
+		return True
 
 	def get_shell_info(self, silent=False):
 		self.bypass_control_session = True
@@ -2279,7 +2290,6 @@ class Session:
 
 		return self._tmp
 
-	@staticmethod
 	def agent_only(func):
 		@wraps(func)
 		def newfunc(self, *args, **kwargs):
@@ -3823,7 +3833,6 @@ class Session:
 			self.subchannel.control << 'kill'
 
 		core.rlist.remove(self)
-		del core.sessions[self.id]
 
 		if self in core.wlist:
 			core.wlist.remove(self)
@@ -3836,12 +3845,14 @@ class Session:
 		self.socket.close()
 
 		if not self.OS:
-			message = f"Invalid shell from {paint(self.name).white_RED} 🙄"
+			message = f"Invalid shell from {self.name_colored} 🙄"
 		else:
+			del core.sessions[self.id]
+			core.hosts[self.name].remove(self)
 			message = f"Session [{self.id}] died..."
 
 			if not core.hosts[self.name]:
-				message += f" We lost {paint(self.name).white_RED} 💔"
+				message += f" We lost {self.name_colored} 💔"
 
 		logger.error(message)
 
