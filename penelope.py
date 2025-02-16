@@ -2147,7 +2147,16 @@ class Session:
 
 	def get_system_info(self):
 		if self.OS == 'Unix':
-			response = self.exec('echo -e "$(uname -n)\t$(uname -s)\t$(uname -p)"', agent_typing=True, value=True)
+			if not self.bin['uname']:
+				return False
+
+			response = self.exec(
+				'echo -e "$({0} -n)\t'
+				'$({0} -s)\t'
+				'$({0} -m 2>/dev/null|grep -v unknown||{0} -p 2>/dev/null)"'.format(self.bin['uname']),
+				agent_typing=True,
+				value=True
+			)
 			self.hostname, self.system, self.arch = response.split("\t")
 
 		elif self.OS == 'Windows':
@@ -2227,7 +2236,7 @@ class Session:
 			try:
 				if self.OS == "Unix":
 					binaries = [
-						"sh", "bash", "python", "python3",
+						"sh", "bash", "python", "python3", "uname",
 						"script", "socat", "tty", "echo", "base64", "wget",
 						"curl", "tar", "rm", "stty", "setsid", "find", "nc"
 					]
