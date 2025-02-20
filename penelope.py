@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.5"
+__version__ = "0.13.6"
 
 import os
 import io
@@ -81,9 +81,20 @@ def Open(item, terminal=False):
 		program = 'xdg-open' if myOS != 'Darwin' else 'open'
 		args = [item]
 	else:
+		if not TERMINAL:
+			logger.error("No available terminal emulator")
+			return False
+
 		if myOS != 'Darwin':
-			program = 'x-terminal-emulator'
-			args = ['-e', *shlex.split(item)]
+			program = TERMINAL
+			_switch = '-e'
+			if program in ('gnome-terminal', 'mate-terminal'):
+				_switch = '--'
+			elif program == 'terminator':
+				_switch = '-x'
+			elif program == 'xfce4-terminal':
+				_switch = '--command='
+			args = [_switch, *shlex.split(item)]
 		else:
 			program = 'osascript'
 			args = ['-e', f'tell app "Terminal" to do script "{item}"']
@@ -903,6 +914,7 @@ class MainMenu(BetterCMD):
 			kill 1		Kill SessionID 1
 			kill *		Kill all sessions
 		"""
+
 		if ID == '*':
 			if not core.sessions:
 				cmdlogger.warning("No sessions to kill")
@@ -911,13 +923,13 @@ class MainMenu(BetterCMD):
 				if ask(f"Kill all sessions{self.active_sessions} (y/N): ").lower() == 'y':
 					for session in reversed(list(core.sessions.copy().values())):
 						session.kill()
-				return
 		else:
 			core.sessions[ID].kill()
 
-			if options.single_session and not core.sessions:
-				core.stop()
-				return True
+		if options.single_session and len(core.sessions) == 1:
+			core.stop()
+			logger.info("Penelope exited due to Single Session mode")
+			return True
 
 	@session(current=True)
 	def do_portfwd(self, line):
@@ -3062,8 +3074,9 @@ class Session:
 			logger.warning("Session detached ⇲")
 			menu.set_id(self.id)
 		else:
-			if options.single_session and len(core.sessions) == 0:
+			if options.single_session and not core.sessions:
 				core.stop()
+				logger.info("Penelope exited due to Single Session mode")
 				return
 			menu.set_id(None)
 		menu.show()
@@ -3633,8 +3646,8 @@ class Session:
 				return False
 
 			tail_cmd = f'tail -n+0 -f {output_file_name}'
-			Open(tail_cmd, terminal=True)
 			print(tail_cmd)
+			Open(tail_cmd, terminal=True)
 
 			thread = threading.Thread(target=self.exec, args=(program, ), kwargs={
 				'stdin_src': input_file,
@@ -4366,8 +4379,16 @@ class ngrok(Module):
 		Setup ngrok
 		"""
 		if session.OS == 'Unix':
+			if not session.system == 'Linux':
+				logger.error(f"This modules runs only on Linux, not on {session.system}.")
+				return False
 			session.upload(URLS['ngrok_linux'], remote_path=session.tmp)
-			session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin")
+			result = session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin >/dev/null", value=True)
+			if not result:
+				logger.info("ngrok successuly extracted on '~/.local/bin'")
+			else:
+				logger.error(f"Extraction to '~/.local/bin' failed:\n{indent(result, ' ' * 4 + '- ')}")
+				return False
 			token = input("Authtoken: ")
 			session.exec(f"ngrok config add-authtoken {token}")
 		else:
@@ -4991,6 +5012,11 @@ cmdlogger.addHandler(stdout_handler)
 myOS = platform.system()
 TTY_NORMAL = termios.tcgetattr(sys.stdin)
 DISPLAY = 'DISPLAY' in os.environ
+TERMINALS = [
+	'gnome-terminal', 'mate-terminal', 'qterminal', 'terminator', 'alacritty', 'kitty', 'tilix',
+	'konsole', 'xfce4-terminal', 'lxterminal', 'urxvt', 'st', 'xterm', 'eterm', 'x-terminal-emulator'
+]
+TERMINAL = next((term for term in TERMINALS if shutil.which(term)), None)
 MAX_CMD_PROMPT_LEN = 335
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 URLS = {
