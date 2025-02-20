@@ -2147,17 +2147,19 @@ class Session:
 
 	def get_system_info(self):
 		if self.OS == 'Unix':
+			self.bypass_control_session = True
 			if not self.bin['uname']:
 				return False
 
 			response = self.exec(
-				'printf "$({0} -n)\t'
-				'$({0} -s)\t'
-				'$({0} -m 2>/dev/null|grep -v unknown||{0} -p 2>/dev/null)"'.format(self.bin['uname']),
+				r'printf "$({0} -n)\t'
+				r'$({0} -s)\t'
+				r'$({0} -m 2>/dev/null|grep -v unknown||{0} -p 2>/dev/null)"'.format(self.bin['uname']),
 				agent_typing=True,
 				value=True
 			)
 			self.hostname, self.system, self.arch = response.split("\t")
+			self.bypass_control_session = False
 
 		elif self.OS == 'Windows':
 			self.systeminfo = self.exec('systeminfo', value=True)
@@ -2443,7 +2445,6 @@ class Session:
 			self.type = 'PTY'
 		if self.type == 'PTY':
 			self.pty_ready = True
-			print(1111)
 		return True
 
 	def exec(
