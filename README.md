@@ -4,11 +4,11 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/>
 </div>
-Penelope is a shell handler focused on making post-exploitation simpler and more efficient.
+Penelope is a powerful shell handler built to simplify, accelerate, and optimize post-exploitation workflows.
 
-- Runs on: All Unix-based systems, including Linux, macOS, FreeBSD, and more.
-- Requirements: Python 3.6+.
-- Standalone: Uses only Python’s standard library.
+- It runs on all Unix-based systems (Linux, macOS, FreeBSD etc)
+- Requires **Python 3.6+**
+- It is **standalone** as it uses only Python’s standard library.
 
 ![Penelope](https://github.com/user-attachments/assets/b8e5cd84-60a5-4d79-b041-68bee901ab19)
 
@@ -22,8 +22,8 @@ For a more streamlined setup, it can be installed using:
 ```bash
 pipx install git+https://github.com/brightio/penelope 
 ```
-
-## Session Features
+## Features
+### Session Features
 |Description|Unix with Python>=2.3| Unix without Python>=2.3|Windows|
 |-----------|:-------------------:|:-----------------------:|:-----:|
 |Auto-upgrade shell|PTY|PTY(*)|readline|
@@ -38,7 +38,7 @@ pipx install git+https://github.com/brightio/penelope
 
 (*) opens a second TCP connection
 
-## Global Features
+### Global Features
 - Streamline interaction with the targets via modules
 - Multiple sessions
 - Multiple listeners
@@ -128,7 +128,7 @@ Debug:
 ```
 
 ## Contribution
-Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. However, avoid making pull requests from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
+Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. You can also submit pull requests but avoid making commits from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
 
 ## TODO
 
@@ -152,7 +152,7 @@ Your contributions are invaluable! If you’d like to help, please report bugs, 
 ## Trivia
 Penelope was the wife of Odysseus and she is known for her fidelity for him by waiting years. Since a characteristic of reverse shell handlers is waiting, this tool is named after her.
 
-### Thanks to the early birds
+## Thanks to the early birds
 * [Cristian Grigoriu - @crgr](https://github.com/crgr) for inspiring me to automate the PTY upgrade process. This is how this project was born.
 * [Paul Taylor - @bao7uo](https://github.com/bao7uo) for the idea to support bind shells.
 * [Longlone - @WAY29](https://github.com/WAY29) for indicating the need for compatibility with previous versions of Python (3.6).
