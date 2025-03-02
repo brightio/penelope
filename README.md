@@ -14,7 +14,11 @@ Penelope is a shell handler focused on making post-exploitation simpler and more
 
 ## Install
 
-Penelope can be used without installation by simply cloning the repository, but if needed, it can also be installed with:
+Penelope requires no installation - just download and execute the script:
+```bash
+wget https://raw.githubusercontent.com/brightio/penelope/refs/heads/main/penelope.py && python3 penelope.py
+```
+For a more streamlined setup, it can be installed using:
 ```bash
 pipx install git+https://github.com/brightio/penelope 
 ```
@@ -123,16 +127,6 @@ Debug:
 
 ```
 
-## Extras
-There are also included two sample exploit simulation scripts in the extras folder to demonstrate how penelope can be imported and get shell on the same terminal. The illustration below shows how Penelope is imported in a python3 exploit for the Quick machine of Hack The Box.
-
-![exploit](https://user-images.githubusercontent.com/65655412/151350244-3d0b4e60-04a6-494b-8eab-2498cfb8b809.gif)
-
-Furthermore, a bash script is included which automatically upgrades Unix shells to PTY using the xdotool.
-
-![tty](https://user-images.githubusercontent.com/65655412/151353020-8585e352-2037-41f1-94d6-4fd7d1cb7943.gif)
-
-
 ## Contribution
 Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. However, avoid making pull requests from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
 
@@ -158,7 +152,7 @@ Your contributions are invaluable! If you’d like to help, please report bugs, 
 ## Trivia
 Penelope was the wife of Odysseus and she is known for her fidelity for him by waiting years. Since a characteristic of reverse shell handlers is waiting, this tool is named after her.
 
-## Thanks to
+### Thanks to the early birds
 * [Cristian Grigoriu - @crgr](https://github.com/crgr) for inspiring me to automate the PTY upgrade process. This is how this project was born.
 * [Paul Taylor - @bao7uo](https://github.com/bao7uo) for the idea to support bind shells.
 * [Longlone - @WAY29](https://github.com/WAY29) for indicating the need for compatibility with previous versions of Python (3.6).
