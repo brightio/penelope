@@ -4,10 +4,20 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/>
 </div>
+Penelope is a shell handler focused on making post-exploitation simpler and more efficient.
 
-Penelope is a shell handler designed to be easy to use and intended to replace netcat when exploiting RCE vulnerabilities. It is compatible with Linux and macOS and requires Python 3.6 or higher. It is a standalone script using only Python's native library, and it is intended to remain this way.
+- Runs on: All Unix-based systems, including Linux, macOS, FreeBSD, and more.
+- Requirements: Python 3.6+.
+- Standalone: Uses only Python’s standard library.
 
-![penelope](https://github.com/user-attachments/assets/e1b9332f-d224-4aee-ae96-8ec43a8faf67)
+![Penelope](https://github.com/user-attachments/assets/b8e5cd84-60a5-4d79-b041-68bee901ab19)
+
+## Install
+
+Penelope can be used without installation by simply cloning the repository, but if needed, it can also be installed with:
+```bash
+pipx install git+https://github.com/brightio/penelope 
+```
 
 ## Session Features
 |Description|Unix with Python>=2.3| Unix without Python>=2.3|Windows|
@@ -32,21 +42,13 @@ Penelope is a shell handler designed to be easy to use and intended to replace n
 - Can be imported by python3 exploits and get shell on the same terminal (see [Extras](#Extras))
 
 ### Modules
-![image](https://github.com/user-attachments/assets/9c462bee-df4d-4862-a36a-fa294641bdfb)
+![Modules](https://github.com/user-attachments/assets/cb2c3e36-a051-4bff-9091-25b63a584235)
 
 #### Meterpreter module demonstration
 
 ![meterpreter](https://github.com/user-attachments/assets/b9cda69c-e25c-41e1-abe2-ce18ba13c4ed)
 
 Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
-
-## Install
-
-**Pipx** is required. Installation instructions - https://github.com/pypa/pipx?tab=readme-ov-file#install-pipx
-
-```bash
-pipx install git+https://github.com/brightio/penelope 
-```
 
 ## Usage
 ### Sample Typical Usage
@@ -79,7 +81,7 @@ Some Notes:
 - By default you need to press `F12` to detach the PTY shell and go to the Main Menu. If the upgrade was not possible the you ended up with a basic shell, you can detach it with `Ctrl+C`. This also prevents the accidental killing of the shell.
 - The Main Menu supports TAB completion and also short commands. For example instead of `interact 1` you can just type `i 1`.
 
-![Main Menu](https://github.com/user-attachments/assets/455aa604-0449-4d33-8f13-aa0650f938ec)
+![Main Menu](https://github.com/user-attachments/assets/b3f568bc-5e66-4e6f-9510-3e61a3518e82)
 
 ### Command Line Options
 ```
@@ -91,22 +93,18 @@ Reverse or Bind shell?:
   -c , --connect        Bind shell Host
 
 Hints:
-  -a, --hints           Show sample payloads for reverse shell based on the registered Listeners
+  -a, --payloads        Show sample payloads for reverse shell based on the registered Listeners
   -l, --interfaces      Show the available network interfaces
   -h, --help            show this help message and exit
-
-Verbosity:
-  -Q, --silent          Be a bit less verbose
-  -d, --debug           Show debug messages
 
 Session Logging:
   -L, --no-log          Do not create session log files
   -T, --no-timestamps   Do not include timestamps in session logs
-  -CT, --no-colored-timestamps Do not color timestamps in session logs
+  -CT,                  Do not color timestamps in session logs
 
 Misc:
   -m , --maintain       Maintain NUM total shells per target
-  -P, --plain           Just land to the main menu
+  -M, --menu            Just land to the Main Menu
   -S, --single-session  Accommodate only the first created session
   -C, --no-attach       Disable auto attaching sessions upon creation
   -U, --no-upgrade      Do not upgrade shells
@@ -114,11 +112,15 @@ Misc:
 File server:
   -s, --serve           HTTP File Server mode
   -p , --port           File Server port. Default: 8000
-  -pass , --password    URL prefix
+  -prefix               URL prefix
 
 Debug:
   -N , --no-bins        Simulate binary absence on target (comma separated list)
   -v, --version         Show Penelope version
+  -d, --debug           Show debug messages
+  -dd, --dev-mode       Developer mode
+  -cu, --check-urls     Check health of hardcoded URLs
+
 ```
 
 ## Extras
@@ -132,7 +134,7 @@ Furthermore, a bash script is included which automatically upgrades Unix shells 
 
 
 ## Contribution
-If you want to contribute to this project please report bugs, unexpected program behaviours and/or new ideas.
+Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. However, avoid making pull requests from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
 
 ## TODO
 
@@ -153,10 +155,6 @@ If you want to contribute to this project please report bugs, unexpected program
 * Main menu: Ctrl-C on main menu has not the expected behavior yet.
 * Session logging: when executing commands on the target that feature alternate buffers like nano and they are abnormally terminated, then when 'catting' the logfile it seems corrupted. However the data are still there. Also for example when resetting the remote terminal, these escape sequences are reflected in the logs. I will need to filter specific escape sequences so as to ensure that when 'catting' the logfile, a smooth log is presented.
 
-### Limitations
-* For the emojis to be shown correctly, the fonts-noto-color-emoji package should be installed. It is installed by default on many distros but not on parrot OS. May consider removing emojis altogether.
-* When downloading files via the download menu command, clickable links with the downloaded files are presented. However the links are not clickable on the qterminal (Kali Linux).
-
 ## Trivia
 Penelope was the wife of Odysseus and she is known for her fidelity for him by waiting years. Since a characteristic of reverse shell handlers is waiting, this tool is named after her.
 
@@ -166,4 +164,4 @@ Penelope was the wife of Odysseus and she is known for her fidelity for him by w
 * [Longlone - @WAY29](https://github.com/WAY29) for indicating the need for compatibility with previous versions of Python (3.6).
 * [Carlos Polop - @carlospolop](https://github.com/carlospolop) for the idea to spawn shells on listeners on other systems.
 * [@darrenmartyn](https://github.com/darrenmartyn) for indicating an alternative method to upgrade the shell to PTY using the script command.
-* [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80), [@TheAalCh3m1st](https://github.com/TheAalCh3m1st) for bug reporting.
+* [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80), [@TheAalCh3m1st](https://github.com/TheAalCh3m1st), [@r3pek](https://github.com/r3pek) for bug reporting.
