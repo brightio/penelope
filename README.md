@@ -20,7 +20,7 @@ wget https://raw.githubusercontent.com/brightio/penelope/refs/heads/main/penelop
 ```
 For a more streamlined setup, it can be installed using:
 ```bash
-pipx install git+https://github.com/brightio/penelope 
+pipx install git+https://github.com/brightio/penelope
 ```
 ## Features
 ### Session Features

