@@ -2292,8 +2292,13 @@ class Session:
 				tmpname = rand(10)
 				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
 				for directory in common_dirs:
-					if not self.exec(f'echo {tmpname} > {directory}/{tmpname}', value=True):
-						self.exec(f'rm {directory}/{tmpname}')
+					test_file = f"{directory}/{tmpname}.sh"
+					self.exec(f'echo "#!/bin/sh\necho exec-ok" > {test_file}')
+					self.exec(f'chmod +x {test_file}')
+					output = self.exec(test_file, value=True)
+
+					self.exec(f'rm {test_file}')
+					if output and "exec-ok" in output:
 						self._tmp = directory
 						break
 				else:
