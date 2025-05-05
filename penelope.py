@@ -2293,12 +2293,12 @@ class Session:
 				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
 				for directory in common_dirs:
 					test_file = f"{directory}/{tmpname}.sh"
-					self.exec(f'echo "#!/bin/sh\necho exec-ok" > {test_file}')
+					self.exec(f'echo "#!/bin/sh\necho ok" > {test_file}')
 					self.exec(f'chmod +x {test_file}')
 					output = self.exec(test_file, value=True)
 
 					self.exec(f'rm {test_file}')
-					if output and "exec-ok" in output:
+					if output and "ok" in output:
 						self._tmp = directory
 						break
 				else:
@@ -3201,9 +3201,9 @@ class Session:
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
 				temp = self.tmp + "/" + rand(8)
-				cmd = rf'for file in {remote_items};do readlink -f "$file";done|xargs -d"\n" tar cz|base64 -w0 > {temp}'
+				cmd = rf'for file in {remote_items}; do tar -C "$(dirname "$file")" -czf - "$(basename "$file")"; done | base64 > {temp} && echo ok'
 				response = self.exec(cmd, timeout=None, value=True)
-				if not response:
+				if not response or "ok" not in response:
 					logger.error("Cannot create archive")
 					return []
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
@@ -3603,7 +3603,10 @@ class Session:
 				return []
 
 		# Present uploads
-		altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
+		sep = '/' if self.OS == 'Unix' else '\\'
+		base = destination.rstrip(sep)
+		altnames = [base + sep + x for x in altnames]
+
 		for item in altnames:
 			uploaded_path = shlex.quote(str(item)) if self.OS == 'Unix' else f'"{item}"'
 			logger.info(f"{paint('Upload OK').GREEN_white} {paint(uploaded_path).yellow}")
