@@ -2298,7 +2298,7 @@ class Session:
 					output = self.exec(test_file, value=True)
 
 					self.exec(f'rm {test_file}')
-					if output and "ok" in output:
+					if output and output == "ok":
 						self._tmp = directory
 						break
 				else:
@@ -3203,7 +3203,7 @@ class Session:
 				temp = self.tmp + "/" + rand(8)
 				cmd = rf'for file in {remote_items}; do tar -C "$(dirname "$file")" -czf - "$(basename "$file")"; done | base64 > {temp} && echo ok'
 				response = self.exec(cmd, timeout=None, value=True)
-				if not response or "ok" not in response:
+				if not response or response != "ok":
 					logger.error("Cannot create archive")
 					return []
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
