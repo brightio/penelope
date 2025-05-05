@@ -1059,7 +1059,7 @@ class MainMenu(BetterCMD):
 			upload https://www.exploit-db.com/exploits/40611  Download the underlying exploit code locally and upload it to the target
 		"""
 		if local_items:
-			core.sessions[self.sid].upload(local_items, randomize_fname=True)
+			core.sessions[self.sid].upload(local_items, randomize_fname=False)
 		else:
 			cmdlogger.warning("No files or directories specified")
 
@@ -2292,8 +2292,13 @@ class Session:
 				tmpname = rand(10)
 				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
 				for directory in common_dirs:
-					if not self.exec(f'echo {tmpname} > {directory}/{tmpname}', value=True):
-						self.exec(f'rm {directory}/{tmpname}')
+					test_file = f"{directory}/{tmpname}.sh"
+					self.exec(f'echo "#!/bin/sh\necho ok" > {test_file}')
+					self.exec(f'chmod +x {test_file}')
+					output = self.exec(test_file, value=True)
+
+					self.exec(f'rm {test_file}')
+					if output and output == "ok":
 						self._tmp = directory
 						break
 				else:
@@ -3091,7 +3096,7 @@ class Session:
 			logger.error(e)
 			return []
 
-		local_download_folder = self.directory / "downloads"
+		local_download_folder = Path.cwd()
 		try:
 			local_download_folder.mkdir(parents=True, exist_ok=True)
 		except Exception as e:
@@ -3168,7 +3173,7 @@ class Session:
 				tar.add = handle_exceptions(tar.add)
 				for item in items:
 					try:
-						tar.add(os.path.abspath(item))
+						tar.add(os.path.abspath(item), arcname=os.path.basename(item))
 					except:
 						stderr_stream << (str(sys.exc_info()[1]) + '\n').encode()
 				tar.close()
@@ -3196,9 +3201,9 @@ class Session:
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
 				temp = self.tmp + "/" + rand(8)
-				cmd = rf'for file in {remote_items};do readlink -f "$file";done|xargs -d"\n" tar cz|base64 -w0 > {temp}'
+				cmd = rf'for file in {remote_items}; do tar -C "$(dirname "$file")" -czf - "$(basename "$file")"; done | base64 > {temp} && echo ok'
 				response = self.exec(cmd, timeout=None, value=True)
-				if not response:
+				if not response or response != "ok":
 					logger.error("Cannot create archive")
 					return []
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
@@ -3284,7 +3289,7 @@ class Session:
 			# Present the downloads
 			downloaded = []
 			for path in remote_paths:
-				local_path = local_download_folder / path[1:]
+				local_path = local_download_folder / Path(path).name
 				if os.path.isabs(path) and os.path.exists(local_path):
 					downloaded.append(local_path)
 				else:
@@ -3598,7 +3603,10 @@ class Session:
 				return []
 
 		# Present uploads
-		altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
+		sep = '/' if self.OS == 'Unix' else '\\'
+		base = destination.rstrip(sep)
+		altnames = [base + sep + x for x in altnames]
+
 		for item in altnames:
 			uploaded_path = shlex.quote(str(item)) if self.OS == 'Unix' else f'"{item}"'
 			logger.info(f"{paint('Upload OK').GREEN_white} {paint(uploaded_path).yellow}")
