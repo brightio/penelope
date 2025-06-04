@@ -1943,18 +1943,6 @@ class Session:
 		self.listener = listener
 		self.source = 'reverse' if listener else 'bind'
 
-		if target == self.ip:
-			try:
-				self.hostname = socket.gethostbyaddr(target)[0]
-
-			except socket.herror:
-				self.hostname = None
-				logger.debug(f"Cannot resolve hostname")
-		else:
-			self.hostname = target
-		self.name = f"{self.hostname}~{self.ip}" if self.hostname else self.ip
-		self.name_colored = f"{paint(self.name).white_RED}"
-
 		self.id = None
 		self.OS = None
 		self.type = 'Basic'
@@ -2012,12 +2000,35 @@ class Session:
 			logger.debug(f"Echoing: {self.echoing}")
 
 			self.get_system_info()
-			self.name = f"{self.hostname}~{self.ip}_{self.system}_{self.arch}"
+
+			if not self.hostname:
+				if target == self.ip:
+					try:
+						self.hostname = socket.gethostbyaddr(target)[0]
+
+					except socket.herror:
+						self.hostname = ''
+						logger.debug(f"Cannot resolve hostname")
+				else:
+					self.hostname = target
+
+			hostname = self.hostname
+			c1 = '~' if hostname else ''
+			ip = self.ip
+			c2 = '-'
+			system = self.system
+			if not system:
+				system = self.OS.upper()
+			if self.arch:
+				system += '-' + self.arch
+
+			self.name = f"{hostname}{c1}{ip}{c2}{system}"
 			self.name_colored = (
-				f"{paint(self.hostname).white_BLUE}{paint('-').white_DIM}"
-				f"{paint(self.ip).white_RED}{paint('-').white_DIM}"
-				f"{paint(self.system + '-' + self.arch).cyan}"
+				f"{paint(hostname).white_BLUE}{paint(c1).white_DIM}"
+				f"{paint(ip).white_RED}{paint(c2).white_DIM}"
+				f"{paint(system).cyan}"
 			)
+
 			self.id = core.new_sessionID
 			core.hosts[self.name].append(self)
 			core.sessions[self.id] = self
@@ -2162,11 +2173,13 @@ class Session:
 		return self
 
 	def get_system_info(self):
+		self.hostname = self.system = self.arch = ''
+
 		if self.OS == 'Unix':
-			self.bypass_control_session = True
 			if not self.bin['uname']:
 				return False
 
+			self.bypass_control_session = True
 			response = self.exec(
 				r'printf "$({0} -n)\t'
 				r'$({0} -s)\t'
@@ -2174,15 +2187,21 @@ class Session:
 				agent_typing=True,
 				value=True
 			)
-			self.hostname, self.system, self.arch = response.split("\t")
 			self.bypass_control_session = False
+
+			try:
+				self.hostname, self.system, self.arch = response.split("\t")
+			except:
+				return False
 
 		elif self.OS == 'Windows':
 			self.systeminfo = self.exec('systeminfo', value=True)
+			if not self.systeminfo:
+				return False
 
 			def extract_value(pattern):
 				match = re.search(pattern, self.systeminfo, re.MULTILINE)
-				return match.group(1).replace(" ", "_").rstrip() if match else None
+				return match.group(1).replace(" ", "_").rstrip() if match else ''
 
 			self.hostname = extract_value(r"^Host Name:\s+(.+)")
 			self.system = extract_value(r"^OS Name:\s+(.+)")
@@ -2219,7 +2238,7 @@ class Session:
 				return None # TODO
 			response = self.exec("whoami", value=True)
 
-		return response
+		return response or ''
 
 	def get_tty(self, silent=False):
 		response = self.exec("tty", agent_typing=True, value=True) # TODO check binary
@@ -2408,7 +2427,7 @@ class Session:
 				self.interactive = True
 				self.echoing = True
 				self.prompt = response.splitlines()[-1].encode()
-				self.version = re.search(rf"Microsoft Windows \[Version (.*)\]", response, re.DOTALL)[1]
+				self.version = re.search(r"Microsoft Windows \[Version (.*)\]", response, re.DOTALL)[1]
 
 			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response:
 				self.OS = 'Windows'
@@ -3879,6 +3898,7 @@ class Session:
 
 			if not core.hosts[self.name]:
 				message += f" We lost {self.name_colored} 💔"
+				del core.hosts[self.name]
 
 		logger.error(message)
 
