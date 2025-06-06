@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.9"
+__version__ = "0.13.10"
 
 import os
 import io
@@ -50,7 +50,7 @@ from code import interact
 from zlib import compress
 from errno import EADDRINUSE, EADDRNOTAVAIL
 from select import select
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from argparse import ArgumentParser
 from datetime import datetime
 from textwrap import indent, dedent
@@ -2642,8 +2642,12 @@ class Session:
 			if self.need_control_session and not self.bypass_control_session:
 				args = locals()
 				del args['self']
-				response = self.control_session.exec(**args)
-				return response
+				try:
+					response = self.control_session.exec(**args)
+					return response
+				except AttributeError: # No control session
+					logger.error("Spawn a new shell for this session to operate properly")
+					return None
 
 			if not self or not self.subchannel.can_use:
 				logger.debug("Exec: The session is killed")
@@ -2813,7 +2817,7 @@ class Session:
 		if answer == "1":
 			return self.upload(
 				url,
-				remote_path=self.tmp,
+				remote_path="/var/tmp",
 				randomize_fname=False
 			)[0]
 
@@ -2897,7 +2901,7 @@ class Session:
 					cmd = socat_cmd.format(_bin)
 
 				else:
-					_bin = self.tmp + '/socat'
+					_bin = "/var/tmp/socat"
 					if not self.exec(f"test -f {_bin} || echo x"): # TODO maybe needs rstrip
 						cmd = socat_cmd.format(_bin)
 					else:
@@ -3215,7 +3219,7 @@ class Session:
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
 				temp = self.tmp + "/" + rand(8)
-				cmd = rf'for file in {remote_items};do readlink -f "$file";done|xargs -d"\n" tar cz|base64 -w0 > {temp}'
+				cmd = rf'tar -czf - -h {remote_items}|base64 > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot create archive")
@@ -3617,13 +3621,17 @@ class Session:
 				return []
 
 		# Present uploads
-		altnames = list(map(lambda x: destination + ('/' if self.OS == 'Unix' else '\\') + x, altnames))
+		uploaded_paths = []
 		for item in altnames:
-			uploaded_path = shlex.quote(str(item)) if self.OS == 'Unix' else f'"{item}"'
+			if self.OS == "Unix":
+				uploaded_path = shlex.quote(str(Path(destination) / item))
+			elif self.OS == "Windows":
+				uploaded_path = f'"{PureWindowsPath(destination, item)}"'
 			logger.info(f"{paint('Upload OK').GREEN_white} {paint(uploaded_path).yellow}")
+			uploaded_paths.append(uploaded_path)
 			print()
 
-		return altnames
+		return uploaded_paths
 
 	@agent_only
 	def script(self, local_script):
