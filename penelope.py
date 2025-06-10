@@ -1956,7 +1956,7 @@ class Session:
 		self.pty_ready = None
 		self.readline = None
 
-		self.version = None
+		self.win_version = None
 
 		self.prompt = None
 		self.new = True
@@ -2422,6 +2422,7 @@ class Session:
 			raw=True,
 			expect_func=expect
 		)
+
 		if response:
 			response = response.decode()
 
@@ -2439,7 +2440,9 @@ class Session:
 				self.interactive = True
 				self.echoing = True
 				self.prompt = response.splitlines()[-1].encode()
-				self.version = re.search(r"Microsoft Windows \[Version (.*)\]", response, re.DOTALL)[1]
+				win_version = re.search(r"Microsoft Windows \[Version (.*)\]", response, re.DOTALL)
+				if win_version:
+					self.win_version = win_version[1]
 
 			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response or \
 					re.search('PS.*>', response, re.DOTALL):
@@ -2449,6 +2452,7 @@ class Session:
 				self.interactive = True
 				self.echoing = False
 				self.prompt = response.splitlines()[-1].encode()
+
 		else: #TODO check if it is needed
 			def expect(data):
 				try:
