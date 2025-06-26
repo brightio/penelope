@@ -1099,8 +1099,14 @@ class MainMenu(BetterCMD):
 		"""
 		[module name]
 		Run a module. Run 'help run' to view the available modules"""
-		parts = line.split(" ", 1)
-		module_name = parts[0]
+		try:
+			parts = line.split(" ", 1)
+			module_name = parts[0]
+		except:
+			module_name = None
+			print()
+			cmdlogger.warning(paint("Select a module").YELLOW_white)
+
 		if module_name:
 			module = modules().get(module_name)
 			if module:
