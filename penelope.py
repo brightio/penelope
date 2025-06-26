@@ -384,12 +384,12 @@ class PBar:
 
 class paint:
 	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'white':231, 'orange':136}
+	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':136, 'white':231, 'grey':244}
 	_escape = lambda codes: f"\001\x1b[{codes}m\002"
 
 	def __init__(self, text=None, colors=None):
 		self.text = str(text) if text is not None else None
-		self.colors = colors if colors is not None else []
+		self.colors = colors or []
 
 	def __str__(self):
 		if self.colors:
@@ -482,7 +482,7 @@ def ask(text):
 
 	except KeyboardInterrupt:
 		print("^C")
-		return ''
+		return ' '
 
 def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
 	if threading.current_thread().name == 'MainThread':
@@ -4371,7 +4371,13 @@ class peass_ng(Module):
 
 		elif session.OS == 'Windows':
 			logger.error("This module runs only on Unix shells")
-
+			while True:
+				answer = ask(f"Use {paint('upload_privesc_scripts').GREY_white}{paint(' instead? (Y/n): ').yellow}").lower()
+				if answer in ('y', ''):
+					menu.do_run('upload_privesc_scripts')
+					break
+				elif answer == 'n':
+					break
 
 class lse(Module):
 	category = "Privilege Escalation"
