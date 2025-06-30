@@ -2434,9 +2434,11 @@ class Session:
 
 			if var_value1 + var_value2 in response:
 				self.OS = 'Unix'
-				self.interactive = not response == var_value1 + var_value2 + "\n"
+				self.prompt = re.search(f"{var_value1}{var_value2}\n(.*)", response, re.DOTALL)
+				if self.prompt:
+					self.prompt = self.prompt.group(1).encode()
+				self.interactive = bool(self.prompt)
 				self.echoing = f"echo ${var_name1}${var_name2}" in response
-				self.prompt = response.split(var_value1 + var_value2)[-1].lstrip().encode()
 
 			elif f"'{var_name1}' is not recognized as an internal or external command" in response or \
 					re.search('Microsoft Windows.*>', response, re.DOTALL):
