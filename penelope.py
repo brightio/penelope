@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.11"
+__version__ = "0.13.12"
 
 import os
 import io
@@ -4231,8 +4231,8 @@ def agent():
 									except:
 										pass
 
-									if stdin_stream_id in streams:
-										del streams[stdin_stream_id]
+									#if stdin_stream_id in streams:
+									#	del streams[stdin_stream_id]
 									stdout_stream << "".encode()
 									stderr_stream << "".encode()
 								threading.Thread(target=run, args=(stdin_stream, stdout_stream, stderr_stream)).start()
