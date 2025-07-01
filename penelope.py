@@ -4231,7 +4231,8 @@ def agent():
 									except:
 										pass
 
-									del streams[stdin_stream_id]
+									if stdin_stream_id in streams:
+										del streams[stdin_stream_id]
 									stdout_stream << "".encode()
 									stderr_stream << "".encode()
 								threading.Thread(target=run, args=(stdin_stream, stdout_stream, stderr_stream)).start()
