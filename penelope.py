@@ -866,6 +866,8 @@ class MainMenu(BetterCMD):
 		else:
 			if core.sessions:
 				for host, sessions in core.hosts.items():
+					if not sessions:
+						continue
 					print('\n➤  ' + sessions[0].name_colored)
 					table = Table(joinchar=' | ')
 					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source')]
@@ -1642,9 +1644,9 @@ class Core:
 
 					except OSError:
 						logger.debug("Died while reading")
-						readable.kill()
 						if readable.OS:
 							threading.Thread(target=readable.maintain).start()
+						readable.kill()
 						break
 
 					target = readable.shell_response_buf\
@@ -1696,8 +1698,9 @@ class Core:
 						sent = writable.socket.send(writable.outbuf.getvalue())
 					except OSError:
 						logger.debug("Died while writing")
+						if writable.OS:
+							threading.Thread(target=writable.maintain).start()
 						writable.kill()
-						threading.Thread(target=writable.maintain).start()
 						break
 
 					writable.outbuf.seek(sent)
@@ -3878,8 +3881,11 @@ class Session:
 
 	def kill(self):
 
-		if self not in core.rlist:
+		if self not in core.rlist: # TODO check if it is needed
 			return True
+
+		if menu.sid == self.id:
+			menu.set_id(None)
 
 		thread_name = threading.current_thread().name
 		logger.debug(f"Thread <{thread_name}> wants to kill session {self.id}")
@@ -3902,9 +3908,6 @@ class Session:
 					module.run(self)
 
 			core.control << f'self.sessions[{self.id}].kill()'
-
-			if menu.sid == self.id:
-				menu.set_id(None)
 
 			self.maintain()
 			return
