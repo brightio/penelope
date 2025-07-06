@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.12"
+__version__ = "0.13.13"
 
 import os
 import io
@@ -2212,6 +2212,10 @@ class Session:
 			if not self.systeminfo:
 				return False
 
+			if not "\n" in self.systeminfo: #TODO TEMP PATCH
+				self.exec("pwd", raw=True)
+				return False
+
 			def extract_value(pattern):
 				match = re.search(pattern, self.systeminfo, re.MULTILINE)
 				return match.group(1).replace(" ", "_").rstrip() if match else ''
@@ -2417,7 +2421,7 @@ class Session:
 				return True
 
 			elif f"'{var_name1}' is not recognized as an internal or external command" in data:
-				return re.search('batch file.*>', data, re.DOTALL)
+				return re.search('batch file.\r\n', data, re.DOTALL)
 			elif re.search('PS.*>', data, re.DOTALL):
 				return True
 
@@ -2450,7 +2454,8 @@ class Session:
 				self.subtype = 'cmd'
 				self.interactive = True
 				self.echoing = True
-				self.prompt = response.splitlines()[-1].encode()
+				prompt = re.search(r"\r\n\r\n([a-zA-Z]:\\.*>)", response, re.MULTILINE)
+				self.prompt = prompt[1].encode() if prompt else b""
 				win_version = re.search(r"Microsoft Windows \[Version (.*)\]", response, re.DOTALL)
 				if win_version:
 					self.win_version = win_version[1]
@@ -2486,7 +2491,7 @@ class Session:
 				self.OS = 'Windows'
 				self.type = 'Basic'
 				self.subtype = 'psh'
-				self.interactive = True
+				self.interactive = not var_value1 + var_value2 == response
 				self.echoing = False
 				self.prompt = response.splitlines()[-1].encode()
 				if var_name1 in response and not f"echo ${var_name1}${var_name2}" in response:
