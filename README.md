@@ -57,12 +57,15 @@ Penelope can work in conjunction with metasploit exploits by disabling the defau
 ## Usage
 ### Sample Typical Usage
 ```
-penelope                   # Listening for reverse shells on 0.0.0.0:4444
-penelope -a                # Listening for reverse shells on 0.0.0.0:4444 and show reverse shell payloads based on the current Listeners
-penelope 5555              # Listening for reverse shells on 0.0.0.0:5555
-penelope 5555 -i eth0      # Listening for reverse shells on eth0:5555
-penelope 1111 2222 3333    # Listening for reverse shells on 0.0.0.0:1111, 0.0.0.0:2222, 0.0.0.0:3333
-penelope -c target 3333    # Connect to a bind shell on target:3333
+penelope                          # Listening for reverse shells on 0.0.0.0:4444
+penelope -a                       # Listening for reverse shells on 0.0.0.0:4444 and show reverse shell payloads based on the current Listeners
+penelope -p 5555                  # Listening for reverse shells on 0.0.0.0:5555
+penelope -i eth0 -p 5555          # Listening for reverse shells on eth0:5555
+penelope -c target -p 3333        # Connect to a bind shell on target:3333
+penelope ssh user@target          # Get a reverse shell from target on local port 4444
+penelope -p 5555 ssh user@target  # Get a reverse shell from target on local port 5555
+penelope -i eth0 -p 5555 -- ssh -l user -p 2222 target  # Get a reverse shell from target on eth0, local port 5555 (use -- if ssh needs switches)
+penelope -s <File/Folder>         # Share a file or folder via HTTP
 ```
 
 ### Demonstrating Random Usage
@@ -90,41 +93,42 @@ Some Notes:
 ### Command Line Options
 ```
 positional arguments:
-  ports                 Ports to listen/connect to, depending on -i/-c options. Default: 4444
+  args                          Arguments for -s/--serve and SSH reverse shell (default: None)
+
+options:
+  -p PORT, --port PORT          Port to listen/connect/serve, depending on -i/-c/-s options. Default: 4444/5555/8000 (default: None)
 
 Reverse or Bind shell?:
-  -i , --interface      Interface or IP address to listen on. Default: 0.0.0.0
-  -c , --connect        Bind shell Host
+  -i , --interface              Interface or IP address to listen on. Default: 0.0.0.0 (default: None)
+  -c , --connect                Bind shell Host (default: None)
 
 Hints:
-  -a, --payloads        Show sample payloads for reverse shell based on the registered Listeners
-  -l, --interfaces      Show the available network interfaces
-  -h, --help            show this help message and exit
+  -a, --payloads                Show sample payloads for reverse shell based on the registered Listeners (default: False)
+  -l, --interfaces              Show the available network interfaces (default: False)
+  -h, --help                    show this help message and exit
 
 Session Logging:
-  -L, --no-log          Do not create session log files
-  -T, --no-timestamps   Do not include timestamps in session logs
-  -CT,                  Do not color timestamps in session logs
+  -L, --no-log                  Do not create session log files (default: False)
+  -T, --no-timestamps           Do not include timestamps in session logs (default: False)
+  -CT, --no-colored-timestamps  Do not color timestamps in session logs (default: False)
 
 Misc:
-  -m , --maintain       Maintain NUM total shells per target
-  -M, --menu            Just land to the Main Menu
-  -S, --single-session  Accommodate only the first created session
-  -C, --no-attach       Disable auto attaching sessions upon creation
-  -U, --no-upgrade      Do not upgrade shells
+  -m , --maintain               Maintain NUM total shells per target (default: None)
+  -M, --menu                    Just land to the Main Menu (default: False)
+  -S, --single-session          Accommodate only the first created session (default: False)
+  -C, --no-attach               Disable auto attaching sessions upon creation (default: False)
+  -U, --no-upgrade              Do not upgrade shells (default: False)
 
 File server:
-  -s, --serve           HTTP File Server mode
-  -p , --port           File Server port. Default: 8000
-  -prefix               URL prefix
+  -s, --serve                   HTTP File Server mode (default: False)
+  -prefix , --url-prefix        URL prefix (default: None)
 
 Debug:
-  -N , --no-bins        Simulate binary absence on target (comma separated list)
-  -v, --version         Show Penelope version
-  -d, --debug           Show debug messages
-  -dd, --dev-mode       Developer mode
-  -cu, --check-urls     Check health of hardcoded URLs
-
+  -N , --no-bins                Simulate binary absence on target (comma separated list) (default: None)
+  -v, --version                 Show Penelope version (default: False)
+  -d, --debug                   Show debug messages (default: False)
+  -dd, --dev-mode               Developer mode (default: False)
+  -cu, --check-urls             Check health of hardcoded URLs (default: False)
 ```
 
 ## Contribution
@@ -158,4 +162,5 @@ Penelope was the wife of Odysseus and she is known for her fidelity for him by w
 * [Longlone - @WAY29](https://github.com/WAY29) for indicating the need for compatibility with previous versions of Python (3.6).
 * [Carlos Polop - @carlospolop](https://github.com/carlospolop) for the idea to spawn shells on listeners on other systems.
 * [@darrenmartyn](https://github.com/darrenmartyn) for indicating an alternative method to upgrade the shell to PTY using the script command.
+* [@bamuwe](https://github.com/bamuwe) for the idea to get reverse shells via SSH.
 * [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thinkslynk](https://github.com/thinkslynk), [@stavoxnetworks](https://github.com/stavoxnetworks), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80), [@TheAalCh3m1st](https://github.com/TheAalCh3m1st), [@r3pek](https://github.com/r3pek), [@bamuwe](https://github.com/bamuwe), [@six-two](https://github.com/six-two), [@x9xhack](https://github.com/x9xhack) for bug reporting.

