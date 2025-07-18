@@ -4822,12 +4822,14 @@ def fonts_installed():
 
 	if myOS == "Darwin":
 		return True
-	try:
-		if "emoji" in subprocess.run(["fc-list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout.lower():
-			return True
-	except:
-		pass
-	return False
+
+	result = subprocess.run(
+		["fc-list", ":charset=1f600"],  # 1F600 = smiling face
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True
+	)
+	return bool(result.stdout.strip())
 
 # OPTIONS
 class Options:
