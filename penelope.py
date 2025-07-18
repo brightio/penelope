@@ -4818,6 +4818,21 @@ def load_rc():
 		RC.touch()
 	os.chmod(RC, 0o600)
 
+def load_modules():
+    modules_dir = Path(options.basedir) / "modules"
+    modules_dir.mkdir(exist_ok=True)
+
+    if not modules_dir.exists():
+        modules_dir.mkdir()
+
+    for module in modules_dir.iterdir():
+        if module.is_file() and module.suffix == ".py":
+            try:
+                with open(module, "r") as module_file:
+                    exec(module_file.read(), globals())
+            except Exception as e:
+                print(f"Error loading module {module}: {e}")
+
 def fonts_installed():
 	possible_paths = (
 		"/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
