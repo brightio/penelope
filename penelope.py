@@ -4819,20 +4819,11 @@ def load_rc():
 	os.chmod(RC, 0o600)
 
 def fonts_installed():
-	possible_paths = (
-		"/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-		"/usr/share/fonts/noto/NotoColorEmoji.ttf",
-		"/usr/local/share/fonts/noto/NotoColorEmoji.ttf",
-		"/usr/local/share/fonts/noto-emoji/NotoColorEmoji.ttf"
-	)
 
-	for path in possible_paths:
-		if os.path.isfile(path):
-			return True
 	if myOS == "Darwin":
 		return True
 	try:
-		if "Noto Color Emoji" in subprocess.run(["fc-list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout:
+		if "emoji" in subprocess.run(["fc-list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout.lower():
 			return True
 	except:
 		pass
