@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.0"
+__version__ = "0.14.1"
 
 import os
 import io
@@ -1649,6 +1649,7 @@ class Core:
 						readable.kill()
 						break
 
+					# TODO need thread sync
 					target = readable.shell_response_buf\
 					if not readable.subchannel.active\
 					and readable.subchannel.allow_receive_shell_data\
@@ -1929,7 +1930,7 @@ class Channel:
 	def __init__(self, raw=False, expect = []):
 		self._read, self._write = os.pipe()
 		self.can_use = True
-		self.active = False
+		self.active = True
 		self.allow_receive_shell_data = True
 		self.control = ControlQueue()
 
