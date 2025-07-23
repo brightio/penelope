@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.1"
+__version__ = "0.14.2"
 
 import os
 import io
@@ -2214,8 +2214,8 @@ class Session:
 			if not self.systeminfo:
 				return False
 
-			if not "\n" in self.systeminfo: #TODO TEMP PATCH
-				self.exec("pwd", raw=True)
+			if (not "\n" in self.systeminfo) and ("OS Name" in self.systeminfo): #TODO TEMP PATCH
+				self.exec("cd", force_cmd=True, raw=True)
 				return False
 
 			def extract_value(pattern):
@@ -2706,7 +2706,8 @@ class Session:
 						cmd = b' ' + cmd + b'\n'
 
 					elif self.OS == 'Windows':
-						cmd = cmd + b'\r\n' # TODO SOS echoed_cmd_regex check
+						cmd = cmd + b'\r\n'
+						echoed_cmd_regex = re.escape(cmd)
 				else:
 					token = [rand(10) for _ in range(4)]
 
