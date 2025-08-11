@@ -4452,21 +4452,87 @@ class ngrok(Module):
 	category = "Pivoting"
 	def run(session, args):
 		"""
-		Setup ngrok
+		Setup and create a tcp tunnel using ngrok
 		"""
 		if session.OS == 'Unix':
 			if not session.system == 'Linux':
 				logger.error(f"This modules runs only on Linux, not on {session.system}.")
 				return False
 			session.upload(URLS['ngrok_linux'], remote_path=session.tmp)
-			result = session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C ~/.local/bin >/dev/null", value=True)
+			result = session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C {session.tmp} >/dev/null", value=True)
 			if not result:
-				logger.info("ngrok successuly extracted on '~/.local/bin'")
+				logger.info(f"ngrok successuly extracted on {session.tmp}")
 			else:
-				logger.error(f"Extraction to '~/.local/bin' failed:\n{indent(result, ' ' * 4 + '- ')}")
+				logger.error(f"Extraction to {session.tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
 				return False
 			token = input("Authtoken: ")
-			session.exec(f"ngrok config add-authtoken {token}")
+			session.exec(f"./ngrok config add-authtoken {token}")
+			logger.info("Provide a TCP port number to be exposed in ngrok cloud:")
+			tcp_port = input("tcp_port: ")
+			#logger.info("Indicate if a TCP or an HTTP tunnel is required?:")
+			#tunnel = input("tunnel: ")
+			cmd = f"cd {session.tmp}; ./ngrok tcp {tcp_port} --log=stdout"
+			print(cmd)
+			#session.exec(cmd)
+			tf = f"/tmp/{rand(8)}"
+			with open(tf, "w") as f:
+				f.write("#!/bin/sh\n")
+				f.write(cmd)
+			logger.info(f"ngrok session open")
+			session.script(tf)
+		else:
+			logger.error("This module runs only on Unix shells")
+			
+			
+class uac(Module):
+	category = "Forensics"
+	def run(session, args):
+		"""
+		Acquire forensic data Unix systems using UAC (Unix-like Artifacts Collector) in the background
+		"""
+		if session.OS == 'Unix':
+			if not session.system == 'Linux':
+				logger.error(f"This modules runs only on Linux, not on {session.system}.")
+				return False
+			path = session.upload(URLS['uac_linux'], remote_path=session.tmp)[0]
+			result = session.exec(f"tar xf {path} -C {session.tmp} >/dev/null", value=True)
+			if not result:
+				logger.info(f"UAC successfully extracted on {session.tmp}")
+			else:
+				logger.error(f"Extraction to {session.tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
+				return False
+		#	UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
+			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
+			cmd = f"cd {path.removesuffix(".tar.gz")}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
+			#session.exec(cmd)
+			tf = f"/tmp/{rand(8)}"
+			with open(tf, "w") as f:
+				f.write("#!/bin/sh\n")
+				f.write(cmd)
+			logger.info(f"UAC output will be stored at {session.tmp}/uac-%hostname%-%os%-%timestamp%")
+			session.script(tf)	
+		#	Once completed, transfer the output files to your host	
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
+class linux_procmemdump(Module):
+	category = "Forensics"
+	def run(session, args):
+		"""
+		Dump process memory in the background (requires root)
+		"""
+		if session.OS == 'Unix':
+			if not session.system == 'Linux':
+				logger.error(f"This modules runs only on Linux, not on {session.system}.")
+				return False
+			session.upload(URLS['linux_procmemdump'], remote_path=session.tmp)
+			print(session.exec(f"ps -eo pid,cmd", value=True))
+			logger.info(f"Please provide the PID of the process to be acquired:")
+			PID = input("PID: ")
+			session.exec(f"{session.tmp}/linux_procmemdump.sh -p {PID} -s -d {session.tmp}")
+			logger.info(f"Strings of the process dump will be stored at {session.tmp}/{PID}/")
+		#   
 		else:
 			logger.error("This module runs only on Unix shells")
 
@@ -5120,6 +5186,8 @@ URLS = {
 	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
 	'les':          "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh",
 	'ngrok_linux':  "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
+	'uac_linux':  	"https://github.com/tclahr/uac/releases/download/v3.1.0/uac-3.1.0.tar.gz",
+	'linux_procmemdump':  	"https://raw.githubusercontent.com/tclahr/uac/refs/heads/main/bin/linux/linux_procmemdump.sh",
 }
 
 # Python Agent code
