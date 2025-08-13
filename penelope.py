@@ -4482,8 +4482,8 @@ class ngrok(Module):
 			session.script(tf)
 		else:
 			logger.error("This module runs only on Unix shells")
-			
-			
+
+
 class uac(Module):
 	category = "Forensics"
 	def run(session, args):
@@ -4503,15 +4503,15 @@ class uac(Module):
 				return False
 		#	UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
 			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
-			cmd = f"cd {path.removesuffix(".tar.gz")}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
+			cmd = f"cd {path.removesuffix('.tar.gz')}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
 			#session.exec(cmd)
 			tf = f"/tmp/{rand(8)}"
 			with open(tf, "w") as f:
 				f.write("#!/bin/sh\n")
 				f.write(cmd)
 			logger.info(f"UAC output will be stored at {session.tmp}/uac-%hostname%-%os%-%timestamp%")
-			session.script(tf)	
-		#	Once completed, transfer the output files to your host	
+			session.script(tf)
+		#	Once completed, transfer the output files to your host
 		else:
 			logger.error("This module runs only on Unix shells")
 
@@ -4532,7 +4532,6 @@ class linux_procmemdump(Module):
 			PID = input("PID: ")
 			session.exec(f"{session.tmp}/linux_procmemdump.sh -p {PID} -s -d {session.tmp}")
 			logger.info(f"Strings of the process dump will be stored at {session.tmp}/{PID}/")
-		#   
 		else:
 			logger.error("This module runs only on Unix shells")
 
