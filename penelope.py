@@ -1520,6 +1520,9 @@ class ControlQueue:
 				break
 		os.read(self._out, amount)
 
+	def close(self):
+		os.close(self._in)
+		os.close(self._out)
 
 class Core:
 
@@ -1938,6 +1941,9 @@ class Channel:
 	def write(self, data):
 		os.write(self._write, data)
 
+	def close(self):
+		os.close(self._read)
+		os.close(self._write)
 
 class Session:
 
@@ -2112,10 +2118,13 @@ class Session:
 		return self.socket.fileno() != -1 # and self.OS)
 
 	def __repr__(self):
-		return (
-			f"ID: {self.id} -> {__class__.__name__}({self.name}, {self.OS}, {self.type}, "
-			f"interactive={self.interactive}, echoing={self.echoing})"
-		)
+		try:
+			return (
+				f"ID: {self.id} -> {__class__.__name__}({self.name}, {self.OS}, {self.type}, "
+				f"interactive={self.interactive}, echoing={self.echoing})"
+			)
+		except:
+			return f"ID: (for deletion: {self.id})"
 
 	def __getattr__(self, name):
 		if name == 'new_streamID':
@@ -2675,7 +2684,6 @@ class Session:
 			return None
 
 		with self.lock:
-			self.subchannel.control.clear()
 			if self.need_control_session and not self.bypass_control_session:
 				args = locals()
 				del args['self']
@@ -2690,6 +2698,7 @@ class Session:
 				logger.debug("Exec: The session is killed")
 				return False
 
+			self.subchannel.control.clear()
 			self.subchannel.active = True
 			self.subchannel.result = None
 			buffer = io.BytesIO()
@@ -2756,74 +2765,73 @@ class Session:
 
 			last_data = time.perf_counter()
 			need_check = False
-			while self.subchannel.result is None:
-				logger.debug(paint(f"Waiting for data (timeout={timeout})...").blue)
-				readables, _, _ = select([self.subchannel.control, self.subchannel], [], [], timeout)
+			try:
+				while self.subchannel.result is None:
+					logger.debug(paint(f"Waiting for data (timeout={timeout})...").blue)
+					readables, _, _ = select([self.subchannel.control, self.subchannel], [], [], timeout)
 
-				if self.subchannel.control in readables:
-					command = self.subchannel.control.get()
-					logger.debug(f"Subchannel Control Queue: {command}")
+					if self.subchannel.control in readables:
+						command = self.subchannel.control.get()
+						logger.debug(f"Subchannel Control Queue: {command}")
 
-					if command == 'stop':
-						self.subchannel.result = False
-						break
+						if command == 'stop':
+							self.subchannel.result = False
+							break
 
-					elif command == 'kill':
-						self.subchannel.can_use = False
-						self.subchannel.result = False
-						break
+					if self.subchannel in readables:
+						logger.debug(f"Latency: {time.perf_counter() - last_data}")
+						last_data = time.perf_counter()
 
-				if self.subchannel in readables:
-					logger.debug(f"Latency: {time.perf_counter() - last_data}")
-					last_data = time.perf_counter()
+						data = self.subchannel.read()
+						buffer.write(data)
+						logger.debug(f"{paint('Received').GREEN} -> {data}")
 
-					data = self.subchannel.read()
-					buffer.write(data)
-					logger.debug(f"{paint('Received').GREEN} -> {data}")
+						if timeout == data_timeout:
+							timeout = continuation_timeout
+							need_check = True
 
-					if timeout == data_timeout:
-						timeout = continuation_timeout
-						need_check = True
-
-				else:
-					if timeout == data_timeout:
-						logger.debug(paint("TIMEOUT").RED)
-						self.subchannel.result = False
-						break
 					else:
-						need_check = True
-						timeout = data_timeout
-
-				if need_check:
-					need_check = False
-
-					if raw and self.echoing and cmd:
-						result = buffer.getvalue()
-						if re.search(echoed_cmd_regex + (b'.' if self.interactive else b''), result, re.DOTALL):
-							self.subchannel.result = re.sub(echoed_cmd_regex, b'', result)
+						if timeout == data_timeout:
+							logger.debug(paint("TIMEOUT").RED)
+							self.subchannel.result = False
 							break
 						else:
-							logger.debug("The echoable is not exhausted")
-							continue
-					if not raw:
-						check = self.subchannel.pattern.search(buffer.getvalue())
-						if check:
-							logger.debug(paint('Got all data!').green)
-							self.subchannel.result = check[1]
-							break
-						logger.debug(paint('We didn\'t get all data; continue receiving').yellow)
+							need_check = True
+							timeout = data_timeout
 
-					elif expect_func:
-						if expect_func(buffer.getvalue()):
-							logger.debug(paint("The expected strings found in data").yellow)
+					if need_check:
+						need_check = False
+
+						if raw and self.echoing and cmd:
+							result = buffer.getvalue()
+							if re.search(echoed_cmd_regex + (b'.' if self.interactive else b''), result, re.DOTALL):
+								self.subchannel.result = re.sub(echoed_cmd_regex, b'', result)
+								break
+							else:
+								logger.debug("The echoable is not exhausted")
+								continue
+						if not raw:
+							check = self.subchannel.pattern.search(buffer.getvalue())
+							if check:
+								logger.debug(paint('Got all data!').green)
+								self.subchannel.result = check[1]
+								break
+							logger.debug(paint('We didn\'t get all data; continue receiving').yellow)
+
+						elif expect_func:
+							if expect_func(buffer.getvalue()):
+								logger.debug(paint("The expected strings found in data").yellow)
+								self.subchannel.result = buffer.getvalue()
+							else:
+								logger.debug(paint('No expected strings found in data. Receive again...').yellow)
+
+						else:
+							logger.debug(paint('Maybe got all data !?').yellow)
 							self.subchannel.result = buffer.getvalue()
-						else:
-							logger.debug(paint('No expected strings found in data. Receive again...').yellow)
-
-					else:
-						logger.debug(paint('Maybe got all data !?').yellow)
-						self.subchannel.result = buffer.getvalue()
-						break
+							break
+			except:
+				self.subchannel.can_use = False
+				self.subchannel.result = False
 
 			_stop = time.perf_counter()
 			logger.debug(f"{paint('FINAL TIME: ').white_BLUE}{_stop - _start}")
@@ -3923,11 +3931,10 @@ class Session:
 			core.control << f'self.sessions[{self.id}].kill()'
 			return
 
-		if self.subchannel.active:
-			self.subchannel.control << 'kill'
+		self.subchannel.control.close()
+		self.subchannel.close()
 
 		core.rlist.remove(self)
-
 		if self in core.wlist:
 			core.wlist.remove(self)
 		try:
@@ -3935,20 +3942,19 @@ class Session:
 			#self.socket.shutdown(socket.SHUT_RDWR) # FIN
 		except OSError:
 			pass
-
 		self.socket.close()
 
 		if not self.OS:
 			message = f"Invalid shell from {self.ip} 🙄"
 		else:
-			del core.sessions[self.id]
-			core.hosts[self.name].remove(self)
 			message = f"Session [{self.id}] died..."
-
+			core.hosts[self.name].remove(self)
 			if not core.hosts[self.name]:
 				message += f" We lost {self.name_colored} 💔"
 				del core.hosts[self.name]
 
+		if self.id in core.sessions:
+			del core.sessions[self.id]
 		logger.error(message)
 
 		if hasattr(self, 'logfile'):
