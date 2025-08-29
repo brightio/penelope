@@ -2009,7 +2009,7 @@ class Session:
 			self._cwd = None
 			self._can_deploy_agent = None
 
-			self.bypass_control_session = False
+			self.bypass_control_session = True
 			self.upgrade_attempted = False
 
 			core.rlist.append(self)
@@ -2205,7 +2205,6 @@ class Session:
 			if not self.bin['uname']:
 				return False
 
-			self.bypass_control_session = True
 			response = self.exec(
 				r'printf "$({0} -n)\t'
 				r'$({0} -s)\t'
@@ -2213,7 +2212,6 @@ class Session:
 				agent_typing=True,
 				value=True
 			)
-			self.bypass_control_session = False
 
 			try:
 				self.hostname, self.system, self.arch = response.split("\t")
@@ -2240,12 +2238,10 @@ class Session:
 		return True
 
 	def get_shell_info(self, silent=False):
-		self.bypass_control_session = True
 		self.shell_pid = self.get_shell_pid()
 		self.user = self.get_user()
 		if self.OS == 'Unix':
 			self.tty = self.get_tty(silent=silent)
-		self.bypass_control_session = False
 
 	def get_shell_pid(self):
 		if self.OS == 'Unix':
@@ -3017,9 +3013,7 @@ class Session:
 			self.get_shell_info()
 
 			if _bin == self.bin['script']:
-				self.bypass_control_session = True
 				self.exec("stty sane")
-				self.bypass_control_session = False
 
 		elif self.OS == "Windows":
 			if self.type != 'PTY':
@@ -3062,7 +3056,6 @@ class Session:
 		if threading.current_thread().name != 'Core':
 			if self.new:
 				self.new = False
-				self.bypass_control_session = True
 				upgrade_conditions = [
 					not options.no_upgrade,
 					not (self.need_control_session and self.control_sessions == [self]),
