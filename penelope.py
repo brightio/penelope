@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.4"
+__version__ = "0.14.5"
 
 import os
 import io
@@ -474,11 +474,12 @@ def stdout(data, record=True):
 
 def ask(text):
 	try:
-		return input(f"{paint(f'[?] {text}').yellow}")
+		try:
+			return input(f"{paint(f'[?] {text}').yellow}")
 
-	except EOFError:
-		print()
-		return ask(text)
+		except EOFError:
+			print()
+			return ask(text)
 
 	except KeyboardInterrupt:
 		print("^C")
@@ -501,22 +502,24 @@ def my_input(text="", histfile=None, histlen=None, completer=lambda text, state:
 
 	core.output_line_buffer << b"\n" + text.encode()
 	core.wait_input = True
-	response = original_input(text)
-	core.wait_input = False
 
-	if readline:
-		#readline.set_completer(None)
-		#readline.set_completer_delims(default_readline_delims)
-		if histfile:
-			try:
-				readline.set_history_length(options.histlength)
-				#readline.add_history(response)
-				readline.write_history_file(histfile)
-			except Exception as e:
-				cmdlogger.debug(f"Error writing to history file: {e}")
-		#readline.set_auto_history(False)
+	try:
+		response = original_input(text)
 
-	return response
+		if readline:
+			#readline.set_completer(None)
+			#readline.set_completer_delims(default_readline_delims)
+			if histfile:
+				try:
+					readline.set_history_length(options.histlength)
+					#readline.add_history(response)
+					readline.write_history_file(histfile)
+				except Exception as e:
+					cmdlogger.debug(f"Error writing to history file: {e}")
+			#readline.set_auto_history(False)
+		return response
+	finally:
+		core.wait_input = False
 
 class BetterCMD:
 	def __init__(self, prompt=None, banner=None, histfile=None, histlen=None):
@@ -541,25 +544,26 @@ class BetterCMD:
 		stop = None
 		while not self.stop:
 			try:
-				self.active.wait()
-				if self.cmdqueue:
-					line = self.cmdqueue.pop(0)
-				else:
-					line = input(self.prompt, self.histfile, self.histlen, self.complete, " \t\n\"'><=;|&(:")
+				try:
+					self.active.wait()
+					if self.cmdqueue:
+						line = self.cmdqueue.pop(0)
+					else:
+						line = input(self.prompt, self.histfile, self.histlen, self.complete, " \t\n\"'><=;|&(:")
 
-				signal.signal(signal.SIGINT, lambda num, stack: self.interrupt())
-				line = self.precmd(line)
-				stop = self.onecmd(line)
-				stop = self.postcmd(stop, line)
-				if stop:
-					self.active.clear()
-			except EOFError:
-				stop = self.onecmd('EOF')
+					signal.signal(signal.SIGINT, lambda num, stack: self.interrupt())
+					line = self.precmd(line)
+					stop = self.onecmd(line)
+					stop = self.postcmd(stop, line)
+					if stop:
+						self.active.clear()
+				except EOFError:
+					stop = self.onecmd('EOF')
+				except Exception:
+					custom_excepthook(*sys.exc_info())
 			except KeyboardInterrupt:
 				print("^C")
 				self.interrupt()
-			except Exception:
-				custom_excepthook(*sys.exc_info())
 		self.postloop()
 
 	def onecmd(self, line):
