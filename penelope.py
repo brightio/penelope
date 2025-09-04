@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.3"
+__version__ = "0.14.4"
 
 import os
 import io
@@ -875,7 +875,10 @@ class MainMenu(BetterCMD):
 						if self.sid == session.id:
 							ID = paint('[' + str(session.id) + ']').red
 						elif session.new:
-							ID = paint('<' + str(session.id) + '>').yellow_BLINK
+							if session.host_needs_control_session and session.control_session is session:
+								ID = paint(' ' + str(session.id)).cyan
+							else:
+								ID = paint('<' + str(session.id) + '>').yellow_BLINK
 						else:
 							ID = paint(' ' + str(session.id)).yellow
 						source = session.listener or f'Connect({session._host}:{session.port})'
@@ -923,6 +926,9 @@ class MainMenu(BetterCMD):
 				return False
 			else:
 				if ask(f"Kill all sessions{self.active_sessions} (y/N): ").lower() == 'y':
+					if options.maintain > 1:
+						options.maintain = 1
+						self.onecmd("maintain")
 					for session in reversed(list(core.sessions.copy().values())):
 						session.kill()
 		else:
@@ -1180,7 +1186,7 @@ class MainMenu(BetterCMD):
 				cmdlogger.error("Invalid number")
 		else:
 			status = paint('Enabled').white_GREEN if options.maintain >= 2 else paint('Disabled').white_RED
-			cmdlogger.info(f"Value set to {paint(options.maintain).yellow} {status}")
+			cmdlogger.info(f"Maintain value set to {paint(options.maintain).yellow} {status}")
 
 	@session_operation(current=True)
 	def do_upgrade(self, ID):
@@ -1518,7 +1524,7 @@ class ControlQueue:
 				amount += 1
 			except queue.Empty:
 				break
-		os.read(self._out, amount)
+		os.read(self._out, amount) # maybe needs 'try' because sometimes close() precedes
 
 	def close(self):
 		os.close(self._in)
@@ -2009,7 +2015,6 @@ class Session:
 			self._cwd = None
 			self._can_deploy_agent = None
 
-			self.bypass_control_session = True
 			self.upgrade_attempted = False
 
 			core.rlist.append(self)
@@ -2175,18 +2180,18 @@ class Session:
 
 	@property
 	def spare_control_sessions(self):
-		return [session for session in self.control_sessions if session is not self]
+		return [session for session in self.host_control_sessions if session is not self]
 
 	@property
-	def need_control_sessions(self):
+	def host_needs_control_session(self):
 		return [session for session in core.hosts[self.name] if session.need_control_session]
 
 	@property
 	def need_control_session(self):
-		return all([self.OS == 'Unix', self.type == 'PTY', not self.agent])
+		return all([self.OS == 'Unix', self.type == 'PTY', not self.agent, not self.new])
 
 	@property
-	def control_sessions(self):
+	def host_control_sessions(self):
 		return [session for session in core.hosts[self.name] if not session.need_control_session]
 
 	@property
@@ -2284,7 +2289,7 @@ class Session:
 				    f"procstat -f {self.shell_pid} 2>/dev/null | awk '$3==\"cwd\" {{print $NF;exit}}' | grep . || "
 				    f"pwdx {self.shell_pid} 2>/dev/null | awk '{{print $2;exit}}' | grep ."
 				)
-				self._cwd = self.control_session.exec(cmd, value=True)
+				self._cwd = self.exec(cmd, value=True)
 			elif self.OS == 'Windows':
 				self._cwd = self.exec("cd", force_cmd=True, value=True)
 		return self._cwd or ''
@@ -2680,7 +2685,7 @@ class Session:
 			return None
 
 		with self.lock:
-			if self.need_control_session and not self.bypass_control_session:
+			if self.need_control_session:
 				args = locals()
 				del args['self']
 				try:
@@ -2895,7 +2900,7 @@ class Session:
 				logger.warning("Python Agent is already deployed")
 				return False
 
-			if self.need_control_sessions and self.control_sessions == [self]:
+			if self.host_needs_control_session and self.host_control_sessions == [self]:
 				logger.warning("This is a control session and cannot be upgraded")
 				return False
 
@@ -3055,18 +3060,16 @@ class Session:
 	def attach(self):
 		if threading.current_thread().name != 'Core':
 			if self.new:
-				self.new = False
 				upgrade_conditions = [
 					not options.no_upgrade,
-					not (self.need_control_session and self.control_sessions == [self]),
+					not (self.need_control_session and self.host_control_sessions == [self]),
 					not self.upgrade_attempted
 				]
 				if all(upgrade_conditions):
 					self.upgrade()
-				self.bypass_control_session = False
-
 				if self.prompt:
 					self.record(self.prompt)
+				self.new = False
 
 			core.control << f'self.sessions[{self.id}].attach()'
 			menu.active.clear() # Redundant but safeguard
@@ -3112,7 +3115,7 @@ class Session:
 		if self.agent:
 			self.exec(f"os.chdir('{self.cwd}')", python=True, value=True)
 		elif self.need_control_session:
-			self.control_session.exec(f"cd {self.cwd}")
+			self.exec(f"cd {self.cwd}")
 
 	def detach(self):
 		if self and self.OS == 'Unix' and (self.agent or self.need_control_session):
@@ -3422,6 +3425,8 @@ class Session:
 				pass # TODO
 		except Exception as e:
 			logger.error(e)
+			logger.warning("Cannot check remote permissions. Aborting...")
+			return []
 
 		# Initialization
 		try:
@@ -3879,7 +3884,7 @@ class Session:
 
 	def maintain(self):
 		with core.lock:
-			current_num = len(core.hosts[self.name])
+			current_num = len(core.hosts[self.name]) if core.hosts else 0
 			if 0 < current_num < options.maintain:
 				session = core.hosts[self.name][-1]
 				logger.warning(paint(
@@ -3902,17 +3907,13 @@ class Session:
 
 		if thread_name != 'Core':
 			if self.OS:
-				if self.need_control_sessions and\
+				if self.host_needs_control_session and\
 					not self.spare_control_sessions and\
 					self.control_session is self:
-					sessions = ', '.join([str(session.id) for session in self.need_control_sessions])
-					if thread_name == 'Menu':
-						logger.warning(
-							f"Cannot kill Session {self.id} as the following sessions depend on it: {sessions}"
-						)
-						return False
-					else:
-						logger.error(f"Sessions {sessions} need a control session.")
+
+					sessions = ', '.join([str(session.id) for session in self.host_needs_control_session])
+					logger.warning(f"Cannot kill Session {self.id} as the following sessions depend on it: [{sessions}]")
+					return False
 
 				for module in modules().values():
 					if module.enabled and module.on_session_end:
