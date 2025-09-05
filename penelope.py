@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.5"
+__version__ = "0.14.6"
 
 import os
 import io
@@ -2086,7 +2086,7 @@ class Session:
 					if module.enabled and module.on_session_start:
 						module.run(self)
 
-				self.maintain()
+				maintain_success = self.maintain()
 
 				if options.single_session and self.listener:
 					self.listener.stop()
@@ -2096,8 +2096,8 @@ class Session:
 					listener_menu.finishing.wait()
 
 				attach_conditions = [
-					# Is a reverse shell and the Menu is not active and reached the maintain value
-					self.listener and not menu.active.is_set() and len(core.hosts[self.name]) == options.maintain,
+					# Is a reverse shell and the Menu is not active and (reached the maintain value or maintain failed)
+					self.listener and not menu.active.is_set() and (len(core.hosts[self.name]) == options.maintain or not maintain_success),
 
 					# Is a bind shell and is not spawned from the Menu
 					not self.listener and not menu.active.is_set(),
@@ -3789,6 +3789,7 @@ class Session:
 
 		elif self.OS == 'Windows':
 			logger.warning("Spawn Windows shells is not implemented yet")
+			return False
 
 		return True
 
@@ -3895,8 +3896,7 @@ class Session:
 						f" --- Session {session.id} is trying to maintain {options.maintain} "
 						f"active shells on {self.name} ---"
 					).blue)
-				session.spawn()
-				return True
+				return session.spawn()
 		return False
 
 	def kill(self):
