@@ -58,13 +58,16 @@ Penelope can work in conjunction with metasploit exploits by disabling the defau
 ### Sample Typical Usage
 ```
 penelope                          # Listening for reverse shells on 0.0.0.0:4444
-penelope -a                       # Listening for reverse shells on 0.0.0.0:4444 and show reverse shell payloads based on the current Listeners
 penelope -p 5555                  # Listening for reverse shells on 0.0.0.0:5555
 penelope -i eth0 -p 5555          # Listening for reverse shells on eth0:5555
+penelope -a                       # Listening for reverse shells on 0.0.0.0:4444 and show reverse shell payloads based on the current Listeners
+
 penelope -c target -p 3333        # Connect to a bind shell on target:3333
+
 penelope ssh user@target          # Get a reverse shell from target on local port 4444
 penelope -p 5555 ssh user@target  # Get a reverse shell from target on local port 5555
 penelope -i eth0 -p 5555 -- ssh -l user -p 2222 target  # Get a reverse shell from target on eth0, local port 5555 (use -- if ssh needs switches)
+
 penelope -s <File/Folder>         # Share a file or folder via HTTP
 ```
 
@@ -131,9 +134,6 @@ Debug:
   -cu, --check-urls             Check health of hardcoded URLs (default: False)
 ```
 
-## Contribution
-Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. You can also submit pull requests but avoid making commits from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
-
 ## TODO
 
 ### Features
@@ -150,10 +150,32 @@ Your contributions are invaluable! If you’d like to help, please report bugs, 
 * UDP support
 
 ### Known Issues
-* Main menu: Ctrl-C on main menu has not the expected behavior yet.
 * Session logging: when executing commands on the target that feature alternate buffers like nano and they are abnormally terminated, then when 'catting' the logfile it seems corrupted. However the data are still there. Also for example when resetting the remote terminal, these escape sequences are reflected in the logs. I will need to filter specific escape sequences so as to ensure that when 'catting' the logfile, a smooth log is presented.
 
-## Trivia
+## FAQ
+
+### ► Is Penelope allowed in OSCP exam?
+Yes since it doesn't do any auto-exploitation.
+
+### ► How can I go from the shell to the Main Menu?
+It depends on the upgrade that is taken place.
+
+- PTY shells escape key: `F12`
+- Readline: EOF (`Ctrl-D`)
+- Raw: SIGINT (`Ctrl-C`)
+
+In any case you can see it once you attach to a session. For example:
+<img width="597" height="61" alt="Image" src="https://github.com/user-attachments/assets/51ee6370-7952-4db1-a0fd-31572278fa8e" />
+
+### ► How can I change the menu key?
+For example to change the PTY escape key from `F12` to `Ctrl-P`, put the following in `~/.penelope/peneloperc`:
+
+`self.escape = {'sequence':b'\x10', 'key':'Ctrl+P'}`
+
+### ► How can I contribute?
+Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. You can also submit pull requests but avoid making commits from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
+
+### ► How come the name?
 Penelope was the wife of Odysseus and she is known for her fidelity for him by waiting years. Since a characteristic of reverse shell handlers is waiting, this tool is named after her.
 
 ## Thanks to the early birds
@@ -164,3 +186,4 @@ Penelope was the wife of Odysseus and she is known for her fidelity for him by w
 * [@darrenmartyn](https://github.com/darrenmartyn) for indicating an alternative method to upgrade the shell to PTY using the script command.
 * [@bamuwe](https://github.com/bamuwe) for the idea to get reverse shells via SSH.
 * [@root-tanishq](https://github.com/root-tanishq), [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thinkslynk](https://github.com/thinkslynk), [@stavoxnetworks](https://github.com/stavoxnetworks), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80), [@TheAalCh3m1st](https://github.com/TheAalCh3m1st), [@r3pek](https://github.com/r3pek), [@bamuwe](https://github.com/bamuwe), [@six-two](https://github.com/six-two), [@x9xhack](https://github.com/x9xhack), [@dummys](https://github.com/dummys), [@pocpayload](https://github.com/pocpayload), [@anti79](https://github.com/anti79) for bug reporting.
+* Special thanks to [@Y3llowDuck](https://github.com/Y3llowDuck) for spreading the word!
