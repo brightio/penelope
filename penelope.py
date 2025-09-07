@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.6"
+__version__ = "0.14.7"
 
 import os
 import io
@@ -784,7 +784,7 @@ class MainMenu(BetterCMD):
 		return inner
 
 	def interrupt(self):
-		if core.attached_session and not core.attached_session.readline:
+		if core.attached_session and not core.attached_session.type == 'Readline':
 			core.attached_session.detach()
 		else:
 			if menu.sid and not core.sessions[menu.sid].agent: # TEMP
@@ -1624,7 +1624,7 @@ class Core:
 				elif readable is sys.stdin:
 					if self.attached_session:
 						session = self.attached_session
-						if session.readline:
+						if session.type == 'Readline':
 							continue
 
 						data = os.read(sys.stdin.fileno(), options.network_buffer_size)
@@ -1638,7 +1638,7 @@ class Core:
 							else:
 								session.detach()
 						else:
-							if session.type == 'Basic' and not hasattr(self, 'readline'): # TODO # need to see
+							if session.type == 'Raw':
 								session.record(data, _input=not session.interactive)
 
 							elif session.agent:
@@ -1977,12 +1977,11 @@ class Session:
 
 			self.id = None
 			self.OS = None
-			self.type = 'Basic'
+			self.type = 'Raw'
 			self.subtype = None
 			self.interactive = None
 			self.echoing = None
 			self.pty_ready = None
-			self.readline = None
 
 			self.win_version = None
 
@@ -2073,7 +2072,7 @@ class Session:
 					f"Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
 				)
 
-				self.directory = options.basedir / self.name
+				self.directory = options.basedir / "sessions" / self.name
 				if not options.no_log:
 					self.directory.mkdir(parents=True, exist_ok=True)
 					self.logpath = self.directory / f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}.log'
@@ -2468,7 +2467,7 @@ class Session:
 			elif f"'{var_name1}' is not recognized as an internal or external command" in response or \
 					re.search('Microsoft Windows.*>', response, re.DOTALL):
 				self.OS = 'Windows'
-				self.type = 'Basic'
+				self.type = 'Raw'
 				self.subtype = 'cmd'
 				self.interactive = True
 				self.echoing = True
@@ -2481,7 +2480,7 @@ class Session:
 			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response or \
 					re.search('PS.*>', response, re.DOTALL):
 				self.OS = 'Windows'
-				self.type = 'Basic'
+				self.type = 'Raw'
 				self.subtype = 'psh'
 				self.interactive = True
 				self.echoing = False
@@ -2507,7 +2506,7 @@ class Session:
 
 			if var_value1 + var_value2 in response:
 				self.OS = 'Windows'
-				self.type = 'Basic'
+				self.type = 'Raw'
 				self.subtype = 'psh'
 				self.interactive = not var_value1 + var_value2 == response
 				self.echoing = False
@@ -2964,15 +2963,14 @@ class Session:
 						else:
 							if readline:
 								logger.info("Readline support enabled")
-								self.readline = True
 								self.type = 'Readline'
 								return True
 							else:
-								logger.error("Falling back to basic shell support")
+								logger.error("Falling back to Raw shell")
 								return False
 
 			if not self.can_deploy_agent and not self.spare_control_sessions:
-				logger.warning("Python agent cannot be deployed. I need to maintain at least one basic session to handle the PTY")
+				logger.warning("Python agent cannot be deployed. I need to maintain at least one Raw session to handle the PTY")
 				core.session_wait_host = self.name
 				self.spawn()
 				try:
@@ -3026,7 +3024,7 @@ class Session:
 
 		elif self.OS == "Windows":
 			if self.type != 'PTY':
-				self.readline = True
+				self.type = 'Readline'
 				logger.info("Added readline support...")
 
 		return True
@@ -3084,7 +3082,7 @@ class Session:
 
 		if self.type == 'PTY':
 			escape_key = options.escape['key']
-		elif self.readline:
+		elif self.type == 'Readline':
 			escape_key = 'Ctrl-D'
 		else:
 			escape_key = 'Ctrl-C'
@@ -3108,7 +3106,7 @@ class Session:
 			tty.setraw(sys.stdin)
 			os.kill(os.getpid(), signal.SIGWINCH)
 
-		elif self.readline:
+		elif self.type == 'Readline':
 			threading.Thread(target=self.readline_loop).start()
 
 		self._cwd = None
@@ -3136,7 +3134,7 @@ class Session:
 		core.attached_session = None
 		core.rlist.remove(sys.stdin)
 
-		if not self.type == 'Basic':
+		if self.type == 'PTY':
 			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
 
 		if self.id in core.sessions:
