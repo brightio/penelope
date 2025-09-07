@@ -2,23 +2,35 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 <div align="center">
-  <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/>
+  <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/><br>
+   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-USA%202025-red"/>
 </div>
-Penelope is a powerful shell handler built to simplify, accelerate, and optimize post-exploitation workflows.
+Penelope is a powerful shell handler built as a modern netcat replacement for RCE exploitation, aiming to simplify, accelerate, and optimize post-exploitation workflows.
 
-- It runs on all Unix-based systems (Linux, macOS, FreeBSD etc)
-- Requires **Python 3.6+**
-- It is **standalone** as it uses only Python’s standard library.
-
-![Penelope](https://github.com/user-attachments/assets/b8e5cd84-60a5-4d79-b041-68bee901ab19)
+## Table of Contents
+- 📥 [Install](#install)
+- ⚙️ [Features](#features)
+  - 🖥️ [Session Features](#session-features)
+  - 🌍 [Global Features](#global-features)
+  - 🧩 [Modules](#modules)
+- 💻 [Usage](#usage)
+  - ▶️ [Sample Typical Usage](#sample-typical-usage)
+  - 🎬 [Demonstrating Random Usage](#demonstrating-random-usage)
+  - 🖲️ [Main Menu Commands](#main-menu-commands)
+  - ⚡ [Command Line Options](#command-line-options)
+- 📝 [TODO](#todo)
+- ❓ [FAQ](#faq)
+- 🙌 [Thanks to the early birds](#thanks-to-the-early-birds)
 
 ## Install
 
-Penelope requires no installation - just download and execute the script:
+Penelope can be run on all Unix-based systems (Linux, macOS, FreeBSD etc) and requires **Python 3.6+**
+
+It requires no installation as it uses only Python’s standard library - just download and execute the script:
 ```bash
 wget https://raw.githubusercontent.com/brightio/penelope/refs/heads/main/penelope.py && python3 penelope.py
 ```
-For a more streamlined setup, it can be installed using:
+For a more streamlined setup, it can be installed using pipx:
 ```bash
 pipx install git+https://github.com/brightio/penelope
 ```
@@ -70,6 +82,7 @@ penelope -i eth0 -p 5555 -- ssh -l user -p 2222 target  # Get a reverse shell fr
 
 penelope -s <File/Folder>         # Share a file or folder via HTTP
 ```
+![Penelope](https://github.com/user-attachments/assets/b8e5cd84-60a5-4d79-b041-68bee901ab19)
 
 ### Demonstrating Random Usage
 
@@ -165,7 +178,7 @@ It depends on the upgrade that is taken place.
 - Raw: SIGINT (`Ctrl-C`)
 
 In any case you can see it once you attach to a session. For example:
-<img width="597" height="61" alt="Image" src="https://github.com/user-attachments/assets/51ee6370-7952-4db1-a0fd-31572278fa8e" />
+<img width="597" height="56" alt="463710291-51ee6370-7952-4db1-a0fd-31572278fa8e" src="https://github.com/user-attachments/assets/36b53c73-48cb-4ba7-a36a-ea92d1ea8f9b" />
 
 ### ► How can I change the menu key?
 For example to change the PTY escape key from `F12` to `Ctrl-P`, put the following in `~/.penelope/peneloperc`:
