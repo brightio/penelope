@@ -4,7 +4,7 @@
 
 [project]
   name = "penelope"
-  version = "0.14.3"
+  version = "0.14.8"
   requires-python = ">=3.6"
 
 [project.scripts]
