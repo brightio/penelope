@@ -12,3 +12,6 @@
 
 [tool.setuptools]
   script-files = ["penelope.py"]
+
+[tool.setuptools.packages.find]
+  include = ["penelope_mod*"]
