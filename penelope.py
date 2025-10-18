@@ -486,9 +486,61 @@ def ask(text):
 		return ' '
 
 def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
+	"""Interactive input with optional prompt_toolkit + Pygments highlighting.
+	Falls back to builtin input()/readline if prompt_toolkit is unavailable.
+	The enhanced prompt is only used for the main menu (no attached session).
+	"""
 	if threading.current_thread().name == 'MainThread':
 		signal.signal(signal.SIGINT, keyboard_interrupt)
 
+	# Try prompt_toolkit for nicer UX in main menu (before attaching to remote PTY)
+	use_ptk = False
+	if 'core' in globals() and getattr(core, 'attached_session', None) is None:
+		try:
+			from prompt_toolkit import prompt as ptk_prompt
+			from prompt_toolkit.history import FileHistory, InMemoryHistory
+			from prompt_toolkit.lexers import PygmentsLexer
+			from prompt_toolkit.formatted_text import ANSI
+			from prompt_toolkit.completion import WordCompleter, FuzzyCompleter
+			from pygments.lexers.shell import BashLexer
+			use_ptk = True
+		except Exception:
+			use_ptk = False
+
+	if use_ptk:
+		# Build a minimal word completer from known menu commands (best-effort)
+		pt_completer = None
+		try:
+			words = []
+			if 'menu' in globals() and hasattr(menu, 'raw_commands'):
+				words = list(menu.raw_commands)
+			if words:
+				pt_completer = FuzzyCompleter(WordCompleter(words, ignore_case=True))
+		except Exception:
+			pt_completer = None
+
+		# History (prompt_toolkit persists FileHistory automatically)
+		try:
+			history_obj = FileHistory(str(histfile)) if histfile else InMemoryHistory()
+		except Exception:
+			history_obj = InMemoryHistory()
+
+		# Keep existing output buffering behaviour for logger redraws
+		core.output_line_buffer << b"\n" + (text.encode() if isinstance(text, str) else str(text).encode())
+		core.wait_input = True
+		try:
+			# Remove readline escape markers (\001 and \002) that prompt_toolkit doesn't understand
+			cleaned_text = str(text).replace('\001', '').replace('\002', '')
+			return ptk_prompt(
+				ANSI(cleaned_text),
+				lexer=PygmentsLexer(BashLexer),
+				completer=pt_completer,
+				history=history_obj
+			)
+		finally:
+			core.wait_input = False
+
+	# Fallback: stdio + readline (existing behaviour)
 	if readline:
 		readline.set_completer(completer)
 		readline.set_completer_delims(completer_delims or default_readline_delims)
@@ -502,10 +554,8 @@ def my_input(text="", histfile=None, histlen=None, completer=lambda text, state:
 
 	core.output_line_buffer << b"\n" + text.encode()
 	core.wait_input = True
-
 	try:
 		response = original_input(text)
-
 		if readline:
 			#readline.set_completer(None)
 			#readline.set_completer_delims(default_readline_delims)
