@@ -678,6 +678,23 @@ class BetterCMD:
 		else:
 			cmdlogger.error("'reset' command doesn't exist on the system")
 
+	def do_local(self, line):
+		"""
+		<command>
+		Run a local shell command on your attacking machine
+
+		Examples:
+
+			local ls -la			List files on your local machine
+			local whoami			Show your local username
+			local ifconfig			Show local network interfaces
+			local nc -lvnp 9999		Start a netcat listener locally
+		"""
+		if line:
+			os.system(line)
+		else:
+			cmdlogger.warning("No command to execute")
+
 	def do_exit(self, line):
 		"""
 
@@ -773,7 +790,7 @@ class MainMenu(BetterCMD):
 			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'script', 'portfwd'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
 			"Shell Management"  :['listeners', 'payloads', 'connect', 'Interfaces'],
-			"Miscellaneous"     :['help', 'modules', 'history', 'reset', 'reload', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
+			"Miscellaneous"     :['help', 'modules', 'history', 'reset', 'local', 'reload', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
 		}
 
 	@property
