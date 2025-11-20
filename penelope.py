@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.8"
+__version__ = "0.14.9"
 
 import os
 import io
@@ -3895,6 +3895,7 @@ class Session:
 						f"active shells on {self.name} ---"
 					).blue)
 				return session.spawn()
+			return True
 		return False
 
 	def kill(self):
