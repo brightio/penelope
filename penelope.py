@@ -4334,6 +4334,15 @@ class upload_privesc_scripts(Module):
 			session.upload(URLS['linpeas'])
 			session.upload(URLS['lse'])
 			session.upload(URLS['deepce'])
+			if session.arch == "x86_64":
+				session.upload(URLS['traitor_amd64'])
+			elif session.arch in ("i386", "i686"):
+				session.upload(URLS['traitor_386'])
+			elif session.arch in ("aarch64", "arm64"):
+				session.upload(URLS['traitor_arm64'])
+			else:
+				logger.error("Traitor: No compatible binary architecture")
+				print()
 
 		elif session.OS == 'Windows':
 			session.upload(URLS['winpeas'])
@@ -5183,18 +5192,21 @@ TERMINAL = next((term for term in TERMINALS if shutil.which(term)), None)
 MAX_CMD_PROMPT_LEN = 335
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 URLS = {
-	'linpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
-	'winpeas':      "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
-	'socat':        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/socat",
-	'ncat':         "https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/ncat",
-	'lse':          "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
-	'powerup':      "https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/refs/heads/master/Privesc/PowerUp.ps1",
-	'deepce':       "https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
-	'privesccheck': "https://github.com/itm4n/PrivescCheck/releases/latest/download/PrivescCheck.ps1",
-	'les':          "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh",
-	'ngrok_linux':  "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
-	'uac_linux':  	"https://github.com/tclahr/uac/releases/download/v3.2.0/uac-3.2.0.tar.gz",
-	'linux_procmemdump':  	"https://raw.githubusercontent.com/tclahr/uac/refs/heads/main/bin/linux/linux_procmemdump.sh",
+	'linpeas':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
+	'winpeas':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
+	'socat':	"https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/socat",
+	'ncat':		"https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/ncat",
+	'lse':		"https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
+	'powerup':	"https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/refs/heads/master/Privesc/PowerUp.ps1",
+	'deepce':	"https://raw.githubusercontent.com/stealthcopter/deepce/refs/heads/main/deepce.sh",
+	'privesccheck':	"https://github.com/itm4n/PrivescCheck/releases/latest/download/PrivescCheck.ps1",
+	'les':		"https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/refs/heads/master/linux-exploit-suggester.sh",
+	'ngrok_linux':	"https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz",
+	'uac_linux':	"https://github.com/tclahr/uac/releases/download/v3.2.0/uac-3.2.0.tar.gz",
+	'linux_procmemdump':	"https://raw.githubusercontent.com/tclahr/uac/refs/heads/main/bin/linux/linux_procmemdump.sh",
+	'traitor_386':		"https://github.com/liamg/traitor/releases/latest/download/traitor-386",
+	'traitor_amd64':	"https://github.com/liamg/traitor/releases/latest/download/traitor-amd64",
+	'traitor_arm64':	"https://github.com/liamg/traitor/releases/latest/download/traitor-arm64",
 }
 
 # Python Agent code
