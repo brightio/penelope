@@ -4334,6 +4334,7 @@ class upload_privesc_scripts(Module):
 			session.upload(URLS['linpeas'])
 			session.upload(URLS['lse'])
 			session.upload(URLS['deepce'])
+
 			if session.arch == "x86_64":
 				session.upload(URLS['traitor_amd64'])
 			elif session.arch in ("i386", "i686"):
@@ -4342,6 +4343,14 @@ class upload_privesc_scripts(Module):
 				session.upload(URLS['traitor_arm64'])
 			else:
 				logger.error("Traitor: No compatible binary architecture")
+				print()
+
+			if session.arch == "x86_64":
+				session.upload(URLS['pspy64'])
+			elif session.arch in ("i386", "i686"):
+				session.upload(URLS['pspy32'])
+			else:
+				logger.error("pspy: No compatible binary architecture")
 				print()
 
 		elif session.OS == 'Windows':
@@ -5207,6 +5216,8 @@ URLS = {
 	'traitor_386':		"https://github.com/liamg/traitor/releases/latest/download/traitor-386",
 	'traitor_amd64':	"https://github.com/liamg/traitor/releases/latest/download/traitor-amd64",
 	'traitor_arm64':	"https://github.com/liamg/traitor/releases/latest/download/traitor-arm64",
+	'pspy32':	"https://github.com/DominicBreuker/pspy/releases/latest/download/pspy32",
+	'pspy64':	"https://github.com/DominicBreuker/pspy/releases/latest/download/pspy64",
 }
 
 # Python Agent code
