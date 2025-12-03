@@ -4828,19 +4828,22 @@ def url_to_bytes(URL):
 	else:
 		filename = URL.split('/')[-2]
 
-	size = int(response.headers.get('Content-Length'))
+	size = response.headers.get('Content-Length')
 	data = bytearray()
-	pbar = PBar(size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+	if size:
+		pbar = PBar(int(size), caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
 	while True:
 		try:
 			chunk = response.read(options.network_buffer_size)
 			if not chunk:
 				break
 			data.extend(chunk)
-			pbar.update(len(chunk))
+			if size:
+				pbar.update(len(chunk))
 		except Exception as e:
 			logger.error(e)
-			pbar.terminate()
+			if size:
+				pbar.terminate()
 			break
 
 	return filename, data
