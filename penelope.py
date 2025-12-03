@@ -4420,6 +4420,7 @@ class peass_ng(Module):
 				elif answer == 'n':
 					break
 
+
 class lse(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
@@ -4504,7 +4505,7 @@ class ngrok(Module):
 				logger.error(f"Extraction to {session.tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
 				return False
 			token = input("Authtoken: ")
-			session.exec(f"./ngrok config add-authtoken {token}")
+			session.exec(f"{session.tmp}/ngrok config add-authtoken {token}")
 			logger.info("Provide a TCP port number to be exposed in ngrok cloud:")
 			tcp_port = input("tcp_port: ")
 			#logger.info("Indicate if a TCP or an HTTP tunnel is required?:")
