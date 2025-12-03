@@ -4841,10 +4841,10 @@ def url_to_bytes(URL):
 			if size:
 				pbar.update(len(chunk))
 		except Exception as e:
-			logger.error(e)
 			if size:
 				pbar.terminate()
-			break
+			logger.error(e)
+			return None, None
 
 	return filename, data
 
