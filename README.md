@@ -3,7 +3,8 @@
 </div>
 <div align="center">
   <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/><br>
-   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-USA%202025-red"/>
+  <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-USA%202025-red"/><br>
+  <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-MEA%202025-green"/>
 </div>
 Penelope is a powerful shell handler built as a modern netcat replacement for RCE exploitation, aiming to simplify, accelerate, and optimize post-exploitation workflows.
 
@@ -168,20 +169,22 @@ Debug:
 ## FAQ
 
 ### ► Is Penelope allowed in OSCP exam?
-Yes since it doesn't do any auto-exploitation.
+Yes. Penelope is allowed because its core features do not perform automatic exploitation.
+However, caution is required when using certain modules:
+* The meterpreter module should be used only on a single target, as permitted by OSCP rules.
+* The upload_privesc_scripts module deploys several privilege-escalation helpers, including Traitor. Traitor performs automatic privilege escalation, which is not allowed in the OSCP exam.
+### ► How can I return from the remote shell to the Main Menu?
+It depends on the type of shell upgrade in use:
+* PTY: press `F12`
+* Readline: send EOF (`Ctrl-D`)
+* Raw: send SIGINT (`Ctrl-C`)
 
-### ► How can I go from the shell to the Main Menu?
-It depends on the upgrade that is taken place.
+In any case, the correct key is always displayed when you attach to a session. For example:
 
-- PTY shells escape key: `F12`
-- Readline: EOF (`Ctrl-D`)
-- Raw: SIGINT (`Ctrl-C`)
-
-In any case you can see it once you attach to a session. For example:
 <img width="597" height="56" alt="463710291-51ee6370-7952-4db1-a0fd-31572278fa8e" src="https://github.com/user-attachments/assets/36b53c73-48cb-4ba7-a36a-ea92d1ea8f9b" />
 
 ### ► How can I change the menu key?
-For example to change the PTY escape key from `F12` to `Ctrl-P`, put the following in `~/.penelope/peneloperc`:
+For example, to change the PTY escape key from `F12` to `Ctrl-P`, put the following in `~/.penelope/peneloperc`:
 
 `self.escape = {'sequence':b'\x10', 'key':'Ctrl+P'}`
 
