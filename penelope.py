@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.9"
+__version__ = "0.14.10"
 
 import os
 import io
@@ -2427,10 +2427,7 @@ class Session:
 		var_name1, var_name2, var_value1, var_value2 = (rand(4) for _ in range(4))
 
 		def expect(data):
-			try:
-				data = data.decode()
-			except:
-				return False
+			data = data.decode(errors="replace")
 
 			if var_value1 + var_value2 in data:
 				return True
@@ -2452,7 +2449,7 @@ class Session:
 		)
 
 		if response:
-			response = response.decode()
+			response = response.decode(errors="replace")
 
 			if var_value1 + var_value2 in response:
 				self.OS = 'Unix'
@@ -2658,7 +2655,7 @@ class Session:
 				os.close(stdin_stream._read)
 				del self.streams[stdin_stream.id]
 
-				return buffer.getvalue().rstrip().decode() if value else True
+				return buffer.getvalue().rstrip().decode(errors="replace") if value else True
 			return None
 
 		with self.lock:
@@ -2817,7 +2814,7 @@ class Session:
 			if value and self.subchannel.result is not False:
 				if self.OS == 'Windows' and self.type == 'PTY': # quirk
 					self.subchannel.result = re.sub(rb'\x1b\[(?:K|\?25h|25l|82X)', b'', self.subchannel.result)
-				self.subchannel.result = self.subchannel.result.strip().decode() # TODO check strip
+				self.subchannel.result = self.subchannel.result.strip().decode(errors="replace") # TODO check strip
 			logger.debug(f"{paint('FINAL RESPONSE: ').white_BLUE}{self.subchannel.result}")
 			self.subchannel.active = False
 
