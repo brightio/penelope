@@ -175,7 +175,9 @@ Yes. Penelope is allowed because its core features do not perform automatic expl
 However, caution is required when using certain modules:
 * The meterpreter module should be used only on a single target, as permitted by OSCP rules.
 * The traitor module uploads Traitor, which performs automatic privilege escalation.
-So as long as you know what you’re doing, there should be no issues. If you want to avoid mistakes, you can use the -O / --oscp-safe switch.
+
+So as long as you know what you’re doing, there should be no issues. If you want to avoid mistakes, you can use the `-O / --oscp-safe` switch.
+
 ### ► How can I return from the remote shell to the Main Menu?
 It depends on the type of shell upgrade in use:
 * PTY: press `F12`
