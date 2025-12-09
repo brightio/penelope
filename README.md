@@ -2,7 +2,7 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 <div align="center">
-  <img src="https://img.shields.io/badge/version-0.14.10-blueviolet"/><br>
+  <img src="https://img.shields.io/badge/version-0.14.11-blueviolet"/><br>
   <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/><br>
   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-USA%202025-red"/><br>
   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-MEA%202025-green"/>
@@ -136,6 +136,7 @@ Misc:
   -S, --single-session          Accommodate only the first created session (default: False)
   -C, --no-attach               Disable auto attaching sessions upon creation (default: False)
   -U, --no-upgrade              Do not upgrade shells (default: False)
+  -O, --oscp-safe               Make Penelope OSCP safe (default: False)
 
 File server:
   -s, --serve                   HTTP File Server mode (default: False)
@@ -173,7 +174,8 @@ Debug:
 Yes. Penelope is allowed because its core features do not perform automatic exploitation.
 However, caution is required when using certain modules:
 * The meterpreter module should be used only on a single target, as permitted by OSCP rules.
-* The upload_privesc_scripts module deploys several privilege-escalation helpers, including Traitor. Traitor performs automatic privilege escalation, which is not allowed in the OSCP exam.
+* The traitor module uploads Traitor, which performs automatic privilege escalation.
+So as long as you know what you’re doing, there should be no issues. If you want to avoid mistakes, you can use the -O / --oscp-safe switch.
 ### ► How can I return from the remote shell to the Main Menu?
 It depends on the type of shell upgrade in use:
 * PTY: press `F12`

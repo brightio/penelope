@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.10"
+__version__ = "0.14.11"
 
 import os
 import io
@@ -4287,7 +4287,11 @@ def agent():
 
 
 def modules():
-	return {module.__name__:module for module in Module.__subclasses__()}
+	mods = {module.__name__:module for module in Module.__subclasses__()}
+	if options.oscp_safe:
+		del mods['meterpreter']
+		del mods['traitor']
+	return mods
 
 
 class Module:
@@ -4341,11 +4345,16 @@ class peass_ng(Module):
 		if session.OS == 'Unix':
 			parser = ArgumentParser(prog='peass_ng', description="peass-ng module", add_help=False)
 			parser.add_argument("-a", "--ai", help="Analyze linpeas results with chatGPT", action="store_true")
+
 			try:
 				arguments = parser.parse_args(shlex.split(args))
 			except SystemExit:
 				return
+
 			if arguments.ai:
+				if options.oscp_safe:
+					logger.error("AI is not allowed in OSCP")
+					return
 				try:
 					from openai import OpenAI
 					#api_key = input("Please enter your chatGPT API key: ")
@@ -4415,6 +4424,27 @@ class linuxexploitsuggester(Module):
 		if session.OS == 'Unix':
 			session.script(URLS['les'])
 		else:
+			logger.error("This module runs only on Unix shells")
+
+
+class traitor(Module):
+	category = "Privilege Escalation"
+	def run(session, args):
+		"""
+		Upload the latest version of Traitor
+		"""
+		if session.OS == 'Unix':
+			if session.arch == "x86_64":
+				session.upload(URLS['traitor_amd64'])
+			elif session.arch in ("i386", "i686"):
+				session.upload(URLS['traitor_386'])
+			elif session.arch in ("aarch64", "arm64"):
+				session.upload(URLS['traitor_arm64'])
+			else:
+				logger.error("Traitor: No compatible binary architecture")
+				print()
+
+		elif session.OS == 'Windows':
 			logger.error("This module runs only on Unix shells")
 
 
@@ -5047,6 +5077,7 @@ def main():
 	misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
 	misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
 	misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
+	misc.add_argument("-O", "--oscp-safe", help="Make Penelope OSCP safe", action="store_true")
 
 	misc = parser.add_argument_group("File server")
 	misc.add_argument("-s", "--serve", help="HTTP File Server mode", action="store_true")
