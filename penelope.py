@@ -2468,7 +2468,7 @@ class Session:
 				self.echoing = True
 				prompt = re.search(r"\r\n\r\n([a-zA-Z]:\\.*>)", response, re.MULTILINE)
 				self.prompt = prompt[1].encode() if prompt else b""
-				win_version = re.search(r"Microsoft Windows \[Version (.*)\]", response, re.DOTALL)
+				win_version = re.search(r"Microsoft Windows \[.* (.*)\]", response, re.DOTALL)
 				if win_version:
 					self.win_version = win_version[1]
 
@@ -3092,9 +3092,20 @@ class Session:
 		elif self.need_control_session:
 			self.exec(f"cd {self.cwd}")
 
+	def get_subtype(self):
+		response = self.exec("$PSVersionTable", expect_func=lambda x: b":\\" in x, raw=True)
+		if response:
+			if b"SerializationVersion" in response:
+				self.subtype = 'psh'
+			else:
+				self.subtype = 'cmd'
+
 	def detach(self):
 		if self and self.OS == 'Unix' and (self.agent or self.need_control_session):
 			threading.Thread(target=self.sync_cwd).start()
+
+		if self and self.OS == 'Windows' and self.type != 'PTY':
+			threading.Thread(target=self.get_subtype).start()
 
 		if threading.current_thread().name != 'Core':
 			core.control << f'self.sessions[{self.id}].detach()'
