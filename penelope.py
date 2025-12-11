@@ -1269,7 +1269,7 @@ class MainMenu(BetterCMD):
 
 	def do_listeners(self, line):
 		"""
-		[<add|stop>[-i <iface>][-p <port>]]
+		[add[-i<iface>][-p<port>]|stop<id>]
 		Add / stop / view Listeners
 
 		Examples:
