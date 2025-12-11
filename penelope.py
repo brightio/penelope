@@ -1071,7 +1071,7 @@ class MainMenu(BetterCMD):
 			upload https://www.exploit-db.com/exploits/40611  Download the underlying exploit code locally and upload it to the target
 		"""
 		if local_items:
-			core.sessions[self.sid].upload(local_items, randomize_fname=True)
+			core.sessions[self.sid].upload(local_items, randomize_fname=options.upload_random_suffix)
 		else:
 			cmdlogger.warning("No files or directories specified")
 
@@ -2838,21 +2838,13 @@ class Session:
 		answer = ask("Select action: ")
 
 		if answer == "1":
-			return self.upload(
-				url,
-				remote_path="/var/tmp",
-				randomize_fname=False
-			)[0]
+			return self.upload(url, remote_path="/var/tmp")[0]
 
 		elif answer == "2":
 			local_path = ask(f"Enter {name} local path: ")
 			if local_path:
 				if os.path.exists(local_path):
-					return self.upload(
-						local_path,
-						remote_path=self.tmp,
-						randomize_fname=False
-					)[0]
+					return self.upload(local_path, remote_path=self.tmp)[0]
 				else:
 					logger.error("The local path does not exist...")
 
@@ -4998,6 +4990,7 @@ class Options:
 		self.cmd_histfile = 'cmd_history'
 		self.debug_histfile = 'cmd_debug_history'
 		self.useragent = "Wget/1.21.2"
+		self.upload_random_suffix = False
 		self.attach_lines = 20
 
 	def __getattribute__(self, option):
