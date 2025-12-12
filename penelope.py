@@ -16,12 +16,13 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.13"
+__version__ = "0.14.14"
 
 import os
 import io
 import re
 import sys
+import pwd
 import tty
 import ssl
 import time
@@ -4965,7 +4966,12 @@ class Options:
 	log_levels = {"silent":'WARNING', "debug":'DEBUG'}
 
 	def __init__(self):
-		self.basedir = Path.home() / f'.{__program__}'
+		real_home = Path.home()
+		sudo_user = os.environ.get("SUDO_USER")
+		if sudo_user:
+			real_home = Path(pwd.getpwnam(sudo_user).pw_dir)
+
+		self.basedir = real_home / f'.{__program__}'
 		self.default_listener_port = 4444
 		self.default_bindshell_port = 5555
 		self.default_fileserver_port = 8000

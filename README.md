@@ -2,7 +2,7 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 <div align="center">
-  <img src="https://img.shields.io/badge/version-0.14.13-blueviolet"/><br>
+  <img src="https://img.shields.io/badge/version-0.14.14-blueviolet"/><br>
   <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/><br>
   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-USA%202025-red"/><br>
   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-MEA%202025-green"/>
@@ -73,8 +73,9 @@ Penelope can work in conjunction with metasploit exploits by disabling the defau
 ```
 penelope                          # Listening for reverse shells on 0.0.0.0:4444
 penelope -p 5555                  # Listening for reverse shells on 0.0.0.0:5555
+penelope -p 4444,5555             # Listening for reverse shells on 0.0.0.0:4444 and 0.0.0.0:5555
 penelope -i eth0 -p 5555          # Listening for reverse shells on eth0:5555
-penelope -a                       # Listening for reverse shells on 0.0.0.0:4444 and show reverse shell payloads based on the current Listeners
+penelope -a                       # Listening for reverse shells on 0.0.0.0:4444 and show sample reverse shell payloads
 
 penelope -c target -p 3333        # Connect to a bind shell on target:3333
 
