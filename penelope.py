@@ -62,6 +62,7 @@ from http.server import SimpleHTTPRequestHandler
 from urllib.parse import unquote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ################################## PYTHON MISSING BATTERIES ####################################
 from string import ascii_letters
@@ -4863,23 +4864,34 @@ def url_to_bytes(URL):
 	return filename, data
 
 def check_urls():
+	threads = 10
 	global URLS
 	urls = URLS.values()
 	space_num = len(max(urls, key=len))
 	all_ok = True
-	for url in urls:
+
+	def _probe(url):
 		req = Request(url, method="HEAD", headers={'User-Agent': options.useragent})
 		try:
 			with urlopen(req, timeout=5) as response:
-				status_code = response.getcode()
+				return url, response.getcode(), None
 		except HTTPError as e:
-			all_ok = False
-			status_code = e.code
-		except:
-			return None
-		if __name__ == '__main__':
-			color = 'RED' if status_code >= 400 else 'GREEN'
-			print(f"{paint(url).cyan}{paint('.').DIM * (space_num - len(url))} => {getattr(paint(status_code), color)}")
+			return url, e.code, None
+		except Exception as e:
+			return url, None, e
+
+	with ThreadPoolExecutor(threads) as ex:
+		futures = {ex.submit(_probe, url): url for url in urls}
+		for fut in as_completed(futures):
+			url, status_code, err = fut.result()
+			if err is not None:
+				status_code = err
+				all_ok = False
+			elif status_code >= 400:
+				all_ok = False
+			if __name__ == '__main__':
+				color = 'RED' if isinstance(status_code, int) and status_code >= 400 or err else 'GREEN'
+				print(f"{paint(url).cyan}{paint('.').DIM * (space_num - len(url))} => {getattr(paint(status_code), color)}")
 	return all_ok
 
 def listener_menu():
