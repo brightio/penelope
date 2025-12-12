@@ -2,7 +2,7 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 <div align="center">
-  <img src="https://img.shields.io/badge/version-0.14.11-blueviolet"/><br>
+  <img src="https://img.shields.io/badge/version-0.14.13-blueviolet"/><br>
   <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/><br>
   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-USA%202025-red"/><br>
   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-MEA%202025-green"/>
@@ -111,43 +111,44 @@ Some Notes:
 ### Command Line Options
 ```
 positional arguments:
-  args                          Arguments for -s/--serve and SSH reverse shell (default: None)
+  args                          Arguments for -s/--serve and SSH reverse shell modes
 
 options:
-  -p PORT, --port PORT          Port to listen/connect/serve, depending on -i/-c/-s options. Default: 4444/5555/8000 (default: None)
+  -p PORTS, --ports PORTS       Ports (comma separated) to listen/connect/serve, depending on -i/-c/-s options
+                                (Default: 4444/5555/8000)
 
 Reverse or Bind shell?:
-  -i , --interface              Interface or IP address to listen on. Default: 0.0.0.0 (default: None)
-  -c , --connect                Bind shell Host (default: None)
+  -i , --interface              Local interface/IP to listen. (Default: 0.0.0.0)
+  -c , --connect                Bind shell Host
 
 Hints:
-  -a, --payloads                Show sample payloads for reverse shell based on the registered Listeners (default: False)
-  -l, --interfaces              Show the available network interfaces (default: False)
+  -a, --payloads                Show sample reverse shell payloads for active Listeners
+  -l, --interfaces              List available network interfaces
   -h, --help                    show this help message and exit
 
 Session Logging:
-  -L, --no-log                  Do not create session log files (default: False)
-  -T, --no-timestamps           Do not include timestamps in session logs (default: False)
-  -CT, --no-colored-timestamps  Do not color timestamps in session logs (default: False)
+  -L, --no-log                  Disable session log files
+  -T, --no-timestamps           Disable timestamps in logs
+  -CT, --no-colored-timestamps  Disable colored timestamps in logs
 
 Misc:
-  -m , --maintain               Maintain NUM total shells per target (default: None)
-  -M, --menu                    Just land to the Main Menu (default: False)
-  -S, --single-session          Accommodate only the first created session (default: False)
-  -C, --no-attach               Disable auto attaching sessions upon creation (default: False)
-  -U, --no-upgrade              Do not upgrade shells (default: False)
-  -O, --oscp-safe               Make Penelope OSCP safe (default: False)
+  -m , --maintain               Keep N sessions per target
+  -M, --menu                    Start in the Main Menu.
+  -S, --single-session          Accommodate only the first created session
+  -C, --no-attach               Do not auto-attach on new sessions
+  -U, --no-upgrade              Disable shell auto-upgrade
+  -O, --oscp-safe               Enable OSCP-safe mode
 
 File server:
-  -s, --serve                   HTTP File Server mode (default: False)
-  -prefix , --url-prefix        URL prefix (default: None)
+  -s, --serve                   Run HTTP file server mode
+  -prefix , --url-prefix        URL path prefix
 
 Debug:
-  -N , --no-bins                Simulate binary absence on target (comma separated list) (default: None)
-  -v, --version                 Show Penelope version (default: False)
-  -d, --debug                   Show debug messages (default: False)
-  -dd, --dev-mode               Developer mode (default: False)
-  -cu, --check-urls             Check health of hardcoded URLs (default: False)
+  -N , --no-bins                Simulate missing binaries on target (comma-separated)
+  -v, --version                 Print version and exit
+  -d, --debug                   Enable debug output
+  -dd, --dev-mode               Enable developer mode
+  -cu, --check-urls             Check hardcoded URLs health and exit
 ```
 
 ## TODO
@@ -206,5 +207,6 @@ Penelope was the wife of Odysseus and she is known for her fidelity for him by w
 * [Carlos Polop - @carlospolop](https://github.com/carlospolop) for the idea to spawn shells on listeners on other systems.
 * [@darrenmartyn](https://github.com/darrenmartyn) for indicating an alternative method to upgrade the shell to PTY using the script command.
 * [@bamuwe](https://github.com/bamuwe) for the idea to get reverse shells via SSH.
-* [@root-tanishq](https://github.com/root-tanishq), [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thinkslynk](https://github.com/thinkslynk), [@stavoxnetworks](https://github.com/stavoxnetworks), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80), [@TheAalCh3m1st](https://github.com/TheAalCh3m1st), [@r3pek](https://github.com/r3pek), [@bamuwe](https://github.com/bamuwe), [@six-two](https://github.com/six-two), [@x9xhack](https://github.com/x9xhack), [@dummys](https://github.com/dummys), [@pocpayload](https://github.com/pocpayload), [@anti79](https://github.com/anti79) for bug reporting.
+* [@strikoder](https://github.com/strikoder) for numerous enhancement ideas.
+* [@root-tanishq](https://github.com/root-tanishq), [@robertstrom](https://github.com/robertstrom), [@terryf82](https://github.com/terryf82), [@RamadhanAmizudin](https://github.com/RamadhanAmizudin), [@furkan-enes-polatoglu](https://github.com/furkan-enes-polatoglu), [@DerekFost](https://github.com/DerekFost), [@Mag1cByt3s](https://github.com/Mag1cByt3s), [@nightingalephillip](https://github.com/nightingalephillip), [@grisuno](https://github.com/grisuno), [@thinkslynk](https://github.com/thinkslynk), [@stavoxnetworks](https://github.com/stavoxnetworks), [@thomas-br](https://github.com/thomas-br), [@joshoram80](https://github.com/joshoram80), [@TheAalCh3m1st](https://github.com/TheAalCh3m1st), [@r3pek](https://github.com/r3pek), [@bamuwe](https://github.com/bamuwe), [@six-two](https://github.com/six-two), [@x9xhack](https://github.com/x9xhack), [@dummys](https://github.com/dummys), [@pocpayload](https://github.com/pocpayload), [@anti79](https://github.com/anti79), [@strikoder](https://github.com/strikoder) for bug reporting.
 * Special thanks to [@Y3llowDuck](https://github.com/Y3llowDuck) for spreading the word!
