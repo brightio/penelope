@@ -1,9 +1,55 @@
-options.default_listener_port = 9999
-options.escape = {'sequence': b'\x10', 'key': 'Control-P'}
+#!/usr/bin/python3
+# ------------------------------------------------------------
+# PENELOPE Configuration File
+#
+# This file is loaded automatically by Penelope at startup.
+# To enable it, place this file at:
+#   ~/.penelope/peneloperc
+# ------------------------------------------------------------
 
-class my_custom_module(Module):
-	def run(sesson):
-		"""
-		This is my custom module
-		"""
-		session.exec("ls")
+# options.escape = {'sequence':b'\x10', 'key':'Ctrl+P'}		# Change the Main Menu escape key from F12 to Ctrl+P
+# options.upload_random_suffix = True				# Add a random suffix to uploaded files to avoid clobbering/overwriting existing files
+# options.default_listener_port = 9999				# Change the default listener port from 4444 to 9999
+# options.ports = 80,443,445,4444				# Listen to multiple ports by default
+# options.interface = 'tun0'					# Listen by default only on tun0 interface
+
+# Module named 'my_custom_module' that runs with the 'run' command
+#class my_custom_module(Module):
+#	category = "My Custom Category"
+#	def run(session, args):
+#		"""
+#		Downloads the /etc directory
+#		"""
+#		if session.OS == 'Unix':
+#			session.download("/etc")
+#		else:
+#			logger.error("This module runs only on Unix shells")
+
+# Module named 'aliases' that runs upon session creation
+#class aliases(Module):
+#	on_session_start = True
+#	category = "My Custom Modules"
+#	def run(session, args):
+#		"""
+#		Apply my .bashrc file to target
+#		"""
+#		if session.OS == 'Unix':
+#			session.exec(f'cp ~/.bashrc ~/.bashrc_backup{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+#			session.upload(".bashrc", remote_path="~/")
+#			logger.info("~/.bashrc replaced!")
+#		else:
+#			logger.error("This module runs only on Unix shells")
+
+# Module named 'purge_history' that runs upon session termination
+#class purge_history(Module):
+#	on_session_end = True
+#	category = "My Custom Modules"
+#	def run(session, args):
+#		"""
+#		Apply my .bashrc file to target
+#		"""
+#		if session.OS == 'Unix':
+#			session.exec(f'rm ~/.bash_history')
+#			logger.info("~/.bash_history removed!")
+#		else:
+#			logger.error("This module runs only on Unix shells")

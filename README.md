@@ -2,7 +2,7 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 <div align="center">
-  <img src="https://img.shields.io/badge/version-0.14.14-blueviolet"/><br>
+  <img src="https://img.shields.io/badge/version-0.14.15-blueviolet"/><br>
   <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/><br>
   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-USA%202025-red"/><br>
   <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-MEA%202025-green"/>

@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.14.14"
+__version__ = "0.14.15"
 
 import os
 import io
@@ -2092,7 +2092,7 @@ class Session:
 
 				for module in modules().values():
 					if module.enabled and module.on_session_start:
-						module.run(self)
+						module.run(self, None)
 
 				maintain_success = self.maintain()
 
@@ -2532,7 +2532,7 @@ class Session:
 		stderr_stream=None,	# stderr_stream object
 		agent_control=None	# control queue
 	):
-		if caller() == 'session_end':
+		if caller() == 'run':
 			value = True
 
 		if self.agent and not agent_typing: # TODO environment will not be the same as shell
@@ -3197,7 +3197,6 @@ class Session:
 
 				code = fr"""
 				from glob import glob
-				normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 				items = []
 				for part in shlex.split({repr(remote_items)}):
 					_items = glob(normalize_path(part))
@@ -3314,7 +3313,6 @@ class Session:
 				# Get the remote absolute paths
 				response = self.exec(f"""
 				from glob import glob
-				normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 				remote_paths = ''
 				for part in shlex.split({repr(remote_items)}):
 					result = glob(normalize_path(part))
@@ -3398,13 +3396,15 @@ class Session:
 			if self.OS == 'Unix':
 				if self.agent:
 					if not eval(self.exec(
-						f"stdout_stream << str(os.access('{destination}', os.W_OK)).encode()",
+						f"stdout_stream << str(os.access(normalize_path('{destination}'), os.W_OK)).encode()",
 						python=True,
 						value=True
 					)):
 						logger.error(f"{destination}: Permission denied")
 						return []
 				else:
+					if destination.startswith('~'):
+						destination = self.exec(f"echo {destination}", value=True)
 					if int(self.exec(f"[ -w \"{destination}\" ];echo $?", value=True)):
 						logger.error(f"{destination}: Permission denied")
 						return []
@@ -3461,7 +3461,7 @@ class Session:
 			# Get remote available space
 			if self.agent:
 				response = self.exec(f"""
-				stats = os.statvfs('{destination}')
+				stats = os.statvfs(normalize_path('{destination}'))
 				stdout_stream << (str(stats.f_bavail) + ';' + str(stats.f_frsize)).encode()
 				""", python=True, value=True)
 
@@ -3507,7 +3507,7 @@ class Session:
 				tar.errorlevel = 1
 				for item in tar:
 					try:
-						tar.extract(item, path='{destination}')
+						tar.extract(item, path=normalize_path('{destination}'))
 					except:
 						stderr_stream << (str(sys.exc_info()[1]) + '\n').encode()
 				tar.close()
@@ -3905,7 +3905,7 @@ class Session:
 
 				for module in modules().values():
 					if module.enabled and module.on_session_end:
-						module.run(self)
+						module.run(self, None)
 			else:
 				self.id = randint(10**10, 10**11-1)
 				core.sessions[self.id] = self
@@ -4090,6 +4090,7 @@ def agent():
 	from select import select
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+	normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 
 	if sys.version_info[0] == 2:
 		import Queue as queue
@@ -4323,16 +4324,6 @@ class upload_privesc_scripts(Module):
 			session.upload(URLS['linpeas'])
 			session.upload(URLS['lse'])
 			session.upload(URLS['deepce'])
-
-			if session.arch == "x86_64":
-				session.upload(URLS['traitor_amd64'])
-			elif session.arch in ("i386", "i686"):
-				session.upload(URLS['traitor_386'])
-			elif session.arch in ("aarch64", "arm64"):
-				session.upload(URLS['traitor_arm64'])
-			else:
-				logger.error("Traitor: No compatible binary architecture")
-				print()
 
 			if session.arch == "x86_64":
 				session.upload(URLS['pspy64'])
@@ -4781,7 +4772,6 @@ def custom_excepthook(*args):
 def get_glob_size(_glob, block_size):
 	from glob import glob
 	from math import ceil
-	normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 	def size_on_disk(filepath):
 		try:
 			return ceil(float(os.lstat(filepath).st_size) / block_size) * block_size
