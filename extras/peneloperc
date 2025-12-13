@@ -46,7 +46,7 @@
 #	category = "My Custom Modules"
 #	def run(session, args):
 #		"""
-#		Apply my .bashrc file to target
+#		Deletes ~/.bash_history from target
 #		"""
 #		if session.OS == 'Unix':
 #			session.exec(f'rm ~/.bash_history')
