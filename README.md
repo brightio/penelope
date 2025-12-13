@@ -155,17 +155,13 @@ Debug:
 ## TODO
 
 ### Features
+* Windows PTY auto-upgrade
+* encryption
+* download/upload autocompletion
 * remote port forwarding
 * socks & http proxy
-* persistence modules
 * team server
-* currently spawn/script/portfwd commands are supported only on Unix shells. Those need to be implemented for Windows shells too.
-* an option switch for disable all logging, not only sessions.
-* main menu autocompletion for short commands
-* download/upload autocompletion
-* IPv6 support
-* encryption
-* UDP support
+* HTTPs and DNS agents
 
 ### Known Issues
 * Session logging: when executing commands on the target that feature alternate buffers like nano and they are abnormally terminated, then when 'catting' the logfile it seems corrupted. However the data are still there. Also for example when resetting the remote terminal, these escape sequences are reflected in the logs. I will need to filter specific escape sequences so as to ensure that when 'catting' the logfile, a smooth log is presented.
@@ -193,7 +189,7 @@ In any case, the correct key is always displayed when you attach to a session. F
 ### ► How can I change the menu key?
 For example, to change the PTY escape key from `F12` to `Ctrl-P`, put the following in `~/.penelope/peneloperc`:
 
-`self.escape = {'sequence':b'\x10', 'key':'Ctrl+P'}`
+`options.escape = {'sequence':b'\x10', 'key':'Ctrl+P'}`
 
 ### ► How can I contribute?
 Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. You can also submit pull requests but avoid making commits from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
