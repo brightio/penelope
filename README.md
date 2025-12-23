@@ -1,12 +1,13 @@
 <div align="center">
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
-<div align="center">
-  <img src="https://img.shields.io/badge/version-0.14.15-blueviolet"/><br>
-  <img src="https://raw.githubusercontent.com/toolswatch/badges/refs/heads/master/arsenal/europe/2024.svg?sanitize=true"/><br>
-  <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-USA%202025-red"/><br>
-  <img src="https://img.shields.io/badge/Black%20Hat%20Arsenal-MEA%202025-green"/>
-</div>
+
+<img src="https://img.shields.io/badge/Version-0.14.15-blueviolet"/><br>
+![BlackHat Arsenal](https://img.shields.io/badge/BlackHat-Arsenal-black)
+![EU](https://img.shields.io/badge/EU%202024-blue)
+![USA](https://img.shields.io/badge/USA%202025-red)
+![MEA](https://img.shields.io/badge/MEA%2025-green)
+
 Penelope is a powerful shell handler built as a modern netcat replacement for RCE exploitation, aiming to simplify, accelerate, and optimize post-exploitation workflows.
 
 ## Table of Contents
@@ -57,16 +58,16 @@ pipx install git+https://github.com/brightio/penelope
 - Multiple sessions
 - Multiple listeners
 - Serve files/folders via HTTP (-s switch)
-- Can be imported by python3 exploits and get shell on the same terminal (see [Extras](#Extras))
+- Can be imported by python3 exploits and get shell on the same terminal (see [extras](https://github.com/brightio/penelope/tree/main/extras))
+- Can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
 
 ### Modules
-![Modules](https://github.com/user-attachments/assets/cb2c3e36-a051-4bff-9091-25b63a584235)
+
+<img width="2341" height="946" alt="image" src="https://github.com/user-attachments/assets/c3779ca1-d2b3-49b5-b853-544a71e71611" />
 
 #### Meterpreter module demonstration
 
 ![meterpreter](https://github.com/user-attachments/assets/b9cda69c-e25c-41e1-abe2-ce18ba13c4ed)
-
-Penelope can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
 
 ## Usage
 ### Sample Typical Usage
@@ -186,10 +187,8 @@ In any case, the correct key is always displayed when you attach to a session. F
 
 <img width="597" height="56" alt="463710291-51ee6370-7952-4db1-a0fd-31572278fa8e" src="https://github.com/user-attachments/assets/36b53c73-48cb-4ba7-a36a-ea92d1ea8f9b" />
 
-### ► How can I change the menu key?
-For example, to change the PTY escape key from `F12` to `Ctrl-P`, put the following in `~/.penelope/peneloperc`:
-
-`options.escape = {'sequence':b'\x10', 'key':'Ctrl+P'}`
+### ► How can I customize Penelope (change default options, create custom modules, etc.)?
+See [peneloperc](https://github.com/brightio/penelope/blob/main/extras/peneloperc)
 
 ### ► How can I contribute?
 Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. You can also submit pull requests but avoid making commits from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
