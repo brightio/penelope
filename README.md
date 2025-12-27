@@ -2,11 +2,11 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 
-<img src="https://img.shields.io/badge/Version-0.14.15-blueviolet"/><br>
+<img src="https://img.shields.io/badge/Version-0.14.16-blueviolet"/><br>
 ![BlackHat Arsenal](https://img.shields.io/badge/BlackHat-Arsenal-black)
 ![EU](https://img.shields.io/badge/EU%202024-blue)
 ![USA](https://img.shields.io/badge/USA%202025-red)
-![MEA](https://img.shields.io/badge/MEA%2025-green)
+![MEA](https://img.shields.io/badge/MEA%202025-green)
 
 Penelope is a powerful shell handler built as a modern netcat replacement for RCE exploitation, aiming to simplify, accelerate, and optimize post-exploitation workflows.
 
