@@ -1,14 +1,43 @@
 [build-system]
-  requires = ["setuptools"]
+  requires = ["setuptools>=61"]
   build-backend = "setuptools.build_meta"
 
 [project]
   name = "penelope-shell-handler"
   version = "0.14.18"
   requires-python = ">=3.6"
+  description = "Post-exploitation shell handler for authorized security testing"
+  readme = "README.md"
+  authors = [{name = "brightio", email = "brightio.code@gmail.com"}]
+  license = {text = "GPL-3.0-or-later"}
+  keywords = [
+    "reverse-shell",
+    "tty",
+    "pty",
+    "rce",
+    "ctf",
+    "ctf-tools",
+    "oscp",
+    "shell-handler",
+    "hackthebox",
+    "oscp-tools",
+    "tryhackme",
+  ]
+  classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Information Technology",
+    "Topic :: Security",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+  ]
+
+[project.urls]
+  Homepage = "https://github.com/brightio/penelope"
+  Source = "https://github.com/brightio/penelope"
+  Issues = "https://github.com/brightio/penelope/issues"
 
 [project.scripts]
   penelope = "penelope:main"
 
 [tool.setuptools]
-  script-files = ["penelope.py"]
+  py-modules = ["penelope"]
