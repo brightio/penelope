@@ -30,8 +30,13 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Current version: $VERSION"
     
-    - name: Check if minor version changed
+    - name: Check if version changed
       id: version_changed
+      run: |
+        git diff HEAD^ HEAD -- penelope.py | grep -q "__version__" && echo "changed=true" >> $GITHUB_OUTPUT || echo "changed=false" >> $GITHUB_OUTPUT
+    
+    - name: Check if minor version changed
+      id: minor_changed
       run: |
         PREV_VERSION=$(git show HEAD^:penelope.py | grep -oP '__version__\s*=\s*["'\'']?\K[0-9.]+')
         CURR_VERSION=${{ steps.get_version.outputs.version }}
@@ -67,7 +72,7 @@ jobs:
         git push
     
     - name: Create GitHub Release
-      if: steps.version_changed.outputs.changed == 'true'
+      if: steps.minor_changed.outputs.changed == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -78,14 +83,14 @@ jobs:
           --target main
     
     - name: Build package
-      if: steps.version_changed.outputs.changed == 'true'
+      if: steps.minor_changed.outputs.changed == 'true'
       run: |
         python -m pip install --upgrade pip
         pip install build
         python -m build
     
     - name: Publish to PyPI
-      if: steps.version_changed.outputs.changed == 'true'
+      if: steps.minor_changed.outputs.changed == 'true'
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
