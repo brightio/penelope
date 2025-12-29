@@ -1,0 +1,98 @@
+name: Auto Version Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'penelope.py'
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Extract current version
+      id: get_version
+      run: |
+        VERSION=$(python -c "import re; content = open('penelope.py').read(); print(re.search(r'__version__\s*=\s*['\''\"](.*?)['\''"]', content).group(1))")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Current version: $VERSION"
+    
+    - name: Check if version changed
+      id: version_changed
+      run: |
+        git diff HEAD^ HEAD -- penelope.py | grep -q "__version__" && echo "changed=true" >> $GITHUB_OUTPUT || echo "changed=false" >> $GITHUB_OUTPUT
+    
+    - name: Check if minor or major version changed
+      id: release_version
+      run: |
+        PREV_VERSION=$(git show HEAD^:penelope.py | grep -oP '__version__\s*=\s*["'\'']?\K[0-9.]+')
+        CURR_VERSION=${{ steps.get_version.outputs.version }}
+        PREV_MAJOR=$(echo $PREV_VERSION | cut -d. -f1)
+        CURR_MAJOR=$(echo $CURR_VERSION | cut -d. -f1)
+        PREV_MINOR=$(echo $PREV_VERSION | cut -d. -f2)
+        CURR_MINOR=$(echo $CURR_VERSION | cut -d. -f2)
+        if [ "$CURR_MAJOR" -gt "$PREV_MAJOR" ] || [ "$CURR_MINOR" -gt "$PREV_MINOR" ]; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Update pyproject.toml
+      if: steps.version_changed.outputs.changed == 'true'
+      run: |
+        VERSION=${{ steps.get_version.outputs.version }}
+        sed -i "s/^  version = .*/  version = \"$VERSION\"/" pyproject.toml
+        echo "Updated pyproject.toml to version $VERSION"
+    
+    - name: Update README
+      if: steps.version_changed.outputs.changed == 'true'
+      run: |
+        VERSION=${{ steps.get_version.outputs.version }}
+        sed -i "s|https://img.shields.io/badge/Version-[0-9.]*-blueviolet|https://img.shields.io/badge/Version-$VERSION-blueviolet|g" README.md
+        echo "Updated README.md badge to version $VERSION"
+    
+    - name: Commit version updates
+      if: steps.version_changed.outputs.changed == 'true'
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add pyproject.toml README.md
+        git diff --staged --quiet || git commit -m "chore: sync version to ${{ steps.get_version.outputs.version }}"
+        git push
+    
+    - name: Create GitHub Release
+      if: steps.release_version.outputs.changed == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION=${{ steps.get_version.outputs.version }}
+        gh release create "v$VERSION" \
+          --title "Release v$VERSION" \
+          --notes "Automated release for version $VERSION" \
+          --target main
+    
+    - name: Build package
+      if: steps.release_version.outputs.changed == 'true'
+      run: |
+        python -m pip install --upgrade pip
+        pip install build
+        python -m build
+    
+    - name: Publish to PyPI
+      if: steps.release_version.outputs.changed == 'true'
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
