@@ -4490,6 +4490,56 @@ class meterpreter(Module):
 				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
 
 
+class ligolo(Module):
+	category = "Pivoting"
+	def run(session, args):
+		"""
+		Upload the latest version of Ligolo-ng
+		"""
+		if session.OS == 'Unix':
+			if session.arch == "x86_64":
+				files = session.upload(URLS['ligolo_amd64'])
+			elif session.arch in ("aarch64", "arm64"):
+				files = session.upload(URLS['ligolo_arm64'])
+			else:
+				logger.error("Ligolo-ng: No predefined binary to upload. Please make a pull request.")
+				print()
+				return
+
+			if files:
+				session.exec(f"tar -xzf {files[0]} agent && rm {files[0]}")
+				logger.info(f"Ligolo-ng agent decompressed!")
+
+		elif session.OS == 'Windows':
+			logger.error("Ligolo-ng: No predefined binary to upload. Please make a pull request.")
+
+
+class chisel(Module):
+	category = "Pivoting"
+	def run(session, args):
+		"""
+		Upload the latest version of Chisel
+		"""
+		if session.OS == 'Unix':
+			if session.arch == "x86_64":
+				files = session.upload(URLS['chisel_amd64'])
+			elif session.arch in ("i386", "i686"):
+				files = session.upload(URLS['chisel_386'])
+			elif session.arch in ("aarch64", "arm64"):
+				files = session.upload(URLS['chisel_arm64'])
+			else:
+				logger.error("Chisel: No predefined binary to upload. Please make a pull request.")
+				print()
+				return
+
+			if files:
+				session.exec(f"gunzip {files[0]}")
+				logger.info(f"{paint(files[0]).yellow} decompressed!")
+
+		elif session.OS == 'Windows':
+			logger.error("Chisel: No predefined binary to upload. Please make a pull request.")
+
+
 class ngrok(Module):
 	category = "Pivoting"
 	def run(session, args):
@@ -5262,6 +5312,13 @@ URLS = {
 	'pspy32':	"https://github.com/DominicBreuker/pspy/releases/latest/download/pspy32",
 	'pspy64':	"https://github.com/DominicBreuker/pspy/releases/latest/download/pspy64",
 	'panix':	"https://github.com/Aegrah/PANIX/releases/latest/download/panix.sh",
+	'chisel_386':	"https://github.com/jpillora/chisel/releases/download/v1.11.3/chisel_1.11.3_linux_386.gz",
+	'chisel_amd64':	"https://github.com/jpillora/chisel/releases/download/v1.11.3/chisel_1.11.3_linux_amd64.gz",
+	'chisel_arm64':	"https://github.com/jpillora/chisel/releases/download/v1.11.3/chisel_1.11.3_linux_arm64.gz",
+	'chisel_win386':	"https://github.com/jpillora/chisel/releases/download/v1.11.3/chisel_1.11.3_windows_386.zip",
+	'chisel_winamd64':	"https://github.com/jpillora/chisel/releases/download/v1.11.3/chisel_1.11.3_windows_amd64.zip",
+	'ligolo_amd64':		"https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_linux_amd64.tar.gz",
+	'ligolo_arm64':		"https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_linux_arm64.tar.gz",
 }
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
