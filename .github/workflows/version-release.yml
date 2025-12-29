@@ -26,7 +26,7 @@ jobs:
     - name: Extract current version
       id: get_version
       run: |
-        VERSION=$(python -c "import re; content = open('penelope.py').read(); print(re.search(r'__version__\s*=\s*['\''\"](.*?)['\''"]', content).group(1))")
+        VERSION=$(python -c "import re; content = open('penelope.py').read(); print(re.search(r'__version__\s*=\s*\"(.*?)\"', content).group(1))")
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Current version: $VERSION"
     
