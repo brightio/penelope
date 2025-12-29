@@ -30,10 +30,18 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Current version: $VERSION"
     
-    - name: Check if version changed
+    - name: Check if minor version changed
       id: version_changed
       run: |
-        git diff HEAD^ HEAD -- penelope.py | grep -q "__version__" && echo "changed=true" >> $GITHUB_OUTPUT || echo "changed=false" >> $GITHUB_OUTPUT
+        PREV_VERSION=$(git show HEAD^:penelope.py | grep -oP '__version__\s*=\s*["'\'']?\K[0-9.]+')
+        CURR_VERSION=${{ steps.get_version.outputs.version }}
+        PREV_MINOR=$(echo $PREV_VERSION | cut -d. -f2)
+        CURR_MINOR=$(echo $CURR_VERSION | cut -d. -f2)
+        if [ "$CURR_MINOR" -gt "$PREV_MINOR" ]; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+        fi
     
     - name: Update pyproject.toml
       if: steps.version_changed.outputs.changed == 'true'
