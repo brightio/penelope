@@ -37,6 +37,10 @@ For a more streamlined setup, it can be installed using pipx:
 ```bash
 pipx install git+https://github.com/brightio/penelope
 ```
+Penelope is also available on PyPI:
+```bash
+pipx install penelope-shell-handler
+```
 ## Features
 ### Session Features
 |Description|Unix with Python>=2.3| Unix without Python>=2.3|Windows|

