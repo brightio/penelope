@@ -126,6 +126,7 @@ options:
 Reverse or Bind shell?:
   -i , --interface              Local interface/IP to listen. (Default: 0.0.0.0)
   -c , --connect                Bind shell Host
+  -j , --jump                   Reverse shell jump endpoints
 
 Hints:
   -a, --payloads                Show sample reverse shell payloads for active Listeners
@@ -189,10 +190,13 @@ It depends on the type of shell upgrade in use:
 
 In any case, the correct key is always displayed when you attach to a session. For example:
 
-<img width="597" height="56" alt="463710291-51ee6370-7952-4db1-a0fd-31572278fa8e" src="https://github.com/user-attachments/assets/36b53c73-48cb-4ba7-a36a-ea92d1ea8f9b" />
+<img src="https://github.com/user-attachments/assets/36b53c73-48cb-4ba7-a36a-ea92d1ea8f9b" />
 
 ### ► How can I customize Penelope (change default options, create custom modules, etc.)?
 See [peneloperc](https://github.com/brightio/penelope/blob/main/extras/peneloperc)
+
+### ► Why aren’t my current working directory and/or user respected when I use menu commands like download/upload?
+This usually means you opened a new interactive shell, possibly under a different user. The Penelope agent only tracks the directory of the initial shell and keeps the permissions of the user from that first shell. The best workaround is to `cd /tmp` before opening a new shell, or, if you switched users, spawn a new reverse shell as the new user.
 
 ### ► How can I contribute?
 Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. You can also submit pull requests but avoid making commits from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
