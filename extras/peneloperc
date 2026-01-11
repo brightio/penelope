@@ -29,21 +29,38 @@
 
 # Module named 'aliases' that runs upon session creation
 #class aliases(Module):
+#	enabled = True
 #	on_session_start = True
+#	category = "My Custom Modules"
+#	def run(session, args):
+#		"""
+#		Apply my .bash_aliases file to target
+#		"""
+#		if session.OS == 'Unix':
+#			session.exec(f'cp ~/.bash_aliases ~/.bash_aliases_backup{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+#			session.upload(".bash_aliases", remote_path="~/")
+#			logger.info("~/.bash_aliases replaced!")
+#		else:
+#			logger.error("This module runs only on Unix shells")
+
+# Module named 'mybashrc' that runs on first attach
+#class mybashrc(Module):
+#	on_first_attach = True
 #	category = "My Custom Modules"
 #	def run(session, args):
 #		"""
 #		Apply my .bashrc file to target
 #		"""
 #		if session.OS == 'Unix':
-#			session.exec(f'cp ~/.bashrc ~/.bashrc_backup{datetime.now().strftime("%Y%m%d_%H%M%S")}')
-#			session.upload(".bashrc", remote_path="~/")
-#			logger.info("~/.bashrc replaced!")
+#			session.upload("~/.bashrc", remote_path="/tmp")
+#			session.exec("source /tmp/.bashrc", agent_typing=True)
+#			logger.info("Applied my .bashrc!")
 #		else:
 #			logger.error("This module runs only on Unix shells")
 
 # Module named 'purge_history' that runs upon session termination
 #class purge_history(Module):
+#	enabled = True
 #	on_session_end = True
 #	category = "My Custom Modules"
 #	def run(session, args):

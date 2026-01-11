@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.15.3"
+__version__ = "0.16.0"
 
 import os
 import io
@@ -1122,7 +1122,10 @@ class MainMenu(BetterCMD):
 			module = modules().get(module_name)
 			if module:
 				args = parts[1] if len(parts) == 2 else ''
-				module.run(core.sessions[self.sid], args)
+				if module.enabled:
+					module.run(core.sessions[self.sid], args)
+				else:
+					cmdlogger.warning(f"Module '{module_name}' is disabled")
 			else:
 				cmdlogger.warning(f"Module '{module_name}' does not exist")
 		else:
@@ -3060,6 +3063,9 @@ class Session:
 				if self.prompt:
 					self.record(self.prompt)
 				self.new = False
+				for module in modules().values():
+					if module.enabled and module.on_first_attach:
+						module.run(self, None)
 
 			core.control << f'self.sessions[{self.id}].attach()'
 			menu.active.clear() # Redundant but safeguard
@@ -4327,16 +4333,13 @@ def agent():
 
 
 def modules():
-	mods = {module.__name__:module for module in Module.__subclasses__()}
-	if options.oscp_safe:
-		del mods['meterpreter']
-		del mods['traitor']
-	return mods
+	return {module.__name__:module for module in Module.__subclasses__()}
 
 
 class Module:
 	enabled = True
 	on_session_start = False
+	on_first_attach = False
 	on_session_end = False
 	category = "Misc"
 
@@ -5187,7 +5190,7 @@ def main():
 	method = parser.add_argument_group("Reverse or Bind shell?")
 	method.add_argument("-i", "--interface", help="Local interface/IP to listen. (Default: 0.0.0.0)", metavar='')
 	method.add_argument("-c", "--connect", help="Bind shell Host", metavar='')
-	method.add_argument("-j", "--jump", help="Reverse shell jump endpoint", action="append", metavar='')
+	method.add_argument("-j", "--jump", help="Reverse shell jump endpoints", action="append", metavar='')
 
 	hints = parser.add_argument_group("Hints")
 	hints.add_argument("-a", "--payloads", help="Show sample reverse shell payloads for active Listeners", action="store_true")
@@ -5227,6 +5230,10 @@ def main():
 		#logger.setLevel('DEBUG')
 		#options.max_maintain = 50
 		#options.no_bins = 'python,python3,script'
+
+	if options.oscp_safe:
+		meterpreter.enabled = False
+		traitor.enabled = False
 
 	global keyboard_interrupt
 	signal.signal(signal.SIGINT, lambda num, stack: core.stop())
