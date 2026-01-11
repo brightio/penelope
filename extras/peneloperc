@@ -13,6 +13,8 @@
 # options.ports = 80,443,445,4444				# Listen to multiple ports by default
 # options.interface = 'tun0'					# Listen by default only on tun0 interface
 
+# paint._colors['blue'] = 136					# Converts blue to orange
+
 # Module named 'my_custom_module' that runs with the 'run' command
 #class my_custom_module(Module):
 #	category = "My Custom Category"
