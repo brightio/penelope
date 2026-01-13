@@ -4,7 +4,7 @@
 
 [project]
   name = "penelope-shell-handler"
-  version = "0.18.0"
+  version = "0.18.1"
   requires-python = ">=3.6"
   description = "Post-exploitation shell handler for authorized security testing"
   readme = "README.md"
