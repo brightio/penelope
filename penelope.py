@@ -2319,15 +2319,10 @@ class Session:
 
 		try:
 			if self.agent:
-				safe_text = text.replace("'", "\\'")
-				# just copypaste from file_completer()
-				code = (
-					f"import glob, os; "
-					f"matches = glob.glob('{safe_text}*'); "
-					f"print('\\n'.join([p + '/' if os.path.isdir(p) else p for p in matches]))"
-				)
+				safe_pattern = shlex.quote(text) + "*"
+				cmd = f"ls -p -1 -d {safe_pattern} 2>/dev/null"
 				# Reuse exec() command
-				result = self.exec(code, python=True, value=True, timeout=True)
+				result = self.exec(cmd, python=False, value=True, timeout=True)
 				if result:
 					return result.splitlines()
 
