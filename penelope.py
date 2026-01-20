@@ -2319,12 +2319,16 @@ class Session:
 
 		try:
 			if self.agent:
-				safe_pattern = shlex.quote(text) + "*"
-				cmd = f"ls -p -1 -d {safe_pattern} 2>/dev/null"
-				# Reuse exec() command
-				result = self.exec(cmd, python=False, value=True, timeout=True)
-				if result:
-					return result.splitlines()
+							safe_text = text.replace("'", "\\'")
+							code = (
+								f"import glob, os; "
+								f"matches = glob.glob('{safe_text}*'); "
+								f"result = '\\n'.join([p + '/' if os.path.isdir(p) else p for p in matches]); "
+								f"stdout_stream << result.encode()"
+							)
+							result = self.exec(code, python=True, value=True, timeout=True)
+							if result:
+								return result.splitlines()
 
 			elif self.OS == 'Unix':
 				safe_pattern = shlex.quote(text) + "*"
