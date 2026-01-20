@@ -1492,6 +1492,16 @@ class MainMenu(BetterCMD):
 	def complete_upload(self, text, line, begidx, endidx):
 		return __class__.file_completer(text)
 
+	def complete_download(self, text, line, begidx, endidx):
+		if not self.sid:
+			return []
+
+		try:
+			session = core.sessions[self.sid]
+		except KeyError:
+			return []
+		return session.get_remote_completion(text)
+
 	def complete_use(self, text, line, begidx, endidx):
 		return self.get_core_id_completion(text, "none")
 
@@ -2300,6 +2310,50 @@ class Session:
 			response = self.exec("whoami", force_cmd=True, value=True)
 
 		return response or ''
+
+	def get_remote_completion(self, text):
+		"""
+		Obtain file and directory completions from the remote shell.
+		"""
+		text = text if text else ""
+
+		try:
+			if self.agent:
+							safe_text = text.replace("'", "\\'")
+							code = (
+								f"import glob, os; "
+								f"matches = glob.glob('{safe_text}*'); "
+								f"result = '\\n'.join([p + '/' if os.path.isdir(p) else p for p in matches]); "
+								f"stdout_stream << result.encode()"
+							)
+							result = self.exec(code, python=True, value=True, timeout=True)
+							if result:
+								return result.splitlines()
+
+			elif self.OS == 'Unix':
+				safe_pattern = shlex.quote(text) + "*"
+
+				cmd = f"ls -p -1 -d {safe_pattern} 2>/dev/null"
+				result = self.exec(cmd, value=True, timeout=True)
+				if result:
+					return result.splitlines()
+
+			elif self.OS == 'Windows':
+				win_text = text.replace('/', '\\')
+				cmd = f'dir /b "{win_text}*"'
+				
+				result = self.exec(cmd, force_cmd=True, value=True, timeout=True)
+				
+				if result:
+					if any(err in result for err in ["File Not Found", "The system cannot find", "Volume in drive"]):
+						return []
+					
+					return result.splitlines()
+		except Exception:
+			pass
+
+		return []
+
 
 	def get_tty(self, silent=False):
 		response = self.exec("tty", agent_typing=True, value=True) # TODO check binary
