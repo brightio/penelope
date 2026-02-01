@@ -2057,6 +2057,7 @@ class Session:
 			self._can_deploy_agent = None
 
 			self.upgrade_attempted = False
+			self.uploaded_paths = {}
 
 			core.rlist.append(self)
 
@@ -3763,6 +3764,7 @@ class Session:
 			uploaded_paths.append(uploaded_path)
 			print()
 
+		self.uploaded_paths.update(dict.fromkeys(uploaded_paths, int(time.time())))
 		return uploaded_paths
 
 	@agent_only
@@ -4427,7 +4429,7 @@ class upload_privesc_scripts(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
 		"""
-		Upload {linpeas,lse,deepce,pspy|winpeas,powerup,privesccheck} to the target
+		Upload {linpeas, lse, deepce, pspy || winpeas, powerup, privesccheck}
 		"""
 		if not session.write_access(session.cwd):
 			return
@@ -4567,7 +4569,7 @@ class upload_credump_scripts(Module):
 	category = "Credential Dumping"
 	def run(session, args):
 		"""
-		Upload mimikatz, LaZagne, Snaffler, SharpWeb to the Windows target
+		Upload Mimikatz, LaZagne, Snaffler, SharpWeb to the Windows target
 		"""
 		if not session.write_access(session.cwd):
 			return
@@ -4629,7 +4631,7 @@ class uac(Module):
 	category = "Forensics"
 	def run(session, args):
 		"""
-		Acquire forensic data Unix systems using UAC (Unix-like Artifacts Collector) in the background
+		Collect forensic artifacts using Unix-like Artifacts Collector in the background
 		"""
 		if session.OS == 'Unix':
 			if not session.system == 'Linux':
@@ -4764,7 +4766,7 @@ class ngrok(Module):
 	category = "Pivoting"
 	def run(session, args):
 		"""
-		Setup and create a tcp tunnel using ngrok
+		Setup and create a TCP tunnel using ngrok
 		"""
 		if session.OS == 'Unix':
 			if not session.system == 'Linux':
@@ -4802,7 +4804,7 @@ class panix(Module):
 	category = "Persistence"
 	def run(session, args):
 		"""
-		Upload the latest version of panix to the target
+		Upload the latest version of PANIX
 		"""
 		if session.OS == 'Unix':
 			session.upload(URLS['panix'])
@@ -4813,7 +4815,7 @@ class panix(Module):
 class meterpreter(Module):
 	def run(session, args):
 		"""
-		Get a meterpreter shell
+		Spawn a Meterpreter session
 		"""
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
@@ -4839,6 +4841,43 @@ class meterpreter(Module):
 			else:
 				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
 
+
+class cleanup(Module):
+	def run(session, args):
+		"""
+		Remove uploaded files and directories from the target
+		"""
+		for item in session.uploaded_paths:
+			p = item.strip('"').strip("'")
+			if session.OS == 'Unix':
+				response = session.exec(f'[ -e "{p}" ] && echo "exists" || echo "no"', value=True)
+				if response == 'exists':
+					response = session.exec(f'rm -rf -- "{p}";echo $?', value=True)
+					if response == '0':
+						logger.info(f"Deleted '{p}'")
+					else:
+						logger.error(f"Error deleting '{p}'")
+				else:
+					logger.error(f"'{p}' does not exist anymore")
+			else:
+				response = session.exec(f'cmd /Q /D /C if exist "{p}" (echo exists) else (echo no)', force_cmd=True, value=True)
+				if response == 'exists':
+					session.exec(f'set "RM_PATH={p}"', value=True, force_cmd=True)
+					session.exec(
+						'cmd /Q /D /C if exist "%RM_PATH%\\*" (rd /s /q "%RM_PATH%") else (del /f /q "%RM_PATH%")',
+						value=True, force_cmd=True
+					)
+					deleted = session.exec(
+						'cmd /Q /D /C if exist "%RM_PATH%" (echo 1) else (echo 0)',
+						value=True, force_cmd=True
+					)
+					if deleted == '0':
+						logger.info(f"Deleted '{item}'")
+					else:
+						logger.error(f"Error deleting '{item}'")
+					session.exec('set "RM_PATH="', value=True, force_cmd=True)
+				else:
+					logger.error(f"'{item}' does not exist anymore")
 
 class FileServer:
 	def __init__(self, *items, port=None, host=None, url_prefix=None, quiet=False):
