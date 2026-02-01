@@ -67,7 +67,7 @@ pipx install penelope-shell-handler
 
 ### Modules
 
-<img src="https://github.com/user-attachments/assets/61be479a-d6f0-4065-9f7b-46d199f6f88e" />
+![modules](https://github.com/user-attachments/assets/faf2fb41-b476-4af1-8c0a-f117a3aafb5a)
 
 #### Meterpreter module demonstration
 
