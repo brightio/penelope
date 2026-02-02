@@ -4460,7 +4460,8 @@ class upload_privesc_scripts(Module):
 				print()
 
 		elif session.OS == 'Windows':
-			session.upload(URLS['winpeas'])
+			session.upload(URLS['winpeas_bat'])
+			session.upload(URLS['winpeas_any'])
 			session.upload(URLS['powerup'])
 			session.upload(URLS['privesccheck'])
 
@@ -5574,7 +5575,8 @@ MAX_CMD_PROMPT_LEN = 335
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 URLS = {
 	'linpeas':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
-	'winpeas':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
+	'winpeas_bat':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
+	'winpeas_any':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASany.exe",
 	'socat':	"https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/socat",
 	'ncat':		"https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/ncat",
 	'lse':		"https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
