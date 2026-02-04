@@ -1534,13 +1534,10 @@ class MainMenu(BetterCMD):
 		return __class__.file_completer(text)
 
 	def complete_download(self, text, line, begidx, endidx):
-		if not self.sid:
-			return []
-		try:
-			session = core.sessions[self.sid]
-		except KeyError:
-			return []
-		return session.get_remote_completion(text)
+		return core.sessions[self.sid].get_remote_completion(text)
+
+	def complete_open(self, text, line, begidx, endidx):
+		return core.sessions[self.sid].get_remote_completion(text)
 
 	def complete_use(self, text, line, begidx, endidx):
 		return self.get_core_id_completion(text, "none")
