@@ -45,7 +45,7 @@ pipx install penelope-shell-handler
 ### Session Features
 |Description|Unix with Python>=2.3| Unix without Python>=2.3|Windows|
 |-----------|:-------------------:|:-----------------------:|:-----:|
-|Auto-upgrade shell|PTY|PTY(*)|readline|
+|Auto-upgrade shell|PTY|PTY(*)|readline(**)|
 |Real-time terminal resize|✅|✅|❌|
 |Logging shell activity|✅|✅|✅|
 |Download remote files/folders|✅|✅|✅|
@@ -56,6 +56,8 @@ pipx install penelope-shell-handler
 |Maintain X amount of active shells per host no matter what|✅|✅|❌|
 
 (*) opens a second TCP connection
+
+(**) Can be manually upgraded with the `upgrade` command
 
 ### Global Features
 - Streamline interaction with the targets via modules
@@ -161,7 +163,6 @@ Debug:
 ## TODO
 
 ### Features
-* Windows PTY auto-upgrade
 * encryption
 * remote port forwarding
 * socks & http proxy
