@@ -705,12 +705,17 @@ class BetterCMD:
 			return self.completion_matches[state]
 		except IndexError:
 			return None
+
 	@staticmethod
 	def file_completer(text):
 		matches = glob(text + '*')
-		matches = [m + '/' if os.path.isdir(m) else m for m in matches]
-		#matches = [f"'{m}'" if ' ' in m else m for m in matches]
-		return matches
+		results = []
+		for m in matches:
+			if os.path.isdir(m):
+				m += '/'
+			m = m.replace(' ', '\\ ')
+			results.append(m)
+		return results
 
 ##########################################################################################################
 
@@ -723,7 +728,7 @@ class MainMenu(BetterCMD):
 			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'script', 'portfwd'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
 			"Shell Management"  :['listeners', 'payloads', 'connect', 'Interfaces'],
-			"Miscellaneous"     :['help', 'modules', 'history', 'reset', 'reload', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
+			"Miscellaneous"     :['help', 'modules', 'history', 'cd', 'reset', 'reload', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
 		}
 
 	@property
@@ -837,6 +842,26 @@ class MainMenu(BetterCMD):
 					table += [paint(command).green, paint(parts[0]).blue, parts[1]]
 				print(table)
 			print()
+
+	def do_cd(self, path):
+		"""
+		[path]
+		Show/change Penelope's current directory
+
+		Examples:
+
+			cd		Show current directory
+			cd /path	Change current directory to /path
+		"""
+		if not path:
+			print(paint(os.getcwd()).yellow)
+		else:
+			path = Path(path).expanduser().resolve()
+			try:
+				os.chdir(path)
+				logger.info(f"Penelope's current directory changed to: {paint(path).yellow}")
+			except Exception as e:
+				logger.error(e)
 
 	@session_operation(extra=['none'])
 	def do_use(self, ID):
@@ -1502,6 +1527,9 @@ class MainMenu(BetterCMD):
 		return [iface for iface in Interfaces().list if iface.startswith(text)]
 
 	def complete_upload(self, text, line, begidx, endidx):
+		return __class__.file_completer(text)
+
+	def complete_cd(self, text, line, begidx, endidx):
 		return __class__.file_completer(text)
 
 	def complete_download(self, text, line, begidx, endidx):
