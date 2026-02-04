@@ -3177,8 +3177,8 @@ class Session:
 
 		logger.info(
 			f"Interacting with session {paint('[' + str(self.id) + ']').red}"
-			f"{paint(', Shell Type:').green} {paint(self.type).CYAN_lightgrey}{paint(', Menu key:').green} "
-			f"{paint(escape_key).MAGENTA_lightgrey} "
+			f"{paint(' • Shell Type').green} {paint(self.type).CYAN_white}{paint(' • Menu key').green} "
+			f"{paint(escape_key).MAGENTA_white} ⇐"
 		)
 
 		if not options.no_log:
