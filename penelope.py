@@ -40,6 +40,7 @@ import zipfile
 import inspect
 import warnings
 import platform
+import itertools
 import threading
 import subprocess
 import socketserver
@@ -1607,12 +1608,10 @@ class Core:
 		self.lock = threading.Lock() # TO REMOVE
 		self.conn_semaphore = threading.Semaphore(5)
 
-		self.listenerID = 0
-		self.listener_lock = threading.Lock()
-		self.sessionID = 0
-		self.session_lock = threading.Lock()
-		self.fileserverID = 0
-		self.fileserver_lock = threading.Lock()
+		self.listener_counter = itertools.count(1)
+		self.session_counter = itertools.count(1)
+		self.fileserver_counter = itertools.count(1)
+		self.counter_lock = threading.Lock()
 
 		self.hosts = defaultdict(list)
 		self.sessions = {}
@@ -1626,19 +1625,16 @@ class Core:
 	def __getattr__(self, name):
 
 		if name == 'new_listenerID':
-			with self.listener_lock:
-				self.listenerID += 1
-				return self.listenerID
+			with self.counter_lock:
+				return next(self.listener_counter)
 
 		elif name == 'new_sessionID':
-			with self.session_lock:
-				self.sessionID += 1
-				return self.sessionID
+			with self.counter_lock:
+				return next(self.session_counter)
 
 		elif name == 'new_fileserverID':
-			with self.fileserver_lock:
-				self.fileserverID += 1
-				return self.fileserverID
+			with self.counter_lock:
+				return next(self.fileserver_counter)
 		else:
 			raise AttributeError(name)
 
