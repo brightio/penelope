@@ -41,3 +41,18 @@
 
 [tool.setuptools]
   py-modules = ["penelope"]
+
+[tool.ruff]
+  fix = false
+
+[tool.ruff.lint]
+  fixable = []
+  unfixable = ["ALL"]
+  select = ["E", "W", "F"]
+  ignore = ["W191", "E101", "E111"]
+
+[tool.ruff.lint.isort]
+  force-single-line = true
+
+[tool.ruff.format]
+  exclude = ["*.py"]
