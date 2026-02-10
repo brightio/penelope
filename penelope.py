@@ -3165,10 +3165,13 @@ class Session:
 			except EOFError:
 				self.detach()
 				break
+			except (KeyboardInterrupt, OSError):
+				break
 			except AssertionError:
 				logger.error(f"Maximum prompt length is {MAX_CMD_PROMPT_LEN} characters. Current prompt is {len(cmd)}")
 			else:
-				self.send(cmd.encode() + b"\n")
+				if core.attached_session == self:
+					self.send(cmd.encode() + b"\n")
 
 	def attach(self):
 		if threading.current_thread().name != 'Core':
@@ -3221,7 +3224,8 @@ class Session:
 			os.kill(os.getpid(), signal.SIGWINCH)
 
 		elif self.type == 'Readline':
-			threading.Thread(target=self.readline_loop).start()
+			self._readline_thread = threading.Thread(target=self.readline_loop, daemon=True)
+			self._readline_thread.start()
 
 		self._cwd = None
 		return True
@@ -3258,6 +3262,14 @@ class Session:
 		core.wait_input = False
 		core.attached_session = None
 		core.rlist.remove(sys.stdin)
+
+		if self.type == 'Readline':
+			try:
+				os.write(sys.stdin.fileno(), b'\n')
+			except OSError:
+				pass
+			if hasattr(self, '_readline_thread') and self._readline_thread.is_alive():
+				self._readline_thread.join(timeout=2)
 
 		if self.type == 'PTY':
 			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
