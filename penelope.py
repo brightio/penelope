@@ -2126,8 +2126,8 @@ class Session:
 
 				self.name = f"{hostname}{c1}{ip}{c2}{system}"
 				self.name_colored = (
-					f"{paint(hostname).white_BLUE}{paint(c1).white_DIM}"
-					f"{paint(ip).white_RED}{paint(c2).white_DIM}"
+					f"{paint(hostname).white_BLUE} "
+					f"{paint(ip).white_RED} "
 					f"{paint(system).cyan}"
 				)
 
@@ -2140,8 +2140,8 @@ class Session:
 
 				logger.info(
 					f"Got {self.source} shell from "
-					f"{self.name_colored}{paint().green} {EMOJIS['new_shell']} "
-					f"Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
+					f"{self.name_colored} {paint().green}{EMOJIS['user']} {paint(self.user).BLUE_white} "
+					f"{paint().green}• Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
 				)
 
 				self.directory = options.basedir / "sessions" / self.name
@@ -3120,7 +3120,7 @@ class Session:
 				self.kill()
 				return False
 
-			logger.info(f"Shell upgraded successfully using {paint(_bin).yellow}{paint().green}! {EMOJIS['upgrade']}")
+			logger.info(f"Shell upgraded successfully using {paint(_bin).yellow}{paint().green}")
 
 			self.agent = self.can_deploy_agent
 			self.type = 'PTY'
@@ -3211,7 +3211,7 @@ class Session:
 		)
 
 		if not options.no_log:
-			logger.info(f"Logging to {paint(self.logpath).yellow_DIM} {EMOJIS['logfile']}")
+			logger.info(f"Logging to {paint(self.logpath).yellow_DIM}")
 		print(paint('─' * shutil.get_terminal_size()[0]).darkgrey)
 
 		core.attached_session = self
@@ -5657,7 +5657,7 @@ URLS = {
 }
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
-	'lost':'💔', 'home':'🏠', 'bug':'🐞', 'skull':'💀', 'refresh':'🔄', 'cancel':'🚫', 'no_sessions':'😟',
+	'lost':'💔', 'home':'🏠', 'bug':'🐞', 'skull':'💀', 'refresh':'🔄', 'cancel':'🚫', 'no_sessions':'😟', 'user':'👤'
 }
 
 # Python Agent code
