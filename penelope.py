@@ -385,7 +385,7 @@ class PBar:
 
 class paint:
 	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':208, 'white':15, 'lightgrey':7, 'darkgrey':8}
+	_colors = {'black':16, 'red':88, 'green':71, 'yellow':184, 'blue':25, 'magenta':99, 'cyan':38, 'orange':208, 'white':255, 'lightgrey':250, 'darkgrey':242}
 	_escape = lambda codes: f"\001\x1b[{codes}m\002"
 
 	def __init__(self, text=None, colors=None):
@@ -959,7 +959,7 @@ class MainMenu(BetterCMD):
 					if options.maintain > 1:
 						options.maintain = 1
 						self.onecmd("maintain")
-					for session in reversed(list(core.sessions.copy().values())):
+					for session in reversed(tuple(core.sessions.values())):
 						session.kill()
 		else:
 			core.sessions[ID].kill()
@@ -1347,9 +1347,9 @@ class MainMenu(BetterCMD):
 
 			elif args.command == "stop":
 				if args.id == '*':
-					listeners = core.listeners.copy()
+					listeners = tuple(core.listeners.values())
 					if listeners:
-						for listener in listeners.values():
+						for listener in listeners:
 							listener.stop()
 					else:
 						cmdlogger.warning("No listeners to stop...")
@@ -1775,13 +1775,13 @@ class Core:
 
 		if self.sessions:
 			logger.warning("Killing sessions...")
-			for session in reversed(list(self.sessions.copy().values())):
+			for session in reversed(tuple(self.sessions.values())):
 				session.kill()
 
-		for listener in self.listeners.copy().values():
+		for listener in tuple(self.listeners.values()):
 			listener.stop()
 
-		for fileserver in self.fileservers.copy().values():
+		for fileserver in tuple(self.fileservers.values()):
 			fileserver.stop()
 
 		self.control << 'self.started = False'
@@ -1913,7 +1913,7 @@ class TCPListener:
 	def start(self):
 		specific = ""
 		if self.host == '0.0.0.0':
-			specific = paint('→  ').cyan + str(paint(' • ').cyan).join([str(paint(ip).cyan) for ip in Interfaces().list.values()])
+			specific = paint('-> ').cyan + str(paint(' • ').cyan).join([str(paint(ip).cyan) for ip in Interfaces().list.values()])
 
 		logger.info(f"Listening for reverse shells on {paint(self.host).blue}{paint(':').white}{paint(self.port).orange} {specific}")
 
@@ -1978,7 +1978,7 @@ class TCPListener:
 				iface_name = {v: k for k, v in interfaces.items()}.get(ip)
 				if interface_filter and iface_name != interface_filter:
 					continue
-				iface_name = paint(iface_name).GREEN
+				iface_name = paint(iface_name).GREEN_black
 			interface_count += 1
 			output.extend((f'➤  {iface_name} → {str(paint(ip).cyan)}:{str(paint(port).orange)}', ''))
 			output.append(str(paint("Bash TCP").UNDERLINE))
@@ -2127,7 +2127,7 @@ class Session:
 				self.name = f"{hostname}{c1}{ip}{c2}{system}"
 				self.name_colored = (
 					f"{paint(hostname).white_BLUE} "
-					f"{paint(ip).white_RED} "
+					f"{paint(ip).RED_white} "
 					f"{paint(system).cyan}"
 				)
 
@@ -2139,9 +2139,9 @@ class Session:
 					core.session_wait.put(self.id)
 
 				logger.info(
-					f"Got {self.source} shell from "
+					f"{paint().YELLOW_black}[New {self.source.title()} Shell]{paint().RESET_green} • "
 					f"{self.name_colored} {paint().green}{EMOJIS['user']} {paint(self.user).BLUE_white} "
-					f"{paint().green}• Assigned SessionID {paint('<' + str(self.id) + '>').yellow}"
+					f"{paint().green}• Session ID {paint('<' + str(self.id) + '>').yellow}"
 				)
 
 				self.directory = options.basedir / "sessions" / self.name
@@ -3024,7 +3024,7 @@ class Session:
 				else:
 					logger.warning("This shell is already PTY")
 			else:
-				logger.info("Attempting to upgrade shell to PTY...")
+				logger.info("Upgrading shell to PTY...")
 
 			self.shell = self.bin['bash'] or self.bin['sh']
 			if not self.shell:
@@ -3120,7 +3120,7 @@ class Session:
 				self.kill()
 				return False
 
-			logger.info(f"Shell upgraded successfully using {paint(_bin).yellow}{paint().green}")
+			logger.info(f"PTY upgrade successful via {paint(_bin).green}")
 
 			self.agent = self.can_deploy_agent
 			self.type = 'PTY'
@@ -3206,12 +3206,12 @@ class Session:
 
 		logger.info(
 			f"Interacting with session {paint('[' + str(self.id) + ']').red}"
-			f"{paint(' • Shell Type').green} {paint(self.type).CYAN_white}{paint(' • Menu key').green} "
+			f"{paint(' •').green} {paint(self.type).CYAN_white}{paint(' • Menu key').green} "
 			f"{paint(escape_key).MAGENTA_white} ⇐"
 		)
 
 		if not options.no_log:
-			logger.info(f"Logging to {paint(self.logpath).yellow_DIM}")
+			logger.info(f"Session log: {paint(self.logpath).yellow_DIM}")
 		print(paint('─' * shutil.get_terminal_size()[0]).darkgrey)
 
 		core.attached_session = self
@@ -3447,6 +3447,7 @@ class Session:
 					tar.extractall(local_download_folder)
 				except Exception as e:
 					logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
+					return []
 			tar.close()
 
 			if self.agent:
@@ -3691,7 +3692,10 @@ class Session:
 				stdin_stream.write(b"")
 				error_buffer = ''
 				while True:
-					r, _, _ = select([stderr_stream], [], [])
+					r, _, _ = select([stderr_stream], [], [], options.short_timeout)
+					if not stderr_stream in r:
+						if not self.exec("stdout_stream << str('ping').encode()", python=True, value=True): # TEMP
+							return []
 					data = stderr_stream.read(options.network_buffer_size)
 					if data:
 						error_buffer += data.decode()
@@ -4079,6 +4083,8 @@ class Session:
 
 		self.subchannel.control.close()
 		self.subchannel.close()
+		for stream in tuple(self.streams.values()):
+			stream << b""
 
 		core.rlist.remove(self)
 		if self in core.wlist:
@@ -4998,7 +5004,7 @@ class FileServer:
 
 		for ip in ips:
 			output.extend(('', f'{EMOJIS["home"]} http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).orange) + '/' + self.url_prefix))
-			table = Table(joinchar=' → ')
+			table = Table(joinchar=' -> ')
 			for urlpath, filepath in self.filemap.items():
 				table += (
 					paint(f"{EMOJIS['folder'] if os.path.isdir(filepath) else EMOJIS['file']} ").green +
