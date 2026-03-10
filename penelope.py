@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.18.4"
+__version__ = "0.18.7"
 
 import os
 import io
@@ -385,7 +385,7 @@ class PBar:
 
 class paint:
 	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':208, 'white':7, 'lightgrey':250, 'darkgrey':242}
+	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':208, 'white':15, 'lightgrey':250, 'darkgrey':242}
 	_escape = lambda codes: f"\001\x1b[{codes}m\002"
 
 	def __init__(self, text=None, colors=None):
@@ -2127,7 +2127,7 @@ class Session:
 				self.name = f"{hostname}{c1}{ip}{c2}{system}"
 				self.name_colored = (
 					f"{paint(hostname).white_BLUE} "
-					f"{paint(ip).RED_white} "
+					f"{paint(ip).white_RED} "
 					f"{paint(system).cyan}"
 				)
 
@@ -2138,10 +2138,11 @@ class Session:
 				if self.name == core.session_wait_host:
 					core.session_wait.put(self.id)
 
+				new_banner = f"[New {self.source.title()} Shell]"
 				logger.info(
-					f"{paint().YELLOW_black}[New {self.source.title()} Shell]{paint().RESET_green} • "
-					f"{self.name_colored} {paint().green}{EMOJIS['user']} {paint(self.user).BLUE_white} "
-					f"{paint().green}• Session ID {paint('<' + str(self.id) + '>').yellow}"
+					f"{paint(new_banner).YELLOW_black} {paint('•').green} "
+					f"{self.name_colored} {EMOJIS['user']} {paint(self.user).white_BLUE} "
+					f"{paint('• Session ID').green} {paint('<' + str(self.id) + '>').yellow}"
 				)
 
 				self.directory = options.basedir / "sessions" / self.name
