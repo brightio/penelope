@@ -385,7 +385,7 @@ class PBar:
 
 class paint:
 	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	_colors = {'black':16, 'red':88, 'green':71, 'yellow':184, 'blue':25, 'magenta':99, 'cyan':38, 'orange':208, 'white':255, 'lightgrey':250, 'darkgrey':242}
+	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':208, 'white':7, 'lightgrey':250, 'darkgrey':242}
 	_escape = lambda codes: f"\001\x1b[{codes}m\002"
 
 	def __init__(self, text=None, colors=None):
