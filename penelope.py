@@ -2140,9 +2140,9 @@ class Session:
 
 				new_banner = f"[New {self.source.title()} Shell]"
 				logger.info(
-					f"{paint(new_banner).YELLOW_black} {paint('•').green} "
-					f"{self.name_colored} {EMOJIS['user']} {paint(self.user).white_BLUE} "
-					f"{paint('• Session ID').green} {paint('<' + str(self.id) + '>').yellow}"
+					f"{paint(new_banner).YELLOW_black} {paint('=>').green} "
+					f"{self.name_colored} {EMOJIS['user']} {paint(self.user).white_BLUE} {EMOJIS['new_shell']}"
+					f"{paint(' Session ID').green} {paint('<' + str(self.id) + '>').yellow}"
 				)
 
 				self.directory = options.basedir / "sessions" / self.name
