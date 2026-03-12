@@ -27,7 +27,7 @@ Penelope is a powerful shell handler built as a modern netcat replacement for RC
 
 ## Install
 
-Penelope runs on Unix-like systems, including Linux, macOS, and FreeBSD, and requires **Python 3.6+**. 
+Penelope runs on Unix-like systems, including Linux, macOS, and FreeBSD, and requires **Python 3.6+**.
 
 ### Standalone execution
 Penelope is implemented entirely with Python’s standard library, allowing it to run as a standalone script without any external dependencies:
