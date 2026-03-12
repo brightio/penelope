@@ -2,7 +2,7 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 
-<img src="https://img.shields.io/badge/Version-0.18.7-blueviolet"/><br>
+<img src="https://img.shields.io/badge/Version-0.19.0-blueviolet"/><br>
 ![BlackHat Arsenal](https://img.shields.io/badge/BlackHat-Arsenal-black)
 ![EU](https://img.shields.io/badge/EU%202024-blue)
 ![USA](https://img.shields.io/badge/USA%202025-red)
@@ -27,20 +27,24 @@ Penelope is a powerful shell handler built as a modern netcat replacement for RC
 
 ## Install
 
-Penelope can be run on all Unix-based systems (Linux, macOS, FreeBSD etc) and requires **Python 3.6+**
+Penelope runs on Unix-like systems, including Linux, macOS, and FreeBSD, and requires **Python 3.6+**. 
 
-It requires no installation as it uses only Python’s standard library - just download and execute the script:
+### Standalone execution
+Penelope is implemented entirely with Python’s standard library, allowing it to run as a standalone script without any external dependencies:
 ```bash
-wget https://raw.githubusercontent.com/brightio/penelope/refs/heads/main/penelope.py && python3 penelope.py
+wget -q https://raw.githubusercontent.com/brightio/penelope/refs/heads/main/penelope.py && python3 penelope.py
 ```
-For a more streamlined setup, it can be installed using pipx:
+
+### pipx
+To install the latest development version directly from GitHub:
 ```bash
 pipx install git+https://github.com/brightio/penelope
 ```
-Penelope is also available on PyPI:
+For a versioned and more stable release path, Penelope is also available on PyPI:
 ```bash
 pipx install penelope-shell-handler
 ```
+
 ## Features
 ### Session Features
 |Description|Unix with Python>=2.3| Unix without Python>=2.3|Windows|
@@ -114,7 +118,7 @@ Some Notes:
 - By default you need to press `F12` to detach the PTY shell and go to the Main Menu. If the upgrade was not possible the you ended up with a basic shell, you can detach it with `Ctrl+C`. This also prevents the accidental killing of the shell.
 - The Main Menu supports TAB completion and also short commands. For example instead of `interact 1` you can just type `i 1`.
 
-![Main Menu](https://github.com/user-attachments/assets/b3f568bc-5e66-4e6f-9510-3e61a3518e82)
+![Main Menu](https://github.com/user-attachments/assets/a0ba2925-ea7a-4c09-9ed0-8063a7d21b65)
 
 ### Command Line Options
 ```
@@ -190,7 +194,7 @@ It depends on the type of shell upgrade in use:
 
 In any case, the correct key is always displayed when you attach to a session. For example:
 
-<img src="https://github.com/user-attachments/assets/36b53c73-48cb-4ba7-a36a-ea92d1ea8f9b" />
+![F12](https://github.com/user-attachments/assets/87da0eec-0d78-4f1b-8e82-f3ebe9cacf5e)
 
 ### ► How can I customize Penelope (change default options, create custom modules, etc.)?
 See [peneloperc](https://github.com/brightio/penelope/blob/main/extras/peneloperc)
