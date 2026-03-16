@@ -4570,7 +4570,7 @@ class peass_ng(Module):
 		elif session.OS == 'Windows':
 			logger.error("This module runs only on Unix shells")
 			while True:
-				answer = ask(f"Use {paint('upload_privesc_scripts').GREY_black}{paint(' instead? (Y/n): ').yellow}").lower()
+				answer = ask(f"Use {paint('upload_privesc_scripts').LIGHTGREY_black}{paint(' instead? (Y/n): ').yellow}").lower()
 				if answer in ('y', ''):
 					menu.do_run('upload_privesc_scripts')
 					break
