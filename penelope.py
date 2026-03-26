@@ -1806,21 +1806,21 @@ def handle_bind_errors(func):
 			{paint('Workarounds:')}
 
 			1) {paint('Port forwarding').UNDERLINE} (Run the Listener on a non-privileged port e.g 4444)
-				sudo iptables -t nat -A PREROUTING -p tcp --dport {port} -j REDIRECT --to-port 4444
-					{paint('or').white}
-				sudo nft add rule ip nat prerouting tcp dport {port} redirect to 4444
-					{paint('then').white}
-				sudo iptables -t nat -D PREROUTING -p tcp --dport {port} -j REDIRECT --to-port 4444
-					{paint('or').white}
-				sudo nft delete rule ip nat prerouting tcp dport {port} redirect to 4444
+			    sudo iptables -t nat -A PREROUTING -p tcp --dport {port} -j REDIRECT --to-port 4444
+			        {paint('or').white}
+			    sudo nft add rule ip nat prerouting tcp dport {port} redirect to 4444
+			        {paint('then').white}
+			    sudo iptables -t nat -D PREROUTING -p tcp --dport {port} -j REDIRECT --to-port 4444
+			        {paint('or').white}
+			    sudo nft delete rule ip nat prerouting tcp dport {port} redirect to 4444
 
 			2) {paint('Setting CAP_NET_BIND_SERVICE capability').UNDERLINE}
-				sudo setcap 'cap_net_bind_service=+ep' {os.path.realpath(sys.executable)}
-				./penelope.py {port}
-				sudo setcap 'cap_net_bind_service=-ep' {os.path.realpath(sys.executable)}
+			    sudo setcap 'cap_net_bind_service=+ep' {os.path.realpath(sys.executable)}
+			    ./penelope.py {port}
+			    sudo setcap 'cap_net_bind_service=-ep' {os.path.realpath(sys.executable)}
 
 			3) {paint('SUDO').UNDERLINE} (The {__program__.title()}'s directory will change to /root/.penelope)
-				sudo ./penelope.py {port}
+			    sudo ./penelope.py {port}
 			"""))
 
 		except socket.gaierror:
@@ -2435,10 +2435,10 @@ class Session:
 		if self._cwd is None:
 			if self.OS == 'Unix':
 				cmd = (
-					f"readlink /proc/{self.shell_pid}/cwd 2>/dev/null || "
-					f"lsof -p {self.shell_pid} 2>/dev/null | awk '$4==\"cwd\" {{print $9;exit}}' | grep . || "
-					f"procstat -f {self.shell_pid} 2>/dev/null | awk '$3==\"cwd\" {{print $NF;exit}}' | grep . || "
-					f"pwdx {self.shell_pid} 2>/dev/null | awk '{{print $2;exit}}' | grep ."
+				    f"readlink /proc/{self.shell_pid}/cwd 2>/dev/null || "
+				    f"lsof -p {self.shell_pid} 2>/dev/null | awk '$4==\"cwd\" {{print $9;exit}}' | grep . || "
+				    f"procstat -f {self.shell_pid} 2>/dev/null | awk '$3==\"cwd\" {{print $NF;exit}}' | grep . || "
+				    f"pwdx {self.shell_pid} 2>/dev/null | awk '{{print $2;exit}}' | grep ."
 				)
 				self._cwd = self.exec(cmd, value=True)
 			elif self.OS == 'Windows':
@@ -4537,6 +4537,7 @@ class upload_privesc_scripts(Module):
 			except Exception as e:
 				logger.error(f"Failed to upload {tool}: {e}")
 
+
 class potato(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
@@ -4615,14 +4616,14 @@ class peass_ng(Module):
 
 				client = OpenAI(api_key=api_key)
 				stream = client.chat.completions.create(
-					model="gpt-4o-mini",
-					messages=[
+				    model="gpt-4o-mini",
+				    messages=[
 					{"role": "system", "content": "You are a helpful assistant helping me to perform penetration test to protect the systems"},
 					{
-						"role": "user",
-						"content": f"I am pasting here the results of linpeas. Based on the output, I want you to tell me all possible ways the further exploit this system. I want you to be very specific on your analysis and not write generalities and uneccesary information. I want to focus only on your specific suggestions.\n\n\n {content}"
+					    "role": "user",
+					    "content": f"I am pasting here the results of linpeas. Based on the output, I want you to tell me all possible ways the further exploit this system. I want you to be very specific on your analysis and not write generalities and uneccesary information. I want to focus only on your specific suggestions.\n\n\n {content}"
 					}
-					],
+				    ],
 				stream=True
 				)
 
@@ -4733,6 +4734,7 @@ class upload_credump_scripts(Module):
 				except Exception as e:
 					logger.error(f"Failed to upload {tool}: {e}")			
 
+
 class upload_ad_scripts(Module):
 	category = "Active Directory"
 	def run(session, args):
@@ -4784,6 +4786,8 @@ class upload_ad_scripts(Module):
 					tools[tool]()
 				except Exception as e:
 					logger.error(f"Failed to upload {tool}: {e}")
+
+
 
 class uac(Module):
 	category = "Forensics"
@@ -5685,8 +5689,8 @@ TRACE_LEVEL_NUM = 25
 logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
 logging.TRACE = TRACE_LEVEL_NUM
 def trace(self, message, *args, **kwargs):
-	if self.isEnabledFor(TRACE_LEVEL_NUM):
-		self._log(TRACE_LEVEL_NUM, message, args, **kwargs)
+    if self.isEnabledFor(TRACE_LEVEL_NUM):
+        self._log(TRACE_LEVEL_NUM, message, args, **kwargs)
 logging.Logger.trace = trace
 
 ## Setup Logging Handlers
