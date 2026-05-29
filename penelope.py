@@ -1278,39 +1278,6 @@ class MainMenu(BetterCMD):
 		else:
 			cmdlogger.warning("No command to execute")
 
-	'''@session_operation(current=True) # TODO
-	def do_tasks(self, line):
-		"""
-
-		Show assigned tasks
-		"""
-		table = Table(joinchar=' | ')
-		table.header = ['SessionID', 'TaskID', 'PID', 'Command', 'Output', 'Status']
-
-		for sessionid in core.sessions:
-			tasks = core.sessions[sessionid].tasks
-			for taskid in tasks:
-				for stream in tasks[taskid]['streams'].values():
-					if stream.closed:
-						status = paint('Completed!').GREEN
-						break
-				else:
-					status = paint('Active...').YELLOW
-
-				table += [
-					paint(sessionid).red,
-					paint(taskid).cyan,
-					paint(tasks[taskid]['pid']).blue,
-					paint(tasks[taskid]['command']).yellow,
-					paint(tasks[taskid]['streams']['1'].name).green,
-					status
-				]
-
-		if len(table) > 1:
-			print(table)
-		else:
-			logger.warning("No assigned tasks")'''
-
 	def do_listeners(self, line):
 		"""
 		[add[-i<iface>][-p<port>]|stop<id>]
@@ -1478,7 +1445,8 @@ class MainMenu(BetterCMD):
 						value = dumps(value, indent=4)
 					print(f"{paint(value).yellow}")
 				else:
-					new_value = eval(args[1])
+					from ast import literal_eval
+					new_value = literal_eval(args[1])
 					old_value = getattr(options, param)
 					setattr(options, param, new_value)
 					if getattr(options, param) != old_value:
@@ -2245,7 +2213,7 @@ class Session:
 					except:
 						self._can_deploy_agent = False
 						return self._can_deploy_agent
-					self.remote_python_version = (int(major), int(minor), int(micro))
+					self.remote_python_version = (int(major), int(minor), int(micro or 0))
 					if self.remote_python_version >= (2, 3): # Python 2.2 lacks: tarfile, os.walk, yield
 						self._can_deploy_agent = True
 					else:
@@ -2370,10 +2338,10 @@ class Session:
 						return False
 
 			elif self.OS == 'Windows':
-				write_test_file = rand(16)
-				cmd = 'type nul > {write_test_file}.tmp 2>nul && (echo OK) || (echo NO) & del {write_test_file}.tmp 2>nul'
+				write_test_file = f"{directory}\\{rand(16)}.tmp"
+				cmd = f'type nul > {write_test_file} 2>nul && (echo OK) || (echo NO) & del {write_test_file} 2>nul'
 				response = self.exec(cmd, force_cmd=True, value=True)
-				if response == "NO":
+				if response != "OK":
 					logger.error(f"{directory}: Access is denied.")
 					return False
 
@@ -4608,54 +4576,7 @@ class peass_ng(Module):
 		Run the latest version of PEASS-ng in the background
 		"""
 		if session.OS == 'Unix':
-			parser = ArgumentParser(prog='peass_ng', description="peass-ng module", add_help=False)
-			parser.add_argument("-a", "--ai", help="Analyze linpeas results with chatGPT", action="store_true")
-
-			try:
-				arguments = parser.parse_args(shlex.split(args))
-			except SystemExit:
-				return
-
-			if arguments.ai:
-				if options.oscp_safe:
-					logger.error("AI is not allowed in OSCP")
-					return
-				try:
-					from openai import OpenAI
-					#api_key = input("Please enter your chatGPT API key: ")
-					#assert len(api_key) > 10
-				except Exception as e:
-					logger.error(e)
-					return False
-
-			output_file = session.script(URLS['linpeas'])
-
-			if arguments.ai:
-				api_key = input("Please enter your chatGPT API key: ")
-				assert len(api_key) > 10
-
-				with open(output_file, "r") as file:
-					content = file.read()
-
-				client = OpenAI(api_key=api_key)
-				stream = client.chat.completions.create(
-				    model="gpt-4o-mini",
-				    messages=[
-					{"role": "system", "content": "You are a helpful assistant helping me to perform penetration test to protect the systems"},
-					{
-					    "role": "user",
-					    "content": f"I am pasting here the results of linpeas. Based on the output, I want you to tell me all possible ways the further exploit this system. I want you to be very specific on your analysis and not write generalities and uneccesary information. I want to focus only on your specific suggestions.\n\n\n {content}"
-					}
-				    ],
-				stream=True
-				)
-
-				print('\n═════════════════ chatGPT analysis START ════════════════')
-				for chunk in stream:
-					if chunk.choices[0].delta.content:
-						#print(chunk.choices[0].delta.content, end="", flush=True)
-						stdout(chunk.choices[0].delta.content.encode())
-				print('\n═════════════════ chatGPT analysis END ════════════════')
+			session.script(URLS['linpeas'])
 
 		elif session.OS == 'Windows':
 			logger.error("This module runs only on Unix shells")
@@ -5330,7 +5251,7 @@ def url_to_bytes(URL):
 					continue
 			else:
 				answer = ask("Connection error. Try again? (Y/n): ")
-				if answer.lower() == 'n': # Trust the cert
+				if answer.lower() == 'n':
 					pass
 				else:
 					continue
