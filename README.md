@@ -2,16 +2,17 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 
-<img src="https://img.shields.io/badge/Version-0.19.3-blueviolet"/><br>
-![BlackHat Arsenal](https://img.shields.io/badge/BlackHat-Arsenal-black)
-![EU](https://img.shields.io/badge/EU%202024-blue)
-![USA](https://img.shields.io/badge/USA%202025-red)
-![MEA](https://img.shields.io/badge/MEA%202025-green)
+<img src="https://img.shields.io/badge/Version-0.19.3-6D4AFF"/><br>
+![Black Hat Arsenal](https://img.shields.io/badge/Presented%20at-Black%20Hat%20Arsenal-111827)
+![EU](https://img.shields.io/badge/EU%202024-2563EB)
+![USA](https://img.shields.io/badge/USA%202025-B91C1C)
+![MEA](https://img.shields.io/badge/MEA%202025-15803D)<br>
+![Kali Linux](https://img.shields.io/badge/Packaged%20in-Kali%20Linux-557C94)
 
-Penelope is a powerful shell handler built as a modern netcat replacement for RCE exploitation, aiming to simplify, accelerate, and optimize post-exploitation workflows.
+Penelope is a modern shell handler for penetration testers and CTF players. It provides a more capable alternative to basic netcat listeners, adding automatic PTY upgrades, session management, logging, file transfers and helper modules.
 
 ## Table of Contents
-- 📥 [Install](#install)
+- 📥 [Installation](#installation)
 - ⚙️ [Features](#features)
   - 🖥️ [Session Features](#session-features)
   - 🌍 [Global Features](#global-features)
@@ -25,9 +26,16 @@ Penelope is a powerful shell handler built as a modern netcat replacement for RC
 - ❓ [FAQ](#faq)
 - 🙌 [Thanks to the early birds](#thanks-to-the-early-birds)
 
-## Install
+## Installation
 
-Penelope runs on Unix-like systems, including Linux, macOS, and FreeBSD, and requires **Python 3.6+**.
+Penelope runs on Unix-like systems, including Linux, macOS and FreeBSD, and requires **Python 3.6+**.
+
+### Kali Linux
+Penelope is available in Kali Linux:
+```bash
+sudo apt update
+sudo apt install penelope
+```
 
 ### Standalone execution
 Penelope is implemented entirely with Python’s standard library, allowing it to run as a standalone script without any external dependencies:
@@ -36,7 +44,7 @@ wget -q https://raw.githubusercontent.com/brightio/penelope/refs/heads/main/pene
 ```
 
 ### pipx
-To install the latest development version directly from GitHub:
+To install the latest upstream version directly from GitHub:
 ```bash
 pipx install git+https://github.com/brightio/penelope
 ```
@@ -69,11 +77,11 @@ pipx install penelope-shell-handler
 - Multiple listeners
 - Serve files/folders via HTTP (-s switch)
 - Can be imported by python3 exploits and get shell on the same terminal (see [extras](https://github.com/brightio/penelope/tree/main/extras))
-- Can work in conjunction with metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
+- Can work in conjunction with Metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
 
 ### Modules
 
-![modules](https://github.com/user-attachments/assets/faf2fb41-b476-4af1-8c0a-f117a3aafb5a)
+![modules](https://github.com/user-attachments/assets/e1428a62-727b-4f2e-bb9e-b225e49409e1)
 
 #### Meterpreter module demonstration
 
@@ -100,22 +108,22 @@ penelope -s <File/Folder>         # Share a file or folder via HTTP
 
 ### Demonstrating Random Usage
 
-As shown in the below video, within only a few seconds we have easily:
-1. A fully functional auto-resizable PTY shell while logging every interaction with the target
-2. Execute the lastest version of Linpeas on the target without touching the disk and get the output on a local file in realtime 
-3. One more PTY shell in another tab
-4. Uploaded the latest versions of LinPEAS and linux-smart-enumeration
-5. Uploaded a local folder with custom scripts
-6. Uploaded an exploit-db exploit directly from URL
-7. Downloaded and opened locally a remote file
-8. Downloaded the remote /etc directory
-9. For every shell that may be killed for some reason, automatically a new one is spawned. This gives us a kind of persistence with the target
+As shown in the video below, within only a few seconds we can:
+1. Get a fully functional auto-resizable PTY shell while logging every interaction with the target
+2. Execute the latest version of LinPEAS on the target without touching the disk and save the output to a local file in real time
+3. Open one more PTY shell in another tab
+4. Upload the latest versions of LinPEAS and linux-smart-enumeration
+5. Upload a local folder with custom scripts
+6. Upload an exploit-db exploit directly from URL
+7. Download and open a remote file locally
+8. Download the remote /etc directory
+9. Automatically spawn a new shell if an existing shell dies, helping keep access available during unstable shell sessions
 
 https://github.com/brightio/penelope/assets/65655412/7295da32-28e2-4c92-971f-09423eeff178
 
 ### Main Menu Commands
 Some Notes:
-- By default you need to press `F12` to detach the PTY shell and go to the Main Menu. If the upgrade was not possible the you ended up with a basic shell, you can detach it with `Ctrl+C`. This also prevents the accidental killing of the shell.
+- By default you need to press `F12` to detach the PTY shell and go to the Main Menu. If the upgrade was not possible and you ended up with a basic shell, you can detach it with `Ctrl+C`. This also prevents the accidental killing of the shell.
 - The Main Menu supports TAB completion and also short commands. For example instead of `interact 1` you can just type `i 1`.
 
 ![Main Menu](https://github.com/user-attachments/assets/a0ba2925-ea7a-4c09-9ed0-8063a7d21b65)
@@ -174,17 +182,20 @@ Debug:
 * HTTPs and DNS agents
 
 ### Known Issues
-* Session logging: when executing commands on the target that feature alternate buffers like nano and they are abnormally terminated, then when 'catting' the logfile it seems corrupted. However the data are still there. Also for example when resetting the remote terminal, these escape sequences are reflected in the logs. I will need to filter specific escape sequences so as to ensure that when 'catting' the logfile, a smooth log is presented.
+* Session logging: commands that use alternate buffers, such as nano, may leave escape sequences in the log if they terminate abnormally. The data is still preserved, but viewing the logfile with tools like `cat` may look corrupted. Filtering these escape sequences is planned to make log output smoother.
 
 ## FAQ
 
-### ► Is Penelope allowed in OSCP exam?
-Yes. Penelope is allowed because its core features do not perform automatic exploitation.
-However, caution is required when using certain modules:
-* The meterpreter module should be used only on a single target, as permitted by OSCP rules.
+### ► Is Penelope allowed in the OSCP exam?
+
+Penelope’s core shell-handling features do not perform automatic exploitation, which makes them suitable for OSCP-style usage. However, exam rules can change, so always verify the current official OffSec rules before using any tool during an exam.
+
+Some modules require extra caution:
+
+* The meterpreter module should only be used in a way that complies with the current exam rules.
 * The traitor module uploads Traitor, which performs automatic privilege escalation.
 
-So as long as you know what you’re doing, there should be no issues. If you want to avoid mistakes, you can use the `-O / --oscp-safe` switch.
+If you want to avoid accidental rule violations, use the `-O / --oscp-safe` switch.
 
 ### ► How can I return from the remote shell to the Main Menu?
 It depends on the type of shell upgrade in use:
@@ -205,8 +216,8 @@ This usually means you opened a new interactive shell, possibly under a differen
 ### ► How can I contribute?
 Your contributions are invaluable! If you’d like to help, please report bugs, unexpected behaviors, or share new ideas. You can also submit pull requests but avoid making commits from IDEs that enforce PEP8 and unintentionally restructure the entire codebase.
 
-### ► How come the name?
-Penelope was the wife of Odysseus and she is known for her fidelity for him by waiting years. Since a characteristic of reverse shell handlers is waiting, this tool is named after her.
+### ► Where does the name come from?
+Penelope was the wife of Odysseus and is known for her loyalty and patience while waiting for him to return. The tool is named after her because it was built to be a faithful and stable shell handler for workflows that go beyond a basic listener.
 
 ## Thanks to the early birds
 * [Cristian Grigoriu - @crgr](https://github.com/crgr) for inspiring me to automate the PTY upgrade process. This is how this project was born.
