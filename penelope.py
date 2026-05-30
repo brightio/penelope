@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.19.2"
+__version__ = "0.19.3"
 
 import os
 import io
@@ -39,7 +39,6 @@ import logging
 import zipfile
 import inspect
 import tempfile
-import warnings
 import platform
 import itertools
 import threading
@@ -3404,21 +3403,12 @@ class Session:
 				logger.error("Invalid data returned")
 				return []
 
-			def add_w(func):
-				def inner(*args, **kwargs):
-					args[0].mode |= 0o200
-					func(*args, **kwargs)
-				return inner
+			try:
+				safe_tar_extractall(tar, local_download_folder)
+			except Exception as e:
+				logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
+				return []
 
-			tar._extract_member = add_w(tar._extract_member)
-
-			with warnings.catch_warnings():
-				warnings.simplefilter("ignore", category=DeprecationWarning)
-				try:
-					tar.extractall(local_download_folder)
-				except Exception as e:
-					logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
-					return []
 			tar.close()
 
 			if self.agent:
@@ -5220,6 +5210,46 @@ def get_glob_size(_glob, block_size):
 						filepath = os.path.join(root, file)
 						total_size += size_on_disk(filepath)
 	return total_size
+
+def _is_within_directory(directory, target):
+       target = os.path.realpath(target)
+       try:
+               return os.path.commonpath([directory]) == os.path.commonpath([directory, target])
+       except ValueError:
+               return False
+
+def safe_tar_extractall(tar, dest):
+	dest_real = os.path.realpath(dest)
+	orig_extract_member = tar._extract_member
+
+	def guarded(tarinfo, targetpath, *args, **kwargs):
+		if not _is_within_directory(dest_real, targetpath):
+			logger.error(str(paint("<LOCAL>").yellow) + " " +
+				str(paint(f"Refusing unsafe path in archive: {tarinfo.name}").red))
+			return
+
+		if not (tarinfo.isreg() or tarinfo.isdir() or tarinfo.issym() or tarinfo.islnk()):
+			logger.error(str(paint("<LOCAL>").yellow) + " " +
+				str(paint(f"Refusing special file in archive: {tarinfo.name}").red))
+			return
+
+		if tarinfo.issym() or tarinfo.islnk():
+			base = os.path.dirname(os.path.realpath(targetpath)) if tarinfo.issym() else dest_real
+			link_path = os.path.join(base, tarinfo.linkname)
+			if not _is_within_directory(dest_real, link_path):
+				logger.error(str(paint("<LOCAL>").yellow) + " " +
+					str(paint(f"Refusing unsafe link in archive: {tarinfo.name} -> {tarinfo.linkname}").red))
+				return
+
+		tarinfo.mode &= ~0o6000
+		tarinfo.mode |= 0o200
+		orig_extract_member(tarinfo, targetpath, *args, **kwargs)
+
+	tar._extract_member = guarded
+	import warnings
+	with warnings.catch_warnings():
+		warnings.simplefilter("ignore", category=DeprecationWarning)
+		tar.extractall(dest)
 
 def url_to_bytes(URL):
 
