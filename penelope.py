@@ -2113,10 +2113,10 @@ class Session:
 					f"{paint(' Session ID').green} {paint('<' + str(self.id) + '>').yellow}"
 				)
 
-				self.directory = options.basedir / "sessions" / self.name
+				self.directory = options.basedir / "sessions" / self.name.replace("/", "_")
 				if not options.no_log:
 					self.directory.mkdir(parents=True, exist_ok=True)
-					self.logpath = self.directory / f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}.log'
+					self.logpath = self.directory / f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}-{self.user.replace("/", "_")}.log'
 					self.histfile = self.directory / "readline_history"
 					self.logfile = open(self.logpath, 'ab', buffering=0)
 					if not options.no_timestamps:
