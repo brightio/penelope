@@ -5745,7 +5745,7 @@ URLS = {
 	'snaffler':		"https://github.com/SnaffCon/Snaffler/releases/latest/download/Snaffler.exe",
 	'lazagne':		"https://github.com/AlessandroZ/LaZagne/releases/latest/download/LaZagne.exe",
 	'mimikatz':		"https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip",
-	'sharphound':		"https://github.com/SpecterOps/SharpHound/releases/download/v2.8.1/SharpHound_v2.8.1_windows_x86.zip",
+	'sharphound':		"https://github.com/SpecterOps/SharpHound/releases/download/v2.13.0/SharpHound_v2.13.0_windows_x86.zip",
 	'powerview':		"https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/refs/heads/master/Recon/PowerView.ps1",
 	'sharpweb':		"https://github.com/djhohnstein/SharpWeb/releases/download/v1.2/SharpWeb.exe",
 	'ghostpack':		"https://codeload.github.com/r3motecontrol/Ghostpack-CompiledBinaries/zip/20a5f0a81456358b2bdc9846774949a7fb25acd8",
