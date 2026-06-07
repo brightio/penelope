@@ -1,0 +1,42 @@
+name: Feature Request
+description: Suggest a new capability or improvement
+labels: ["enhancement"]
+body:
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues and discussions for this idea
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem?
+      description: What's awkward or impossible right now? A concrete scenario helps more than just a feature name.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: If it's a new flag, suggest a name and how it should behave.
+      placeholder: "e.g. let -p/--ports accept ranges like 4444-4450 instead of only comma-separated lists"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything you've already tried or considered
+      description: Existing workarounds, how other tools handle it, or other designs you thought about.
+  - type: dropdown
+    id: stdlib
+    attributes:
+      label: Can this be done with the standard library only?
+      description: Penelope sticks to Python's standard library so it needs no installation. Would this feature keep that?
+      options:
+        - "Yes, standard library only"
+        - "No, it would need a third-party dependency"
+        - "Not sure"
+    validations:
+      required: true
