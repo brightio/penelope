@@ -1,0 +1,107 @@
+name: Bug Report
+description: Report something not working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please fill in the fields below. Environment details matter a lot here since Penelope runs across a lot of different Python versions and targets.
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues and this isn't a duplicate
+          required: true
+        - label: This isn't a security vulnerability (those are reported privately per SECURITY.md)
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Penelope version
+      description: The release version, or the commit hash if you're running from source
+      placeholder: "0.20.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: How did you install it?
+      options:
+        - Raw script (wget penelope.py)
+        - pipx (from git)
+        - pipx or pip (from PyPI)
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version (the machine running Penelope)
+      description: Output of python3 --version
+      placeholder: "Python 3.11.4"
+    validations:
+      required: true
+  - type: input
+    id: handler_os
+    attributes:
+      label: Handler OS or distro
+      placeholder: "Kali 2024.2 / Ubuntu 22.04 / macOS 14.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: What mode were you using?
+      multiple: true
+      options:
+        - Reverse shell listener
+        - Bind shell (-c/--connect)
+        - PTY upgrade
+        - File upload or download
+        - Session management / menu
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: target_info
+    attributes:
+      label: Target shell details
+      description: Target OS, shell binary, and how you got the shell, if it's relevant
+      placeholder: "Linux, /bin/sh from a PHP webshell"
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command you ran
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected to happen
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened
+      description: Include the full error or traceback if there was one
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the listener with ...
+        2. Trigger the reverse shell from ...
+        3. See what happens
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, screenshots, or other context
