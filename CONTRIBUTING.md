@@ -25,7 +25,7 @@ Feature requests should describe the problem before the solution. For usage
 questions, use Discussions.
 
 **Security vulnerabilities:** do not open a public issue. See
-[SECURITY.md](SECURITY.md) for private reporting.
+[SECURITY.md](.github/SECURITY.md) for private reporting.
 
 ## Pull requests
 
