@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.20.0"
+__version__ = "0.20.1"
 
 import os
 import io
@@ -2027,6 +2027,9 @@ class Session:
 			self.prompt = None
 			self.new = True
 
+			self.timeout_short = options.timeout_short
+			self.timeout_long = options.timeout_long
+
 			self.last_lines = LineBuffer(options.attach_lines)
 			self.lock = threading.Lock()
 			self.wlock = threading.Lock()
@@ -2647,7 +2650,7 @@ class Session:
 				cmd = dedent(cmd)
 				if value:
 					buffer = io.BytesIO()
-				timeout = options.short_timeout if value else None
+				timeout = self.timeout_short if value else None
 
 				if not stdin_stream:
 					stdin_stream = self.new_streamID
@@ -2850,7 +2853,7 @@ class Session:
 				self.send(cmd)
 				self.subchannel.allow_receive_shell_data = False # TODO
 
-			data_timeout = options.short_timeout if timeout is False else timeout
+			data_timeout = self.timeout_short if timeout is False else timeout
 			continuation_timeout = options.latency
 			timeout = data_timeout
 
@@ -3055,7 +3058,7 @@ class Session:
 				core.session_wait_host = self.name
 				self.spawn()
 				try:
-					new_session = core.sessions[core.session_wait.get(timeout=options.short_timeout)]
+					new_session = core.sessions[core.session_wait.get(timeout=self.timeout_short)]
 					core.session_wait_host = None
 
 				except queue.Empty:
@@ -3477,9 +3480,9 @@ class Session:
 				temp_remote_file_bat = urlpath_bat.split("/")[-1]
 
 				server.start()
-				stack.callback(lambda: server.term.wait(options.short_timeout))
+				stack.callback(lambda: server.term.wait(options.timeout_short))
 				stack.callback(lambda: server.stop())
-				server.init.wait(options.short_timeout)
+				server.init.wait(options.timeout_short)
 
 				data = self.exec(
 					f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" '
@@ -3666,7 +3669,7 @@ class Session:
 				stdin_stream.write(b"")
 				error_buffer = ''
 				while True:
-					r, _, _ = select([stderr_stream], [], [], options.short_timeout)
+					r, _, _ = select([stderr_stream], [], [], self.timeout_short)
 					if not stderr_stream in r:
 						if not self.exec("stdout_stream << str('ping').encode()", python=True, value=True): # TEMP
 							return []
@@ -3713,9 +3716,9 @@ class Session:
 				# Fire up File Server
 				server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
 				server.start()
-				stack.callback(lambda: server.term.wait(options.short_timeout))
+				stack.callback(lambda: server.term.wait(options.timeout_short))
 				stack.callback(lambda: server.stop())
-				server.init.wait(options.short_timeout)
+				server.init.wait(options.timeout_short)
 
 				if not hasattr(server, 'id'):
 					return []
@@ -5317,7 +5320,7 @@ def url_to_bytes(URL):
 
 	while True:
 		try:
-			response = urlopen(req, context=ctx, timeout=options.short_timeout)
+			response = urlopen(req, context=ctx, timeout=options.timeout_short)
 			break
 		except (HTTPError, TimeoutError) as e:
 			logger.error(e)
@@ -5497,8 +5500,8 @@ class Options:
 		self.dev_mode = False
 		self.latency = .01
 		self.histlength = 2000
-		self.long_timeout = 60
-		self.short_timeout = 4
+		self.timeout_short = 30
+		self.timeout_long = 60
 		self.max_open_files = 5
 		self.verify_ssl_cert = True
 		self.proxy = ''
