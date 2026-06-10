@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.20.1"
+__version__ = "0.20.2"
 
 import os
 import io
@@ -691,7 +691,7 @@ class BetterCMD:
 			begidx = readline.get_begidx() - stripped
 			endidx = readline.get_endidx() - stripped
 			if begidx > 0:
-				cmd, args, foo = self.parseline(line)
+				cmd, args, _line = self.parseline(line)
 				if cmd == '':
 					compfunc = self.completedefault
 				else:
@@ -1622,13 +1622,14 @@ class Core:
 				if readable is self.control:
 					command = self.control.get()
 					if command:
-						logger.debug(f"About to execute {command}")
+						try:
+							command()
+						except KeyError:
+							logger.debug("The session does not exist anymore")
+						except Exception as e:
+							logger.error(f"Core Control command failed: {e}")
 					else:
 						logger.debug("Core break")
-					try:
-						exec(command)
-					except KeyError: # TODO
-						logger.debug("The session does not exist anymore")
 					break
 
 				# The listeners
@@ -1752,7 +1753,7 @@ class Core:
 		for fileserver in tuple(self.fileservers.values()):
 			fileserver.stop()
 
-		self.control << 'self.started = False'
+		self.control << (lambda: setattr(self, 'started', False))
 
 		menu.stop = True
 		menu.cmdqueue.append("")
@@ -1893,7 +1894,7 @@ class TCPListener:
 		if not core.started:
 			core.start()
 
-		core.control << "" # TODO
+		core.control << None
 
 		if options.payloads:
 			print(self.payloads())
@@ -1901,7 +1902,7 @@ class TCPListener:
 	def stop(self):
 
 		if threading.current_thread().name != 'Core':
-			core.control << f'self.listeners[{self.id}].stop()'
+			core.control << (lambda: core.listeners[self.id].stop())
 			return
 
 		core.rlist.remove(self)
@@ -2519,7 +2520,7 @@ class Session:
 			if self not in core.wlist:
 				core.wlist.append(self)
 				if not stdin:
-					core.control << ""
+					core.control << None
 			return _len
 
 	def record(self, data, _input=False):
@@ -2938,7 +2939,11 @@ class Session:
 			self.subchannel.active = False
 
 			if separate and self.subchannel.result:
-				self.subchannel.result = re.search(rb"..\x01.*", self.subchannel.result, re.DOTALL)[0]
+				marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
+				idx = self.subchannel.result.find(marker, Messenger.LEN_BYTES)
+				if idx < 0:
+					return False
+				self.subchannel.result = self.subchannel.result[idx - Messenger.LEN_BYTES:]
 				buffer = io.BytesIO()
 				for _type, _value in self.messenger.feed(self.subchannel.result):
 					buffer.write(_value)
@@ -3081,10 +3086,11 @@ class Session:
 				self.exec(f"exec {self.shell}", raw=True)
 				self.echoing = False
 
+			shell_marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
 			response = self.exec(
 				f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}',
 				separate=self.can_deploy_agent,
-				expect_func=lambda data: not self.can_deploy_agent or b"\x01" in data,
+				expect_func=lambda data: not self.can_deploy_agent or shell_marker in data,
 				raw=True
 			)
 			if self.can_deploy_agent and not isinstance(response, bytes):
@@ -3163,7 +3169,7 @@ class Session:
 					if module.enabled and module.on_first_attach:
 						module.run(self, None)
 
-			core.control << f'self.sessions[{self.id}].attach()'
+			core.control << (lambda: core.sessions[self.id].attach())
 			menu.active.clear() # Redundant but safeguard
 			return True
 
@@ -3226,7 +3232,7 @@ class Session:
 			threading.Thread(target=self.get_subtype).start()
 
 		if threading.current_thread().name != 'Core':
-			core.control << f'self.sessions[{self.id}].detach()'
+			core.control << (lambda: core.sessions[self.id].detach())
 			return
 
 		if core.attached_session is None:
@@ -3822,6 +3828,7 @@ class Session:
 					return False
 			except Exception as e:
 				logger.error(e)
+				return False
 
 			local_script = local_script_folder / (prefix + filename)
 			with open(local_script, "wb") as input_file:
@@ -4060,7 +4067,7 @@ class Session:
 				self.id = randint(10**10, 10**11-1)
 				core.sessions[self.id] = self
 
-			core.control << f'self.sessions[{self.id}].kill()'
+			core.control << (lambda: core.sessions[self.id].kill())
 			return
 
 		self.subchannel.control.close()
@@ -4122,11 +4129,11 @@ class Messenger:
 	STREAM_BYTES = struct.calcsize(STREAM_CODE)
 
 	LEN_CODE = 'H'
-	_LEN_CODE = '!' + 'H'
+	_LEN_CODE = '!' + LEN_CODE
 	LEN_BYTES = struct.calcsize(LEN_CODE)
 
 	TYPE_CODE = 'B'
-	_TYPE_CODE = '!' + 'B'
+	_TYPE_CODE = '!' + TYPE_CODE
 	TYPE_BYTES = struct.calcsize(TYPE_CODE)
 
 	HEADER_CODE = '!' + LEN_CODE + TYPE_CODE
@@ -5507,7 +5514,7 @@ class Options:
 		self.proxy = ''
 		self.upload_chunk_size = 51200
 		self.download_chunk_size = 1048576
-		self.network_buffer_size = 16384
+		self.network_buffer_size = 32768
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
 		self.logfile = f"{__program__}.log"
 		self.debug_logfile = "debug.log"

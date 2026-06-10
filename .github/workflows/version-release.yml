@@ -61,14 +61,14 @@ jobs:
       if: steps.version_changed.outputs.changed == 'true'
       run: |
         VERSION=${{ steps.get_version.outputs.version }}
-        sed -i "s|https://img.shields.io/badge/Version-[0-9.]*-blueviolet|https://img.shields.io/badge/Version-$VERSION-blueviolet|g" README.md
+        sed -i "s|https://img.shields.io/badge/Version-[0-9.]*-|https://img.shields.io/badge/Version-$VERSION-|g" README.md
         echo "Updated README.md badge to version $VERSION"
     
     - name: Commit version updates
       if: steps.version_changed.outputs.changed == 'true'
       run: |
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
+        git config --local user.email "brightio.code@gmail.com"
+        git config --local user.name "brightio"
         git add pyproject.toml README.md
         git diff --staged --quiet || git commit -m "chore: sync version to ${{ steps.get_version.outputs.version }}"
         git push
