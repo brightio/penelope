@@ -2557,7 +2557,7 @@ class Session:
 
 			elif f"'{var_name1}' is not recognized as an internal or external command" in data:
 				return re.search('batch file.\r\n', data, re.DOTALL)
-			elif re.search('PS.*>', data, re.DOTALL):
+			elif re.search(r'PS[^\r\n]*>', data, re.DOTALL):
 				return True
 
 			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in data:
@@ -2596,7 +2596,7 @@ class Session:
 					self.win_version = win_version[1]
 
 			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response or \
-					re.search('PS.*>', response, re.DOTALL):
+					re.search(r'PS[^\r\n]*>', response, re.DOTALL):
 				self.OS = 'Windows'
 				self.type = 'Raw'
 				self.subtype = 'psh'
@@ -5507,7 +5507,7 @@ class Options:
 		self.dev_mode = False
 		self.latency = .01
 		self.histlength = 2000
-		self.timeout_short = 30
+		self.timeout_short = 25
 		self.timeout_long = 60
 		self.max_open_files = 5
 		self.verify_ssl_cert = True
