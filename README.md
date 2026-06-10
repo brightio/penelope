@@ -76,7 +76,7 @@ pipx install penelope-shell-handler
 - Multiple sessions
 - Multiple listeners
 - Serve files/folders via HTTP (-s switch)
-- Can be imported by python3 exploits and get shell on the same terminal (see [extras](https://github.com/brightio/penelope/tree/main/extras))
+- Can be imported by python3 exploits and get shell on the same terminal (see [extras/exploit_examples](https://github.com/brightio/penelope/tree/main/extras/exploit_examples))
 - Can work in conjunction with Metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
 
 ### Modules
