@@ -2062,7 +2062,7 @@ class Session:
 
 			self.upgrade_attempted = False
 			self.upgrade_standalone_attempted = False
-			self.standalone = None
+			self.standalone_python = None
 			self.uploaded_paths = {}
 			self.attaching = False
 
@@ -2204,7 +2204,7 @@ class Session:
 	@property
 	def can_deploy_agent(self):
 		if self._can_deploy_agent is None:
-			if not self.standalone and Path(self.directory / ".noagent").exists():
+			if not self.standalone_python and Path(self.directory / ".noagent").exists():
 				self._can_deploy_agent = False
 			else:
 				_bin = self.bin['python3'] or self.bin['python']
@@ -2440,7 +2440,7 @@ class Session:
 				tmpname = rand(10)
 				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
 				for directory in common_dirs:
-					if not self.exec(f'echo {tmpname} > {directory}/{tmpname}', value=True):
+					if self.exec(f'echo {tmpname} > {directory}/{tmpname} 2>/dev/null && echo OK', value=True) == 'OK':
 						self.exec(f'rm {directory}/{tmpname}')
 						self._tmp = directory
 						break
@@ -2450,7 +2450,7 @@ class Session:
 						for directory in candidate_dirs.decode().splitlines():
 							if directory in common_dirs:
 								continue
-							if not self.exec(f'echo {tmpname} > {directory}/{tmpname}', value=True):
+							if self.exec(f'echo {tmpname} > {directory}/{tmpname} 2>/dev/null && echo OK', value=True) == 'OK':
 								self.exec(f'rm {directory}/{tmpname}')
 								self._tmp = directory
 								break
@@ -2917,13 +2917,13 @@ class Session:
 			return self.subchannel.result
 
 	def need_binary(self, name, url):
-		options = (
+		_options = (
 			f"\n  1) Upload {paint(url).blue}{paint().magenta}"
 			f"\n  2) Upload local {name} binary"
 			f"\n  3) Specify remote {name} binary path"
 			 "\n  4) None of the above\n"
 		)
-		print(paint(options).magenta)
+		print(paint(_options).magenta)
 		answer = ask("Select action: ")
 
 		if answer == "1":
@@ -2965,11 +2965,11 @@ class Session:
 				return False
 
 			standalone_file = self.directory / "standalone_python"
-			if not self.standalone and standalone_file.exists():
-				self.standalone = standalone_file.read_text().strip()
-				self._bin['python3'] = self.standalone
+			if not self.standalone_python and standalone_file.exists():
+				self.standalone_python = standalone_file.read_text().strip()
+				self._bin['python3'] = self.standalone_python
 				self._can_deploy_agent = None
-				logger.debug(f"Reusing standalone python from previous shell: {self.standalone}")
+				logger.debug(f"Reusing standalone python from previous shell: {self.standalone_python}")
 
 			if self.can_deploy_agent:
 				logger.debug("Attempting to deploy Python Agent...")
@@ -3013,7 +3013,7 @@ class Session:
 					raw=True
 				)
 				if not isinstance(response, bytes):
-					if self.standalone:
+					if self.standalone_python:
 						logger.error("The standalone agent crashed the shell. I am killing it, sorry...")
 						standalone_file = self.directory / "standalone_python"
 						if standalone_file.exists():
@@ -3033,13 +3033,13 @@ class Session:
 				self.echoing = True
 				self.prompt = response
 				self.get_shell_info()
-				if self.standalone:
-					(self.directory / "standalone_python").write_text(self.standalone)
+				if self.standalone_python:
+					(self.directory / "standalone_python").write_text(self.standalone_python)
 				return True
 
 			if not self.upgrade_standalone_attempted:
 				self.upgrade_standalone_attempted = True
-				logger.warning("Cannot deploy agent...")
+				logger.error("Cannot deploy agent with remote Python. Select an action below:")
 				python_binary = PYTHON_STANDALONE_BINARIES.get((self.system, self.arch))
 				if not python_binary:
 					logger.error(f'Unsupported target platform: {self.system} {self.arch}')
@@ -3053,7 +3053,7 @@ class Session:
 							logger.error("Failed to deploy standalone python...")
 							python_binary = None
 					if python_binary:
-						self.standalone = python_binary
+						self.standalone_python = python_binary
 						self._can_deploy_agent = None
 						self._bin['python3'] = python_binary
 						return self.upgrade()
