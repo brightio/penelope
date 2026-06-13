@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.20.2"
+__version__ = "0.20.3"
 
 import os
 import io
@@ -373,14 +373,17 @@ class PBar:
 	def terminate(self):
 		if self.queue and current_thread() != self.trace_thread: self.queue.join(); self.queue.put(None)
 		if hasattr(__class__, 'render_lock'): __class__.render_lock.acquire()
-		if not self: return
-		self.active = False
-		if hasattr(self, 'eta'): del self.eta
-		if not any(__class__.pbars):
-			self.render()
-			print("\x1b[?25h" + '\n' * len(__class__.pbars), end='', flush=True)
-			__class__.pbars.clear()
-		if hasattr(__class__, 'render_lock'): __class__.render_lock.release()
+		try:
+			if not self: return
+			self.active = False
+			if hasattr(self, 'eta'): del self.eta
+			if not any(__class__.pbars):
+				self.render()
+				print("\x1b[?25h" + '\n' * len(__class__.pbars), end='', flush=True)
+				__class__.pbars.clear()
+		finally:
+			if hasattr(__class__, 'render_lock'): __class__.render_lock.release()
+
 
 
 class paint:
@@ -1247,9 +1250,10 @@ class MainMenu(BetterCMD):
 		[SessionID]
 		Open the session's local folder. If no session specified, open the base folder
 		"""
-		folder = core.sessions[self.sid].directory if self.sid else options.basedir
-		Open(folder)
+		session = core.sessions.get(self.sid)
+		folder = session.directory if session else options.basedir
 		print(folder)
+		Open(folder)
 
 	@session_operation(current=True)
 	def do_exec(self, cmdline):
@@ -1613,7 +1617,17 @@ class Core:
 	def loop(self):
 
 		while self.started:
-			readables, writables, _ = select(self.rlist, self.wlist, [])
+			try:
+				readables, writables, _ = select(self.rlist, self.wlist, [])
+			except (ValueError, OSError):
+				def _valid_fd(x):
+					try:
+						return x.fileno() >= 0
+					except Exception:
+						return False
+				self.rlist = [x for x in self.rlist if _valid_fd(x)]
+				self.wlist = [x for x in self.wlist if _valid_fd(x)]
+				continue
 
 			for readable in readables:
 
@@ -2310,7 +2324,11 @@ class Session:
 				else:
 					if directory.startswith('~'):
 						directory = self.exec(f"echo {directory}", value=True)
-					if int(self.exec(f"[ -w \"{directory}\" ];echo $?", value=True)):
+					access = self.exec(f"[ -w \"{directory}\" ];echo $?", value=True)
+					if not (isinstance(access, str) and access.strip().isdigit()):
+						logger.error(f"Cannot check write permissions for {directory}. Aborting...")
+						return None
+					if int(access):
 						logger.error(f"{directory}: Permission denied")
 						return False
 
@@ -3164,7 +3182,7 @@ class Session:
 	def sync_cwd(self):
 		self._cwd = None
 		if self.agent:
-			self.exec(f"os.chdir('{self.cwd}')", python=True, value=True)
+			self.exec(f"os.chdir({self.cwd!r})", python=True, value=True)
 
 	def get_subtype(self):
 		response = self.exec("$PSVersionTable", expect_func=lambda x: b":\\" in x, raw=True)
@@ -5109,9 +5127,11 @@ class FileServer:
 			def do_GET(self):
 				try:
 					if self.path == '/' + url_prefix:
+						from html import escape
 						response = ''
 						for path in filemap.keys():
-							response += f'<li><a href="{path}">{path}</a></li>'
+							safe_path = html.escape(path)
+							response += f'<li><a href="{safe_path}">{safe_path}</a></li>'
 						response = response.encode()
 						self.send_response(200)
 						self.send_header("Content-type", "text/html")
