@@ -84,13 +84,24 @@ def Open(item, terminal=False):
 	if not terminal:
 		program = 'xdg-open' if myOS != 'Darwin' else 'open'
 		args = [item]
+	elif myOS == 'Darwin':
+		try:
+			fd, cmd_path = tempfile.mkstemp(prefix='penelope-', suffix='.command', dir=options.basedir)
+			with os.fdopen(fd, 'w') as f:
+				f.write(f"#!/bin/sh\n{item}\n")
+			os.chmod(cmd_path, 0o700)
+		except OSError as e:
+			logger.error(f"Cannot open terminal window: {e}")
+			return False
+		program, args = 'open', [cmd_path]
 	else:
-		if not TERMINAL:
+		program = terminal_emulator()
+		if not program:
 			logger.error("No available terminal emulator")
 			return False
-
-		if myOS != 'Darwin':
-			program = TERMINAL
+		if program == 'xdg-terminal-exec':
+			args = [*shlex.split(item)]
+		else:
 			_switch = '-e'
 			if program in ('gnome-terminal', 'mate-terminal'):
 				_switch = '--'
@@ -99,9 +110,6 @@ def Open(item, terminal=False):
 			elif program == 'xfce4-terminal':
 				_switch = '--command='
 			args = [_switch, *shlex.split(item)]
-		else:
-			program = 'osascript'
-			args = ['-e', f'tell app "Terminal" to do script "{item}"']
 
 	if not shutil.which(program):
 		logger.error(f"Cannot open window: '{program}' binary does not exist")
@@ -5740,7 +5748,12 @@ TERMINALS = [
 	'gnome-terminal', 'mate-terminal', 'qterminal', 'terminator', 'alacritty', 'kitty', 'tilix',
 	'konsole', 'xfce4-terminal', 'lxterminal', 'urxvt', 'st', 'xterm', 'eterm', 'x-terminal-emulator'
 ]
-TERMINAL = next((term for term in TERMINALS if shutil.which(term)), None)
+def terminal_emulator():
+	candidates = []
+	if os.environ.get('TERMINAL'):
+		candidates.append(os.environ['TERMINAL'])
+	candidates += ['x-terminal-emulator', 'xdg-terminal-exec', *TERMINALS]
+	return next((term for term in candidates if shutil.which(term)), None)
 MAX_CMD_PROMPT_LEN = 335
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 URLS = {
