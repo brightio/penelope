@@ -3443,13 +3443,17 @@ class Session:
 					return []
 				send_size = int(send_size)
 
+				logger.trace(paint(f"⇣ Downloading...").cyan)
+				pbar = PBar(send_size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
 				b64data = io.BytesIO()
 				for offset in range(0, send_size, options.download_chunk_size):
 					response = self.exec(f"cut -c{offset + 1}-{offset + options.download_chunk_size} {temp}")
 					if response is False:
+						pbar.terminate()
 						logger.error("Download interrupted")
 						return []
 					b64data.write(response)
+					pbar.update(len(response))
 				self.exec(f"rm {temp}")
 
 				data = io.BytesIO()
@@ -3569,7 +3573,7 @@ class Session:
 				logger.error("The item does not exist or access is denied")
 
 		for item in downloaded:
-			logger.info(f"{paint('Download OK').GREEN_white} {paint(shlex.quote(pathlink(item))).yellow}")
+			logger.info(f"{paint('Downloaded').GREEN_white} {paint(shlex.quote(pathlink(item))).yellow}")
 
 		return downloaded
 
@@ -3768,14 +3772,16 @@ class Session:
 				data = base64.b64encode(tar_buffer.read()).decode()
 				temp = self.tmp + "/" + rand(8)
 
+				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
+				pbar = PBar(len(data), caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
 				for chunk in chunks(data, options.upload_chunk_size):
 					response = self.exec(f"printf {chunk} >> {temp}")
 					if response is False:
-						#progress_bar.terminate()
+						pbar.terminate()
 						logger.error("Upload interrupted")
 						self.exec(f"rm {temp}")
 						return []
-					#progress_bar.update(len(chunk))
+					pbar.update(len(chunk))
 
 				#logger.info(paint("--- Remote unpacking...").blue)
 				dest = f"-C {remote_path}" if remote_path else ""
@@ -3872,7 +3878,7 @@ class Session:
 				uploaded_path = shlex.quote(str(Path(destination) / item))
 			elif self.OS == "Windows":
 				uploaded_path = f'"{PureWindowsPath(destination, item)}"'
-			logger.info(f"{paint('Upload OK').GREEN_white} {paint(uploaded_path).yellow}")
+			logger.info(f"{paint('Uploaded').GREEN_white} {paint(uploaded_path).yellow}")
 			uploaded_paths.append(uploaded_path)
 			print()
 
@@ -5394,7 +5400,7 @@ def url_to_bytes(URL):
 
 	req = Request(URL, headers={'User-Agent': options.useragent})
 
-	logger.trace(paint(f"Download URL: {URL}").cyan)
+	logger.trace(paint(f"⤓ Downloading URL: {URL}").cyan)
 	ctx = ssl.create_default_context() if options.verify_ssl_cert else ssl._create_unverified_context()
 
 	while True:
