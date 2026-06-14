@@ -26,6 +26,7 @@ import pwd
 import tty
 import ssl
 import time
+import gzip
 import shlex
 import queue
 import struct
@@ -3389,7 +3390,7 @@ class Session:
 					tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 				else:
 					tarfile.TarFile.posix = True
-				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream)
+				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream, dereference=True)
 				def handle_exceptions(func):
 					def inner(*args, **kwargs):
 						try:
@@ -3457,10 +3458,14 @@ class Session:
 				self.exec(f"rm {temp}")
 
 				data = io.BytesIO()
-				data.write(base64.b64decode(b64data.getvalue()))
+				try:
+					data.write(gzip.decompress(base64.b64decode(b64data.getvalue())))
+				except Exception:
+					logger.error("Invalid data returned")
+					return []
 				data.seek(0)
 
-				tar_source, mode = data, "r:gz"
+				tar_source, mode = data, "r:"
 
 			# Local extraction
 			try:
@@ -3470,8 +3475,9 @@ class Session:
 				return []
 
 			try:
-				safe_tar_extractall(tar, local_download_folder)
+				safe_tar_extractall(tar, local_download_folder, streaming=self.agent)
 			except Exception as e:
+				import traceback; traceback.print_exc()
 				logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
 				return []
 
@@ -4923,7 +4929,6 @@ class chisel(Module):
 				print()
 				return
 
-			import gzip
 			_, archive = url_to_bytes(url)
 			with gzip.GzipFile(fileobj=io.BytesIO(archive), mode="rb") as g:
 				session.upload(url, url_to_bytes_fn=lambda x: ('chisel', g.read()))
@@ -5356,7 +5361,7 @@ def _is_within_directory(directory, target):
        except ValueError:
                return False
 
-def safe_tar_extractall(tar, dest):
+def safe_tar_extractall(tar, dest, streaming=False):
 	dest_real = os.path.realpath(dest)
 	orig_extract_member = tar._extract_member
 
@@ -5378,6 +5383,22 @@ def safe_tar_extractall(tar, dest):
 				logger.error(str(paint("<LOCAL>").yellow) + " " +
 					str(paint(f"Refusing unsafe link in archive: {tarinfo.name} -> {tarinfo.linkname}").red))
 				return
+			if streaming:
+				try:
+					os.makedirs(os.path.dirname(targetpath), exist_ok=True)
+					if os.path.lexists(targetpath):
+						os.remove(targetpath)
+					if tarinfo.issym():
+						os.symlink(tarinfo.linkname, targetpath)
+					else:
+						os.link(link_path, targetpath)
+				except OSError as e:
+					logger.error(str(paint("<LOCAL>").yellow) + " " +
+						str(paint(f"Skipping link {tarinfo.name}: {e}").red))
+				return
+
+		elif os.path.islink(targetpath):
+			os.remove(targetpath)
 
 		tarinfo.mode &= ~0o6000
 		tarinfo.mode |= 0o200
