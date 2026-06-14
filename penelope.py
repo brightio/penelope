@@ -1588,10 +1588,16 @@ class ControlQueue:
 
 	def __lshift__(self, command):
 		self.queue.put(command)
-		os.write(self._in, b'\x00')
+		try:
+			os.write(self._in, b'\x00')
+		except OSError:
+			pass
 
 	def get(self):
-		os.read(self._out, 1)
+		try:
+			os.read(self._out, 1)
+		except OSError:
+			return 'stop'
 		return self.queue.get()
 
 	def clear(self):
@@ -1602,11 +1608,21 @@ class ControlQueue:
 				amount += 1
 			except queue.Empty:
 				break
-		os.read(self._out, amount) # maybe needs 'try' because sometimes close() precedes
+		try:
+			os.read(self._out, amount)
+		except OSError:
+			pass
 
 	def close(self):
-		os.close(self._in)
-		os.close(self._out)
+		try:
+			os.close(self._in)
+		except OSError:
+			pass
+		try:
+			os.close(self._out)
+		except OSError:
+			pass
+
 
 class Core:
 
@@ -1711,10 +1727,11 @@ class Core:
 							self._cmd = data
 
 						if data == options.escape['sequence']:
-							if session.alternate_buffer:
-								logger.error("(!) Exit the current alternate buffer program first")
-							else:
-								session.detach()
+							#if session.alternate_buffer:
+							#	logger.error("(!) Exit the current alternate buffer program first")
+							#else:
+							#	session.detach()
+							session.detach()
 						else:
 							if session.type == 'Raw':
 								session.record(data, _input=not session.interactive)
@@ -1770,11 +1787,12 @@ class Core:
 
 						readable.record(shell_output)
 
-						if b'\x1b[?1049h' in shell_output:
-							readable.alternate_buffer = True
+						#if b'\x1b[?1049h' in shell_output:
+						#	readable.alternate_buffer = True
 
-						if b'\x1b[?1049l' in shell_output:
-							readable.alternate_buffer = False
+						#if b'\x1b[?1049l' in shell_output:
+						#	readable.alternate_buffer = False
+
 						#if readable.subtype == 'cmd' and self._cmd == data:
 						#	data, self._cmd = b'', b'' # TODO
 
@@ -2104,7 +2122,7 @@ class Session:
 			self.subchannel = Channel()
 			self.latency = None
 
-			self.alternate_buffer = False
+			#self.alternate_buffer = False
 			self.agent = False
 			self.messenger = Messenger(io.BytesIO)
 
@@ -3419,7 +3437,11 @@ class Session:
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
 				for error in errors:
 					logger.error(error)
-				send_size = int(self.exec(rf"(stat -x {temp} 2>/dev/null || stat {temp}) | sed -n 's/.*Size: \([0-9]*\).*/\1/p'"))
+				send_size = self.exec(rf"(stat -x {temp} 2>/dev/null || stat {temp}) | sed -n 's/.*Size: \([0-9]*\).*/\1/p'", value=True)
+				if not (isinstance(send_size, str) and send_size.strip().isdigit()):
+					logger.error("Could not determine the remote file size")
+					return []
+				send_size = int(send_size)
 
 				b64data = io.BytesIO()
 				for offset in range(0, send_size, options.download_chunk_size):
@@ -3603,6 +3625,7 @@ class Session:
 
 		if self.OS == 'Unix':
 			# Get remote available space
+			remote_space = remote_block_size = None
 			if self.agent:
 				response = self.exec(f"""
 				stats = os.statvfs(normalize_path('{destination}'))
@@ -3611,9 +3634,24 @@ class Session:
 
 				remote_available_blocks, remote_block_size = map(int, response.split(';'))
 				remote_space = remote_available_blocks * remote_block_size
+				if isinstance(response, str) and response.count(';') == 1:
+					remote_available_blocks, remote_block_size = response.split(';')
+					if remote_available_blocks.isdigit() and remote_block_size.isdigit():
+						remote_block_size = int(remote_block_size)
+						remote_space = int(remote_available_blocks) * remote_block_size
 			else:
-				remote_block_size = int(self.exec(rf'stat -c "%o" {destination} 2>/dev/null || stat -f "%k" {destination}', value=True))
-				remote_space = int(self.exec(f"df -k {destination}|tail -1|awk '{{print $4}}'", value=True)) * 1024
+				remote_block_size = self.exec(rf'stat -c "%o" {destination} 2>/dev/null || stat -f "%k" {destination}', value=True)
+				if isinstance(remote_block_size, str) and remote_block_size.isdigit():
+					remote_block_size = int(remote_block_size)
+				else:
+					remote_block_size = None
+				remote_available_kb = self.exec(f"df -k {destination}|tail -1|awk '{{print $4}}'", value=True)
+				if isinstance(remote_available_kb, str) and remote_available_kb.isdigit():
+					remote_space = int(remote_available_kb) * 1024
+
+			if not (remote_block_size and remote_space is not None):
+				logger.error("Could not determine remote free space... Upload aborted")
+				return []
 
 			# Calculate local size
 			local_size = 0
@@ -3735,18 +3773,19 @@ class Session:
 					if response is False:
 						#progress_bar.terminate()
 						logger.error("Upload interrupted")
-						return [] # TODO
+						self.exec(f"rm {temp}")
+						return []
 					#progress_bar.update(len(chunk))
 
 				#logger.info(paint("--- Remote unpacking...").blue)
 				dest = f"-C {remote_path}" if remote_path else ""
 				cmd = f"base64 -d < {temp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True)
-				exit_code = int(self.exec("echo $temp", value=True))
+				exit_code = self.exec("echo $temp", value=True)
 				self.exec(f"rm {temp}")
-				if exit_code:
+				if not (isinstance(exit_code, str) and exit_code.strip() == "0"):
 					logger.error(response)
-					return [] # TODO
+					return []
 
 		elif self.OS == 'Windows':
 			with ExitStack() as stack:
