@@ -384,7 +384,7 @@ class PBar:
 			self.speed = self.pos - self.pos_prev
 			self.pos_prev = self.pos
 			self.speed_avg = self.pos / self.elapsed
-			if self.speed_avg: self.eta = int(self.end / self.speed_avg) - self.elapsed
+			if self.speed_avg: self.eta = int((self.end - self.pos) / self.speed_avg)
 			if self: self.render()
 
 	def update(self, step=1):
@@ -2537,8 +2537,8 @@ class Session:
 
 				result = "\n".join([f"{b}: {self._bin[b]}" for b in binaries])
 				logger.debug(f"Available binaries on target: \n{paint(result).red}")
-			except:
-				pass
+			except Exception as e:
+				logger.error(f"Binary discovery failed: {e}")
 
 		return self._bin
 
@@ -3047,34 +3047,36 @@ class Session:
 			f"\n  3) Specify remote {name} binary path"
 			 "\n  4) None of the above\n"
 		)
-		print(paint(_options).magenta)
-		answer = ask("Select action: ")
+		while True:
+			print(paint(_options).magenta)
+			answer = ask("Select action: ")
 
-		if answer == "1":
-			uploaded = self.upload(url, remote_path="/var/tmp")
-			return uploaded[0] if uploaded else False
+			if answer == "1":
+				uploaded = self.upload(url, remote_path="/var/tmp")
+				return uploaded[0] if uploaded else False
 
-		elif answer == "2":
-			local_path = ask(f"Enter {name} local path: ")
-			if local_path:
-				if os.path.exists(local_path):
-					uploaded = self.upload(local_path, remote_path=self.tmp)
-					return uploaded[0] if uploaded else False
-				else:
-					logger.error("The local path does not exist...")
+			elif answer == "2":
+				local_path = ask(f"Enter {name} local path: ")
+				if local_path:
+					if os.path.exists(local_path):
+						uploaded = self.upload(local_path, remote_path=self.tmp)
+						return uploaded[0] if uploaded else False
+					else:
+						logger.error("The local path does not exist...")
 
-		elif answer == "3":
-			remote_path = ask(f"Enter {name} remote path: ")
-			if remote_path:
-				if not self.exec(f"test -f {remote_path} || echo x"):
-					return remote_path
-				else:
-					logger.error("The remote path does not exist...")
+			elif answer == "3":
+				remote_path = ask(f"Enter {name} remote path: ")
+				if remote_path:
+					if not self.exec(f"test -f {remote_path} || echo x"):
+						return remote_path
+					else:
+						logger.error("The remote path does not exist...")
 
-		elif answer == "4":
-			return False
+			elif answer == "4":
+				return False
 
-		return self.need_binary(name, url)
+			elif not answer and not sys.stdin.isatty():
+				return False
 
 	def upgrade(self):
 		self.upgrade_attempted = True
@@ -5075,9 +5077,9 @@ class upload_local_exploits(Module):
 
 		uploaded = session.upload(URLS['dirtyfrag'])
 		if not uploaded:
-			logger.info("Failed to upload DirtyFrag")
+			logger.error("Failed to upload DirtyFrag")
 			return
-		logger.info("DirtyFrag uploaded. Compile on target: cd dirtyfrag && gcc exp.c -o exp")
+		logger.info("DirtyFrag uploaded. Compile on target: gcc exp.c -o exp")
 
 	def dirtypipe(session):
 		if session.system != "Linux":
