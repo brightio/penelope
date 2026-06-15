@@ -42,6 +42,7 @@ import inspect
 import tempfile
 import platform
 import itertools
+import traceback
 import threading
 import subprocess
 import socketserver
@@ -431,6 +432,16 @@ class PBar:
 		finally:
 			if hasattr(__class__, 'render_lock'): __class__.render_lock.release()
 
+
+class PBarReader:
+	def __init__(self, fileobj, pbar):
+		self.fileobj = fileobj
+		self.pbar = pbar
+	def read(self, *args, **kwargs):
+		data = self.fileobj.read(*args, **kwargs)
+		if data:
+			self.pbar.update(len(data))
+		return data
 
 
 class paint:
@@ -3338,7 +3349,7 @@ class Session:
 			if self.agent:
 				block_size = os.statvfs(local_download_folder).f_frsize
 				response = self.exec(f"{GET_GLOB_SIZE}"
-					f"stdout_stream << str(get_glob_size({repr(remote_items)}, {block_size})).encode()",
+					f"stdout_stream << str(get_glob_size({repr(remote_items)}, {block_size}, {repr(options.link_dereference)})).encode()",
 					python=True,
 					value=True
 				)
@@ -3390,7 +3401,7 @@ class Session:
 					tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 				else:
 					tarfile.TarFile.posix = True
-				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream, dereference=True)
+				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream, dereference={repr(options.link_dereference)})
 				def handle_exceptions(func):
 					def inner(*args, **kwargs):
 						try:
@@ -3414,23 +3425,27 @@ class Session:
 					'stderr_stream': stderr_stream
 				}).start()
 
-				error_buffer = ''
-				while True:
-					r, _, _ = select([stderr_stream], [], [])
-					data = stderr_stream.read(options.network_buffer_size)
-					if data:
-						error_buffer += data.decode()
-						while '\n' in error_buffer:
-							line, error_buffer = error_buffer.split('\n', 1)
-							logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
-					else:
-						break
+				logger.trace(paint(f"⇣ Downloading to {local_download_folder}").cyan)
+				def drain_stderr():
+					error_buffer = ''
+					while True:
+						r, _, _ = select([stderr_stream], [], [])
+						data = stderr_stream.read(options.network_buffer_size)
+						if data:
+							error_buffer += data.decode()
+							while '\n' in error_buffer:
+								line, error_buffer = error_buffer.split('\n', 1)
+								logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
+						else:
+							break
+				stderr_thread = threading.Thread(target=drain_stderr)
+				stderr_thread.start()
 
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
 				remote_items = ' '.join([os.path.join(self.cwd, part) for part in shlex.split(remote_items)])
 				temp = self.tmp + "/" + rand(8)
-				cmd = rf'tar -czf - -h {remote_items}|base64|tr -d "\n" > {temp}'
+				cmd = rf'tar -czf - {"-h " if options.link_dereference else ""}{remote_items}|base64|tr -d "\n" > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
 				if response is False:
 					logger.error("Cannot create archive")
@@ -3444,7 +3459,7 @@ class Session:
 					return []
 				send_size = int(send_size)
 
-				logger.trace(paint(f"⇣ Downloading...").cyan)
+				logger.trace(paint(f"⇣ Downloading to {local_download_folder}").cyan)
 				pbar = PBar(send_size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
 				b64data = io.BytesIO()
 				for offset in range(0, send_size, options.download_chunk_size):
@@ -3474,16 +3489,32 @@ class Session:
 				logger.error("Invalid data returned")
 				return []
 
+			pbar = None
+			if self.agent and remote_size:
+				pbar = PBar(remote_size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+				_oread = tar.fileobj.read
+				def _read_pbar(*a, _oread=_oread, _pbar=pbar, **k):
+					data = _oread(*a, **k)
+					if data:
+						_pbar.update(len(data))
+					return data
+				tar.fileobj.read = _read_pbar
+
 			try:
 				safe_tar_extractall(tar, local_download_folder, streaming=self.agent)
 			except Exception as e:
-				import traceback; traceback.print_exc()
+				if pbar:
+					pbar.terminate()
+				logger.debug(traceback.format_exc())
 				logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
 				return []
 
+			if pbar:
+				pbar.update(pbar.end)
 			tar.close()
 
 			if self.agent:
+				stderr_thread.join()
 				stdin_stream.write(b"")
 				os.close(stdin_stream._read)
 				os.close(stdin_stream._write)
@@ -3669,7 +3700,7 @@ class Session:
 				if isinstance(item, tuple):
 					local_size += ceil(len(item[1]) / remote_block_size) * remote_block_size
 				else:
-					local_size += get_glob_size(str(item), remote_block_size)
+					local_size += get_glob_size(shlex.quote(str(item)), remote_block_size, options.link_dereference)
 
 			# Check required space
 			need = local_size - remote_space
@@ -3711,12 +3742,13 @@ class Session:
 					'stderr_stream': stderr_stream
 				}).start()
 
+				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
 				tar_destination, mode = stdin_stream, "r|gz"
 			else:
 				tar_buffer = io.BytesIO()
 				tar_destination, mode = tar_buffer, "r:gz"
 
-			tar = tarfile.open(mode='w|gz', fileobj=tar_destination)
+			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, dereference=options.link_dereference)
 
 			def handle_exceptions(func):
 				def inner(*args, **kwargs):
@@ -3726,6 +3758,16 @@ class Session:
 						logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
 				return inner
 			tar.add = handle_exceptions(tar.add)
+
+			pbar = None
+			if self.agent and local_size:
+				pbar = PBar(local_size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+				_orig_addfile = tar.addfile
+				def addfile_pbar(tarinfo, fileobj=None, *args, **kwargs):
+					if fileobj is not None:
+						fileobj = PBarReader(fileobj, pbar)
+					return _orig_addfile(tarinfo, fileobj, *args, **kwargs)
+				tar.addfile = addfile_pbar
 
 			altnames = []
 			for item in resolved_items:
@@ -3751,6 +3793,8 @@ class Session:
 			tar.close()
 
 			if self.agent:
+				if pbar:
+					pbar.update(pbar.end)
 				stdin_stream.write(b"")
 				error_buffer = ''
 				while True:
@@ -5334,12 +5378,13 @@ def custom_excepthook(*args):
 	print(f"{paint('Python version:').red} {paint(sys.version).green}")
 	print(f"{paint('System:').red} {paint(platform.version()).green}\n")
 
-def get_glob_size(_glob, block_size):
+def get_glob_size(_glob, block_size, dereference=False):
+	_stat = os.stat if dereference else os.lstat
 	from glob import glob
 	from math import ceil
 	def size_on_disk(filepath):
 		try:
-			return ceil(float(os.lstat(filepath).st_size) / block_size) * block_size
+			return ceil(float(_stat(filepath).st_size) / block_size) * block_size
 		except:
 			return 0
 	total_size = 0
@@ -5609,6 +5654,7 @@ class Options:
 		self.upload_random_suffix = False
 		self.attach_lines = 20
 		self.emojis = True
+		self.link_dereference = True
 
 	def __getattribute__(self, option):
 		if option in ("logfile", "debug_logfile", "cmd_histfile", "debug_histfile"):
