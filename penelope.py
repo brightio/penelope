@@ -327,7 +327,7 @@ class Size:
 			try:
 				num, unit = int(string[:-1]), string[-1]
 				_bytes = num * 1024 ** __class__.units.index(unit)
-			except:
+			except ValueError:
 				logger.error("Invalid size specified")
 				return # TEMP
 		return cls(_bytes)
@@ -1206,11 +1206,12 @@ class MainMenu(BetterCMD):
 	def do_run(self, line):
 		"""
 		[module name]
-		Run a module. Run 'help run' to view the available modules"""
+		Run a module. Run 'help run' to view the available modules
+		"""
 		try:
 			parts = line.split(" ", 1)
 			module_name = parts[0]
-		except:
+		except AttributeError:
 			module_name = None
 			print()
 			cmdlogger.warning(paint("Select a module").YELLOW_white)
@@ -1606,16 +1607,18 @@ class ControlQueue:
 	def __init__(self):
 		self._out, self._in = os.pipe()
 		self.queue = queue.Queue() # TODO
+		self._lock = threading.Lock()
 
 	def fileno(self):
 		return self._out
 
 	def __lshift__(self, command):
-		self.queue.put(command)
-		try:
-			os.write(self._in, b'\x00')
-		except OSError:
-			pass
+		with self._lock:
+			self.queue.put(command)
+			try:
+				os.write(self._in, b'\x00')
+			except OSError:
+				pass
 
 	def get(self):
 		try:
@@ -1625,17 +1628,18 @@ class ControlQueue:
 		return self.queue.get()
 
 	def clear(self):
-		amount = 0
-		while not self.queue.empty():
+		with self._lock:
+			amount = 0
+			while not self.queue.empty():
+				try:
+					self.queue.get_nowait()
+					amount += 1
+				except queue.Empty:
+					break
 			try:
-				self.queue.get_nowait()
-				amount += 1
-			except queue.Empty:
-				break
-		try:
-			os.read(self._out, amount)
-		except OSError:
-			pass
+				os.read(self._out, amount)
+			except OSError:
+				pass
 
 	def close(self):
 		try:
@@ -2112,7 +2116,7 @@ class Session:
 			self.target, self.port = target, port
 			try:
 				self.ip = _socket.getpeername()[0]
-			except:
+			except OSError:
 				logger.error(f"Invalid connection from {self.target} {EMOJIS['invalid_shell']}")
 				self.socket.close()
 				return
@@ -2281,7 +2285,7 @@ class Session:
 				f"ID: {self.id} -> {__class__.__name__}({self.name}, {self.OS}, {self.type}, "
 				f"interactive={self.interactive}, echoing={self.echoing})"
 			)
-		except:
+		except AttributeError:
 			return f"ID: (for deletion: {self.id})"
 
 	def __getattr__(self, name):
@@ -2318,7 +2322,7 @@ class Session:
 					version = self.exec(f"{_bin} -V 2>&1 || {_bin} --version 2>&1", value=True)
 					try:
 						major, minor, micro = re.search(r"Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
-					except:
+					except Exception:
 						self._can_deploy_agent = False
 						return self._can_deploy_agent
 					self.remote_python_version = (int(major), int(minor), int(micro or 0))
@@ -2348,7 +2352,7 @@ class Session:
 
 			try:
 				self.hostname, self.system, self.arch = response.split("\t")
-			except:
+			except Exception:
 				return False
 
 		elif self.OS == 'Windows':
@@ -2833,11 +2837,11 @@ class Session:
 									stdout_dst.flush()
 								elif hasattr(stdout_dst, 'sendall'):
 									try:
-										stdout_dst.sendall(data) # maybe broken pipe
+										stdout_dst.sendall(data)
 										if not data:
 											if stdout_dst in rlist:
 												rlist.remove(stdout_dst)
-									except:
+									except OSError:
 										if stdout_dst in rlist:
 											rlist.remove(stdout_dst)
 							if not data:
@@ -2854,11 +2858,11 @@ class Session:
 									stderr_dst.flush()
 								elif hasattr(stderr_dst, 'sendall'):
 									try:
-										stderr_dst.sendall(data) # maybe broken pipe
+										stderr_dst.sendall(data)
 										if not data:
 											if stderr_dst in rlist:
 												rlist.remove(stderr_dst)
-									except:
+									except OSError:
 										if stderr_dst in rlist:
 											rlist.remove(stderr_dst)
 							if not data:
@@ -3013,7 +3017,7 @@ class Session:
 							logger.debug(paint('Maybe got all data !?').yellow)
 							self.subchannel.result = buffer.getvalue()
 							break
-			except:
+			except Exception:
 				self.subchannel.can_use = False
 				self.subchannel.result = False
 
@@ -3370,7 +3374,7 @@ class Session:
 				)
 				try:
 					remote_size = int(float(response))
-				except:
+				except Exception:
 					logger.error(response)
 					return []
 			else:
@@ -3500,7 +3504,7 @@ class Session:
 			# Local extraction
 			try:
 				tar = tarfile.open(mode=mode, fileobj=tar_source)
-			except:
+			except Exception:
 				logger.error("Invalid data returned")
 				return []
 
@@ -4022,7 +4026,7 @@ class Session:
 							try:
 								host, port = e.split(':')
 								break
-							except:
+							except ValueError:
 								logger.error(f"Invalid jump endpoint: {e}")
 				else:
 					port = port or self._port
@@ -4247,6 +4251,7 @@ class Session:
 			server.server_close()
 			while not stop.is_set(): # TEMP
 				control << "stop"
+				#print("stop")
 			thread.join()
 
 		if self.OS:
@@ -4346,12 +4351,12 @@ class Stream:
 			if not data:
 				try:
 					os.close(self._write)
-				except:
+				except OSError:
 					pass
 				break
 			try:
 				os.write(self._write, data)
-			except:
+			except OSError:
 				break
 
 	def fileno(self):
@@ -4363,12 +4368,12 @@ class Stream:
 	def read(self, n):
 		try:
 			data = os.read(self._read, n)
-		except:
+		except OSError:
 			return "".encode()
 		if not data:
 			try:
 				os.close(self._read)
-			except:
+			except OSError:
 				pass
 		return data
 
@@ -5312,7 +5317,7 @@ class FileServer:
 					try:
 						sock.shutdown(socket.SHUT_RDWR)
 						sock.close()
-					except:
+					except OSError:
 						pass
 				super().shutdown()
 
@@ -5421,7 +5426,7 @@ def get_glob_size(_glob, block_size, dereference=False):
 	def size_on_disk(filepath):
 		try:
 			return ceil(float(_stat(filepath).st_size) / block_size) * block_size
-		except:
+		except Exception:
 			return 0
 	total_size = 0
 	for part in shlex.split(_glob):
