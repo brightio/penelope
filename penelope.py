@@ -2215,6 +2215,8 @@ class Session:
 					f"{paint(system).cyan}"
 				)
 
+				if self not in core.rlist:
+					return
 				self.id = core.new_sessionID
 				core.hosts[self.name].append(self)
 				core.sessions[self.id] = self
@@ -2388,7 +2390,7 @@ class Session:
 			return None
 
 		if not (isinstance(response, str) and response.isnumeric()):
-			logger.error(f"Cannot get the PID of the shell. Response:\r\n{paint(response).white}")
+			logger.error(f"Cannot get the PID of the shell...")
 			return False
 		return response
 
@@ -4223,13 +4225,15 @@ class Session:
 
 		if not self.OS:
 			message = f"Invalid shell from {self.ip} {EMOJIS['invalid_shell']}"
+		elif not hasattr(self, 'name'):
+			message = f"Incomplete shell from {self.ip} died during setup {EMOJIS['invalid_shell']}"
 		else:
 			message = f"Session [{self.id}] died..."
-			if hasattr(self, 'name'):
+			if self in core.hosts.get(self.name, ()):
 				core.hosts[self.name].remove(self)
-			if not core.hosts[self.name]:
-				message += f" We lost {self.name_colored} {EMOJIS['lost']}"
-				del core.hosts[self.name]
+				if not core.hosts[self.name]:
+					message += f" We lost {self.name_colored} {EMOJIS['lost']}"
+					del core.hosts[self.name]
 
 		if self.id in core.sessions:
 			del core.sessions[self.id]
