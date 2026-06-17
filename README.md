@@ -2,7 +2,7 @@
   <img src="https://github.com/user-attachments/assets/0d369fba-480e-4e27-a117-8845dbd4b58e" alt="Logo" width="200"/>
 </div>
 
-<img src="https://img.shields.io/badge/Version-0.20.5-6D4AFF"/><br>
+<img src="https://img.shields.io/badge/Version-0.21.0-6D4AFF"/><br>
 ![Black Hat Arsenal](https://img.shields.io/badge/Presented%20at-Black%20Hat%20Arsenal-111827)
 ![EU](https://img.shields.io/badge/EU%202024-2563EB)
 ![USA](https://img.shields.io/badge/USA%202025-B91C1C)
