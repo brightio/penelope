@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.20.5"
+__version__ = "0.21.0"
 
 import os
 import io
@@ -3161,7 +3161,7 @@ class Session:
 					self.kill()
 					return False
 
-				logger.info(f"Agent deployed via {paint(_bin).green}")
+				logger.info(f"{EMOJIS['agent']} Agent deployed via {paint(_bin).green}")
 
 				self.agent = True
 				self.type = 'PTY'
@@ -6035,7 +6035,8 @@ PYTHON_STANDALONE_BINARIES = {
 
 EMOJIS = {
 	'folder':'📁', 'file':'📄', 'invalid_shell':'🙄', 'new_shell':'😍️', 'target':'🎯', 'upgrade':'💪', 'logfile':'📜',
-	'lost':'💔', 'home':'🏠', 'bug':'🐞', 'skull':'💀', 'refresh':'🔄', 'cancel':'🚫', 'no_sessions':'😟', 'user':'👤'
+	'lost':'💔', 'home':'🏠', 'bug':'🐞', 'skull':'💀', 'refresh':'🔄', 'cancel':'🚫', 'no_sessions':'😟', 'user':'👤',
+	'agent': '⭐'
 }
 
 # Python Agent code

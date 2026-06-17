@@ -55,10 +55,10 @@ pipx install penelope-shell-handler
 
 ## Features
 ### Session Features
-|Description|Unix-like|Windows|
+|Feature|Unix-like target|Windows target|
 |-----------|:-------:|:-----:|
 |Auto-upgrade shell|PTY|readline(*)|
-|Real-time terminal resize|✅|❌|                                                            
+|Real-time terminal resize|✅|❌|
 |Logging shell activity|✅|✅|
 |Download remote files/folders|✅|✅|
 |Upload local/HTTP files/folders|✅|✅|
