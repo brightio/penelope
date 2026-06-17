@@ -1738,6 +1738,10 @@ class Core:
 				# The listeners
 				elif readable.__class__ is TCPListener:
 					_socket, endpoint = readable.socket.accept()
+					if sum(1 for s in self.sessions.values() if s.ip == endpoint[0]) >= options.max_sessions:
+						_socket.close()
+						logger.debug(f"Rejected {endpoint}: max sessions per host ({options.max_sessions}) reached")
+						continue
 					thread_name = f"NewCon{endpoint}"
 					logger.debug(f"New thread: {thread_name}")
 					threading.Thread(target=Session, args=(_socket, *endpoint, readable), name=thread_name).start()
@@ -4218,7 +4222,6 @@ class Session:
 			core.wlist.remove(self)
 		try:
 			self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)) # RST
-			#self.socket.shutdown(socket.SHUT_RDWR) # FIN
 		except OSError:
 			pass
 		self.socket.close()
@@ -5673,8 +5676,9 @@ class Options:
 		self.no_log = False
 		self.no_timestamps = False
 		self.no_colored_timestamps = False
-		self.max_maintain = 10
+		self.max_maintain = 5
 		self.maintain = 1
+		self.max_sessions = 5
 		self.single_session = False
 		self.no_attach = False
 		self.no_upgrade = False
@@ -5726,11 +5730,21 @@ class Options:
 			if value > 1 and self.single_session:
 				show("Single Session mode disabled because Maintain is enabled")
 				self.single_session = False
+			if getattr(self, 'max_sessions', 0) and self.max_sessions < value:
+				show(f"Max sessions per host increased to {value} to satisfy Maintain")
+				self.max_sessions = value
 
 		elif option == 'single_session':
 			if self.maintain > 1 and value:
 				show("Single Session mode disabled because Maintain is enabled")
 				value = False
+
+		elif option == 'max_sessions':
+			if value < 0:
+				value = 0
+			if value and value < self.maintain:
+				show(f"Max sessions per host increased to {self.maintain} to satisfy Maintain")
+				value = self.maintain
 
 		elif option == 'no_bins':
 			if value is None:
@@ -5797,9 +5811,10 @@ def main():
 	log.add_argument("-CT", "--no-colored-timestamps", help="Disable colored timestamps in logs", action="store_true")
 
 	misc = parser.add_argument_group("Misc")
+	misc.add_argument("-M", "--menu", help="Start in the Main Menu", action="store_true")
 	misc.add_argument("-m", "--maintain", help="Keep N sessions per target", type=int, metavar='')
-	misc.add_argument("-M", "--menu", help="Start in the Main Menu.", action="store_true")
 	misc.add_argument("-S", "--single-session", help="Accommodate only the first created session", action="store_true")
+	misc.add_argument("-ms", "--max-sessions", help="Max active sessions per host (default 5, 0 = reject all new)", type=int, metavar='')
 	misc.add_argument("-C", "--no-attach", help="Do not auto-attach on new sessions", action="store_true")
 	misc.add_argument("-U", "--no-upgrade", help="Disable shell auto-upgrade", action="store_true")
 	misc.add_argument("-O", "--oscp-safe", help="Enable OSCP-safe mode", action="store_true")
