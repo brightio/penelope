@@ -55,21 +55,20 @@ pipx install penelope-shell-handler
 
 ## Features
 ### Session Features
-|Description|Unix with Python>=2.3| Unix without Python>=2.3|Windows|
-|-----------|:-------------------:|:-----------------------:|:-----:|
-|Auto-upgrade shell|PTY|PTY(*)|readline(**)|
-|Real-time terminal resize|✅|✅|❌|
-|Logging shell activity|✅|✅|✅|
-|Download remote files/folders|✅|✅|✅|
-|Upload local/HTTP files/folders|✅|✅|✅|
-|In-memory local/HTTP script execution with real-time output downloading|✅|❌|❌|
-|Local port forwarding|✅|❌|❌|
-|Spawn shells on multiple tabs and/or hosts|✅|✅|❌|
-|Maintain X amount of active shells per host no matter what|✅|✅|❌|
+|Description|Unix-like|Windows|
+|-----------|:-------:|:-----:|
+|Auto-upgrade shell|PTY|readline(*)|
+|Real-time terminal resize|✅|❌|                                                            
+|Logging shell activity|✅|✅|
+|Download remote files/folders|✅|✅|
+|Upload local/HTTP files/folders|✅|✅|
+|In-memory local/HTTP script execution with real-time output downloading|✅|❌|
+|Local port forwarding|✅|❌|
+|Spawn shells on multiple tabs and/or hosts|✅|❌|
+|Auto-maintain N active shells per host (re-spawn on death)|✅|❌|
 
-(*) opens a second TCP connection
-
-(**) Can be manually upgraded with the `upgrade` command
+(*) Can be manually upgraded to PTY with the `upgrade` command
+> ⚠️  Windows support is experimental and under active development.
 
 ### Global Features
 - Streamline interaction with the targets via modules
@@ -81,7 +80,7 @@ pipx install penelope-shell-handler
 
 ### Modules
 
-![modules](https://github.com/user-attachments/assets/e1428a62-727b-4f2e-bb9e-b225e49409e1)
+![modules](https://github.com/user-attachments/assets/ff139757-ea4b-487d-8e81-e84baf911093)
 
 #### Meterpreter module demonstration
 
@@ -134,13 +133,13 @@ positional arguments:
   args                          Arguments for -s/--serve and SSH reverse shell modes
 
 options:
-  -p PORTS, --ports PORTS       Ports (comma separated) to listen/connect/serve, depending on -i/-c/-s options
+  -p, --ports PORTS             Ports (comma separated) to listen/connect/serve, depending on -i/-c/-s options
                                 (Default: 4444/5555/8000)
 
 Reverse or Bind shell?:
-  -i , --interface              Local interface/IP to listen. (Default: 0.0.0.0)
-  -c , --connect                Bind shell Host
-  -j , --jump                   Reverse shell jump endpoints
+  -i, --interface               Local interface/IP to listen. (Default: 0.0.0.0)
+  -c, --connect                 Bind shell Host
+  -j, --jump                    Reverse shell jump endpoints
 
 Hints:
   -a, --payloads                Show sample reverse shell payloads for active Listeners
@@ -153,19 +152,20 @@ Session Logging:
   -CT, --no-colored-timestamps  Disable colored timestamps in logs
 
 Misc:
-  -m , --maintain               Keep N sessions per target
-  -M, --menu                    Start in the Main Menu.
+  -M, --menu                    Start in the Main Menu
+  -m, --maintain                Keep N sessions per target
   -S, --single-session          Accommodate only the first created session
+  -ms, --max-sessions           Max active sessions per host (default 5)
   -C, --no-attach               Do not auto-attach on new sessions
   -U, --no-upgrade              Disable shell auto-upgrade
   -O, --oscp-safe               Enable OSCP-safe mode
 
 File server:
   -s, --serve                   Run HTTP file server mode
-  -prefix , --url-prefix        URL path prefix
+  -prefix, --url-prefix         URL path prefix
 
 Debug:
-  -N , --no-bins                Simulate missing binaries on target (comma-separated)
+  -N, --no-bins                 Simulate missing binaries on target (comma-separated)
   -v, --version                 Print version and exit
   -d, --debug                   Enable debug output
   -dd, --dev-mode               Enable developer mode
