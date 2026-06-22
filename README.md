@@ -78,6 +78,7 @@ pipx install penelope-shell-handler
 - Serve files/folders via HTTP (-s switch)
 - Can be imported by python3 exploits and get shell on the same terminal (see [extras/exploit_examples](https://github.com/brightio/penelope/tree/main/extras/exploit_examples))
 - Can work in conjunction with Metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
+- Expose live sessions to an MCP client like Claude Code with the `--mcp` switch (local HTTP, token-authenticated), driving the same shells alongside you
 
 ### Modules
 
@@ -182,6 +183,8 @@ Penelope is designed to provide direct and flexible interaction with remote shel
 - **Session logs:** Session logs may contain credentials, tokens, commands and other sensitive information received from the target. Store them securely and use `--no-log` when logging is not required.
 
 - **Unencrypted connections:** Standard reverse and bind shell connections are not encrypted. Avoid using them over untrusted networks unless the traffic is protected by a secure tunnel or VPN.
+
+- **MCP server (`--mcp`):** When enabled, the MCP server grants full control over every active session (command execution, file transfer) to any client holding the bearer token, which is stored in `~/.penelope/mcp.json` (`0600`). It binds to `127.0.0.1` and is token-authenticated. Keep the token secret and avoid exposing the server on untrusted networks.
 
 > ⚖️ **Disclaimer:** Penelope is intended for authorized security testing, research and educational purposes only. Do not use it against systems without explicit permission.
 

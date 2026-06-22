@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.0"
+__version__ = "0.21.1"
 
 import os
 import io
@@ -27,6 +27,7 @@ import tty
 import ssl
 import time
 import gzip
+import json
 import shlex
 import queue
 import struct
@@ -34,6 +35,7 @@ import shutil
 import socket
 import signal
 import base64
+import secrets
 import termios
 import tarfile
 import logging
@@ -5408,6 +5410,255 @@ class FileServer:
 		self.term.set()
 
 
+class MCPServer:
+	PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
+	MAX_CMD_LEN = 65536
+	MAX_OUTPUT  = 10 * 1024 ** 2
+
+	TOOLS = [
+		{'name': 'list_sessions',
+		 'description': 'List all active reverse-shell sessions in Penelope.',
+		 'inputSchema': {'type': 'object', 'properties': {}, 'required': []},
+		 'annotations': {'title': 'List sessions', 'readOnlyHint': True, 'openWorldHint': True}},
+		{'name': 'get_session_info',
+		 'description': 'Detailed info about one session (OS, shell, user, hostname, cwd, arch).',
+		 'inputSchema': {'type': 'object',
+			'properties': {'session_id': {'type': 'integer', 'description': 'Numeric session ID.'}},
+			'required': ['session_id']},
+		 'annotations': {'title': 'Get session info', 'readOnlyHint': True, 'openWorldHint': True}},
+		{'name': 'exec_in_session',
+		 'description': 'Run a shell command in a session and return its output. WARNING: arbitrary command execution on the target.',
+		 'inputSchema': {'type': 'object',
+			'properties': {'session_id': {'type': 'integer', 'description': 'Numeric session ID.'},
+				'command': {'type': 'string', 'description': 'Shell command to run on the target.'}},
+			'required': ['session_id', 'command']},
+		 'annotations': {'title': 'Exec in session', 'readOnlyHint': False,
+			'destructiveHint': True, 'openWorldHint': True}},
+		{'name': 'kill_session',
+		 'description': 'Kill (close) a session. Returns once the kill is scheduled.',
+		 'inputSchema': {'type': 'object',
+			'properties': {'session_id': {'type': 'integer', 'description': 'Numeric session ID.'}},
+			'required': ['session_id']},
+		 'annotations': {'title': 'Kill session', 'readOnlyHint': False,
+			'destructiveHint': True, 'idempotentHint': True, 'openWorldHint': True}},
+		{'name': 'upload_to_session',
+		 'description': 'Upload local file(s)/URL(s) to a session. local_path supports globs (shlex). remote_path defaults to session cwd.',
+		 'inputSchema': {'type': 'object',
+			'properties': {'session_id': {'type': 'integer', 'description': 'Numeric session ID.'},
+				'local_path': {'type': 'string', 'description': 'Local file path(s) or URL(s).'},
+				'remote_path': {'type': 'string', 'description': 'Remote directory (optional).'}},
+			'required': ['session_id', 'local_path']},
+		 'annotations': {'title': 'Upload to session', 'readOnlyHint': False,
+			'destructiveHint': True, 'openWorldHint': True}},
+		{'name': 'download_from_session',
+		 'description': 'Download remote file(s) from a session (globs ok). Saved to the session downloads folder.',
+		 'inputSchema': {'type': 'object',
+			'properties': {'session_id': {'type': 'integer', 'description': 'Numeric session ID.'},
+				'remote_path': {'type': 'string', 'description': 'Remote file path(s) or glob(s).'}},
+			'required': ['session_id', 'remote_path']},
+		 'annotations': {'title': 'Download from session', 'readOnlyHint': False, 'openWorldHint': True}},
+	]
+
+	def __init__(self, host='127.0.0.1', port=0, token=None):
+		self.host = host
+		self.port = port
+		self.token = token or secrets.token_urlsafe(32)
+
+	@staticmethod
+	def config_path():
+		return options.basedir / 'mcp.json'
+
+	@classmethod
+	def load_config(cls):
+		"""Load persisted host/port/token, or {} if none/unreadable."""
+		try:
+			with open(cls.config_path()) as f:
+				cfg = json.load(f)
+			return cfg if isinstance(cfg, dict) else {}
+		except (OSError, ValueError):
+			return {}
+
+	def save_config(self):
+		"""Persist host/port/token (owner-only, created 0600)."""
+		path = self.config_path()
+		try:
+			path.parent.mkdir(parents=True, exist_ok=True)
+			fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+			with os.fdopen(fd, 'w') as f:
+				json.dump({'host': self.host, 'port': self.port, 'token': self.token}, f)
+		except OSError as e:
+			logger.warning(f"Could not save MCP config to {path}: {e}")
+		return self
+
+	@staticmethod
+	def _require_session(args):
+		"""Validate session_id and return the live Session, or raise ValueError."""
+		try:
+			sid = int(args.get('session_id'))
+		except (TypeError, ValueError, OverflowError):
+			raise ValueError('session_id must be an integer')
+		s = core.sessions.get(sid)
+		if s is None:
+			raise ValueError(f'session {sid} not found')
+		return s
+
+	def _tool_call(self, name, args):
+		"""Execute one MCP tool against live sessions. Raises ValueError on bad input."""
+		if name == 'list_sessions':
+			return {'sessions': [{'id': s.id, 'name': s.name, 'ip': s.ip, 'port': s.port,
+				'OS': s.OS, 'type': s.type, 'subtype': s.subtype, 'user': s.user, 'source': s.source}
+				for s in list(core.sessions.values())]}
+
+		if name == 'get_session_info':
+			s = self._require_session(args)
+			return {'id': s.id, 'name': s.name, 'ip': s.ip, 'port': s.port, 'OS': s.OS,
+				'type': s.type, 'subtype': s.subtype, 'user': s.user, 'source': s.source,
+				'hostname': s.hostname, 'system': s.system, 'arch': s.arch, 'cwd': s.cwd}
+
+		if name == 'exec_in_session':
+			s = self._require_session(args)
+			cmd = (args.get('command') or '').strip()
+			if not cmd:
+				raise ValueError('command is required')
+			if len(cmd) > self.MAX_CMD_LEN:
+				raise ValueError(f'command too long (max {self.MAX_CMD_LEN} bytes)')
+			result = s.exec(cmd, value=True)
+			if result is False or result is None:
+				return {'error': 'exec failed or session not ready'}
+			return {'output': result}
+
+		if name == 'kill_session':
+			s = self._require_session(args)
+			s.kill()
+			return {'ok': True}
+
+		if name == 'upload_to_session':
+			s = self._require_session(args)
+			local_path = (args.get('local_path') or '').strip()
+			if not local_path:
+				raise ValueError('local_path is required')
+			uploaded = s.upload(local_path, remote_path=args.get('remote_path') or None)
+			return {'uploaded': uploaded}
+
+		if name == 'download_from_session':
+			s = self._require_session(args)
+			remote = (args.get('remote_path') or '').strip()
+			if not remote:
+				raise ValueError('remote_path is required')
+			return {'downloaded': [str(p) for p in s.download(remote)]}
+
+		raise ValueError(f'unknown tool: {name}')
+
+	def _jsonrpc(self, req):
+		"""Handle one JSON-RPC 2.0 message. Returns a response dict, or None for notifications."""
+		if not isinstance(req, dict):
+			return {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Invalid Request'}}
+		req_id = req.get('id')
+		method = req.get('method', '')
+		params = req.get('params') or {}
+
+		if method == 'initialize':
+			want = params.get('protocolVersion')
+			version = want if want in self.PROTOCOL_VERSIONS else self.PROTOCOL_VERSIONS[0]
+			return {'jsonrpc': '2.0', 'id': req_id, 'result': {
+				'protocolVersion': version,
+				'capabilities': {'tools': {}},
+				'serverInfo': {'name': 'penelope', 'version': '1.0.0'}}}
+
+		if method == 'tools/list':
+			return {'jsonrpc': '2.0', 'id': req_id, 'result': {'tools': self.TOOLS}}
+
+		if method == 'tools/call':
+			try:
+				result = self._tool_call(params.get('name'), params.get('arguments') or {})
+			except ValueError as e:
+				return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(e)}}
+			except Exception as e:
+				logger.exception("MCP tool error")
+				return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32603, 'message': f'Internal error: {e}'}}
+			text = f"Error: {result['error']}" if 'error' in result else json.dumps(result, indent=2)
+			if len(text) > self.MAX_OUTPUT:
+				text = text[:self.MAX_OUTPUT] + f"\n...[truncated, {len(text)} bytes total]"
+			return {'jsonrpc': '2.0', 'id': req_id,
+				'result': {'content': [{'type': 'text', 'text': text}], 'isError': 'error' in result}}
+
+		if method.startswith('notifications/'):
+			return None
+
+		if req_id is not None:
+			return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32601, 'message': f'method not found: {method}'}}
+		return None
+
+	def start(self):
+		"""Bind and serve in a background thread; resolves self.port if it was 0. Returns self."""
+		import hmac
+		from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+		mcp = self
+
+		class Handler(BaseHTTPRequestHandler):
+			protocol_version = 'HTTP/1.1'
+
+			def log_message(self, *a):
+				pass
+
+			def _reply(self, code, payload=b'', ctype='application/json'):
+				self.send_response(code)
+				self.send_header('Content-Length', str(len(payload)))
+				if payload:
+					self.send_header('Content-Type', ctype)
+				self.end_headers()
+				if payload:
+					self.wfile.write(payload)
+
+			def _authorized(self):
+				origin = self.headers.get('Origin')
+				if origin and not re.match(r'^https?://(127\.0\.0\.1|localhost)(:\d+)?$', origin):
+					return False
+				auth = self.headers.get('Authorization', '')
+				prefix = 'Bearer '
+				return auth.startswith(prefix) and hmac.compare_digest(auth[len(prefix):], mcp.token)
+
+			def do_GET(self):
+				self._reply(405)
+
+			def do_POST(self):
+				if not self._authorized():
+					return self._reply(401)
+				length = int(self.headers.get('Content-Length') or 0)
+				try:
+					req = json.loads(self.rfile.read(length) or b'{}')
+				except json.JSONDecodeError:
+					return self._reply(200, json.dumps(
+						{'jsonrpc': '2.0', 'id': None,
+						 'error': {'code': -32700, 'message': 'Parse error'}}).encode())
+				if isinstance(req, list):
+					out = [r for r in (mcp._jsonrpc(x) for x in req) if r is not None]
+					payload = json.dumps(out).encode() if out else b''
+				else:
+					resp = mcp._jsonrpc(req)
+					payload = json.dumps(resp).encode() if resp is not None else b''
+				self._reply(200 if payload else 202, payload)
+
+		class _Server(ThreadingHTTPServer):
+			daemon_threads = True
+			def handle_error(self, request, client_address):
+				if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+					super().handle_error(request, client_address)
+
+		srv = _Server((self.host, self.port), Handler)
+		self.port = srv.server_address[1]
+		threading.Thread(target=srv.serve_forever, daemon=True, name='MCP').start()
+
+		if self.host not in ('127.0.0.1', 'localhost', '::1') and not self.host.startswith('127.'):
+			logger.warning(f"MCP is bound to {self.host} (non-loopback) and is reachable over the network. "
+			               f"Prefer 127.0.0.1 and forward it instead: ssh -L {self.port}:127.0.0.1:{self.port} <host>")
+
+		url = f"http://{self.host}:{self.port}/"
+		logger.info(f"MCP server listening on {url}. Register with:")
+		print(f'claude mcp add --transport http penelope {url} --header "Authorization: Bearer {self.token}"')
+		return self
+
+
 def WinResize(num, stack):
 	if core.attached_session is not None and core.attached_session.type == "PTY":
 		core.attached_session.update_pty_size()
@@ -5704,6 +5955,10 @@ class Options:
 		self.attach_lines = 20
 		self.emojis = True
 		self.link_dereference = True
+		self.mcp = False
+		self.mcp_host = ''
+		self.mcp_port = 0
+		self.mcp_token = ''
 
 	def __getattribute__(self, option):
 		if option in ("logfile", "debug_logfile", "cmd_histfile", "debug_histfile"):
@@ -5819,9 +6074,15 @@ def main():
 	misc.add_argument("-U", "--no-upgrade", help="Disable shell auto-upgrade", action="store_true")
 	misc.add_argument("-O", "--oscp-safe", help="Enable OSCP-safe mode", action="store_true")
 
-	misc = parser.add_argument_group("File server")
-	misc.add_argument("-s", "--serve", help="Run HTTP file server mode", action="store_true")
-	misc.add_argument("-prefix", "--url-prefix", help="URL path prefix", type=str, metavar='')
+	mcp = parser.add_argument_group("MCP")
+	mcp.add_argument("--mcp", help="Enable the MCP server over local HTTP", action="store_true")
+	mcp.add_argument("--mcp-host", help="Host/IP to bind (default: 127.0.0.1)", type=str, metavar='')
+	mcp.add_argument("--mcp-port", help="Port to bind (default: saved port, else a random free port persisted to ~/.penelope/mcp.json)", type=int, metavar='')
+	mcp.add_argument("--mcp-token", help="Bearer token (default: saved token, else auto-generated and persisted)", type=str, metavar='')
+
+	fileserver = parser.add_argument_group("File server")
+	fileserver.add_argument("-s", "--serve", help="Run HTTP file server mode", action="store_true")
+	fileserver.add_argument("-prefix", "--url-prefix", help="URL path prefix", type=str, metavar='')
 
 	debug = parser.add_argument_group("Debug")
 	debug.add_argument("-N", "--no-bins", help="Simulate missing binaries on target (comma-separated)", metavar='')
@@ -5847,6 +6108,14 @@ def main():
 
 	global keyboard_interrupt
 	signal.signal(signal.SIGINT, lambda num, stack: core.stop())
+
+	if options.mcp:
+		cfg = MCPServer.load_config()
+		MCPServer(
+			host  = options.mcp_host  or cfg.get('host')  or '127.0.0.1',
+			port  = options.mcp_port  or cfg.get('port')  or 0,
+			token = options.mcp_token or os.environ.get('PENELOPE_MCP_TOKEN') or cfg.get('token'),
+		).start().save_config()
 
 	# Show Version
 	if options.version:

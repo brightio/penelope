@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "penelope": {
-      "command": "python3",
-      "args": ["/YOURPATH/penelope/mcp_penelope.py"]
-    }
-  }
-}
