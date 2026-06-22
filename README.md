@@ -22,6 +22,7 @@ Penelope is a modern shell handler for penetration testers and CTF players. It p
   - 🎬 [Demonstrating Random Usage](#demonstrating-random-usage)
   - 🖲️ [Main Menu Commands](#main-menu-commands)
   - ⚡ [Command Line Options](#command-line-options)
+- 🔒 [Security considerations](#security-considerations)
 - 📝 [TODO](#todo)
 - ❓ [FAQ](#faq)
 - 🙌 [Thanks to the early birds](#thanks-to-the-early-birds)
@@ -171,6 +172,18 @@ Debug:
   -dd, --dev-mode               Enable developer mode
   -cu, --check-urls             Check hardcoded URLs health and exit
 ```
+
+## Security considerations
+
+Penelope is designed to provide direct and flexible interaction with remote shells. Keep the following in mind when using it:
+
+- **Terminal escape sequences:** Penelope forwards terminal output from remote systems directly to your terminal emulator. Malicious remote processes may use terminal escape sequences to manipulate the screen, create misleading links, or interact with features such as the clipboard. This exposure is inherent to any tool that relays a remote shell to the local terminal (like SSH, telnet, netcat) and is not specific to Penelope. Use a terminal with appropriate security settings when connecting to untrusted systems.
+
+- **Session logs:** Session logs may contain credentials, tokens, commands and other sensitive information received from the target. Store them securely and use `--no-log` when logging is not required.
+
+- **Unencrypted connections:** Standard reverse and bind shell connections are not encrypted. Avoid using them over untrusted networks unless the traffic is protected by a secure tunnel or VPN.
+
+> ⚖️ **Disclaimer:** Penelope is intended for authorized security testing, research and educational purposes only. Do not use it against systems without explicit permission.
 
 ## TODO
 
