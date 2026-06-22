@@ -520,6 +520,13 @@ class CustomFormatter(logging.Formatter):
 		return f"{prefix}{getattr(paint(text), template['color'])}{suffix}"
 
 
+class HelpFormatter(RawTextHelpFormatter):
+	def _format_action_invocation(self, action):
+		if not action.option_strings or action.nargs == 0:
+			return super()._format_action_invocation(action)
+		return ', '.join(action.option_strings)
+
+
 class LineBuffer:
 	def __init__(self, length):
 		self.len = length
@@ -6044,7 +6051,7 @@ def main():
 
 	## Command line options
 	parser = ArgumentParser(description="Penelope Shell Handler", add_help=False,
-		formatter_class=lambda prog: RawTextHelpFormatter(prog, width=150, max_help_position=40))
+		formatter_class=lambda prog: HelpFormatter(prog, width=150, max_help_position=40))
 
 	parser.add_argument("-p", "--ports", help=f"Ports (comma separated) to listen/connect/serve, depending on -i/-c/-s options\n\
 (Default: {options.default_listener_port}/{options.default_bindshell_port}/{options.default_fileserver_port})")
@@ -6346,146 +6353,6 @@ if not options.emojis:
 
 # Load peneloperc
 load_rc()
-
-## MCP socket server — lets mcp_penelope.py query/control sessions over a Unix socket
-def _mcp_socket_server():
-	import json as _json
-
-	sock_path = os.path.expanduser('~/.penelope/mcp.sock')
-	os.makedirs(os.path.dirname(sock_path), exist_ok=True)
-	try:
-		os.unlink(sock_path)
-	except FileNotFoundError:
-		pass
-
-	srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-	srv.bind(sock_path)
-	os.chmod(sock_path, 0o600)
-	srv.listen(5)
-
-	def _handle(conn):
-		try:
-			chunks = []
-			while True:
-				chunk = conn.recv(65536)
-				if not chunk:
-					break
-				chunks.append(chunk)
-				if chunk.endswith(b'\n'):
-					break
-			data = b''.join(chunks)
-			if not data:
-				return
-			req = _json.loads(data)
-			method = req.get('method')
-
-			if method == 'list_sessions':
-				sessions = []
-				for s in list(core.sessions.values()):
-					sessions.append({
-						'id':      s.id,
-						'name':    s.name,
-						'ip':      s.ip,
-						'port':    s.port,
-						'OS':      s.OS,
-						'type':    s.type,
-						'subtype': s.subtype,
-						'user':    s.user,
-						'source':  s.source,
-					})
-				resp = {'sessions': sessions}
-
-			elif method == 'get_session_info':
-				sid = req.get('session_id')
-				s = core.sessions.get(sid)
-				if s is None:
-					resp = {'error': f'session {sid} not found'}
-				else:
-					resp = {
-						'id':       s.id,
-						'name':     s.name,
-						'ip':       s.ip,
-						'port':     s.port,
-						'OS':       s.OS,
-						'type':     s.type,
-						'subtype':  s.subtype,
-						'user':     s.user,
-						'source':   s.source,
-						'hostname': getattr(s, 'hostname', None),
-						'system':   getattr(s, 'system', None),
-						'arch':     getattr(s, 'arch', None),
-						'cwd':      getattr(s, 'cwd', None),
-					}
-
-			elif method == 'exec':
-				sid = req.get('session_id')
-				cmd = req.get('command', '')
-				s = core.sessions.get(sid)
-				if s is None:
-					resp = {'error': f'session {sid} not found'}
-				elif not cmd:
-					resp = {'error': 'command is required'}
-				else:
-					result = s.exec(cmd, value=True)
-					if result is False or result is None:
-						resp = {'error': 'exec failed or session not ready'}
-					else:
-						resp = {'output': result}
-
-			elif method == 'kill_session':
-				sid = req.get('session_id')
-				s = core.sessions.get(sid)
-				if s is None:
-					resp = {'error': f'session {sid} not found'}
-				else:
-					s.kill()
-					resp = {'ok': True}
-
-			elif method == 'upload':
-				sid = req.get('session_id')
-				local_path = req.get('local_path', '')
-				remote_path = req.get('remote_path') or None
-				s = core.sessions.get(sid)
-				if s is None:
-					resp = {'error': f'session {sid} not found'}
-				elif not local_path:
-					resp = {'error': 'local_path is required'}
-				else:
-					uploaded = s.upload(local_path, remote_path=remote_path)
-					resp = {'uploaded': uploaded}
-
-			elif method == 'download':
-				sid = req.get('session_id')
-				remote_items = req.get('remote_path', '')
-				s = core.sessions.get(sid)
-				if s is None:
-					resp = {'error': f'session {sid} not found'}
-				elif not remote_items:
-					resp = {'error': 'remote_path is required'}
-				else:
-					downloaded = s.download(remote_items)
-					resp = {'downloaded': [str(p) for p in downloaded]}
-
-			else:
-				resp = {'error': f'unknown method: {method}'}
-
-		except Exception as e:
-			resp = {'error': str(e)}
-		finally:
-			try:
-				conn.sendall((_json.dumps(resp) + '\n').encode())
-			except Exception:
-				pass
-			conn.close()
-
-	while True:
-		try:
-			conn, _ = srv.accept()
-			threading.Thread(target=_handle, args=(conn,), daemon=True).start()
-		except Exception:
-			break
-
-threading.Thread(target=_mcp_socket_server, daemon=True, name='MCPSocket').start()
 
 if __name__ == "__main__":
 	main()

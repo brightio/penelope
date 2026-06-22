@@ -135,7 +135,7 @@ positional arguments:
   args                          Arguments for -s/--serve and SSH reverse shell modes
 
 options:
-  -p, --ports PORTS             Ports (comma separated) to listen/connect/serve, depending on -i/-c/-s options
+  -p, --ports                   Ports (comma separated) to listen/connect/serve, depending on -i/-c/-s options
                                 (Default: 4444/5555/8000)
 
 Reverse or Bind shell?:
@@ -157,10 +157,16 @@ Misc:
   -M, --menu                    Start in the Main Menu
   -m, --maintain                Keep N sessions per target
   -S, --single-session          Accommodate only the first created session
-  -ms, --max-sessions           Max active sessions per host (default 5)
+  -ms, --max-sessions           Max active sessions per host (default 5, 0 = reject all new)
   -C, --no-attach               Do not auto-attach on new sessions
   -U, --no-upgrade              Disable shell auto-upgrade
   -O, --oscp-safe               Enable OSCP-safe mode
+
+MCP:
+  --mcp                         Enable the MCP server over local HTTP
+  --mcp-host                    Host/IP to bind (default: 127.0.0.1)
+  --mcp-port                    Port to bind (default: saved port, else a random free port persisted to ~/.penelope/mcp.json)
+  --mcp-token                   Bearer token (default: saved token, else auto-generated and persisted)
 
 File server:
   -s, --serve                   Run HTTP file server mode
