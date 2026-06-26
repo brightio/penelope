@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.1"
+__version__ = "0.21.2"
 
 import os
 import io
@@ -1044,19 +1044,57 @@ class MainMenu(BetterCMD):
 			logger.info("Penelope exited due to Single Session mode")
 			return True
 
-	@session_operation(current=True)
 	def do_portfwd(self, line):
 		"""
-		host:port(<-|->)host:port
+		[<host:port> (->|<-) <host:port> | stop <id>]
 		Local and Remote port forwarding
 
 		Examples:
 
+			portfwd				Show active Port Forwards
 			-> 192.168.0.1:80		Forward 127.0.0.1:80 to 192.168.0.1:80
 			0.0.0.0:8080 -> 192.168.0.1:80	Forward 0.0.0.0:8080 to 192.168.0.1:80
+			portfwd stop 1			Stop the Port Forward with ID 1
+			portfwd stop *			Stop all Port Forwards
 		"""
 		if not line:
-			cmdlogger.warning("No parameters...")
+			if core.forwardings:
+				table = Table(joinchar=' | ')
+				table.header = [paint(header).orange for header in ('ID', 'Session', 'Type', 'Local', 'Remote')]
+				for fwd in core.forwardings.values():
+					_type, lhost, lport, rhost, rport = fwd.info
+					table += [fwd.id, fwd.session.id, 'Local' if _type == 'L' else 'Remote',
+						f"{lhost}:{lport}", f"{rhost}:{rport}"]
+				print('\n', indent(str(table), '  '), '\n', sep='')
+			else:
+				cmdlogger.warning("No active Port Forwards...")
+			return
+
+		args = line.split()
+
+		if args[0] == 'stop':
+			if len(args) < 2:
+				cmdlogger.warning("Specify a Port Forward ID (or *) to stop")
+				return False
+			if args[1] == '*':
+				forwardings = tuple(core.forwardings.values())
+				if not forwardings:
+					cmdlogger.warning("No Port Forwards to stop...")
+					return False
+				for fwd in forwardings:
+					fwd.stop()
+			else:
+				try:
+					core.forwardings[int(args[1])].stop()
+				except (KeyError, ValueError):
+					cmdlogger.warning("Invalid Port Forward ID")
+			return
+
+		if not self.sid:
+			if core.sessions:
+				cmdlogger.warning("No session ID selected. Select one with \"use [ID]\"")
+			else:
+				cmdlogger.warning("No available sessions to perform this action")
 			return False
 
 		match = re.search(r"((?:.*)?)(<-|->)((?:.*)?)", line)
@@ -1581,6 +1619,15 @@ class MainMenu(BetterCMD):
 		elif arg == 'stop':
 			return self.get_core_id_completion(text, "*", attr='listeners')
 
+	def complete_portfwd(self, text, line, begidx, endidx):
+		last = -2 if text else -1
+		arg = line.split()[last]
+
+		if arg == 'portfwd':
+			return [command for command in ["stop"] if command.startswith(text)]
+		elif arg == 'stop':
+			return self.get_core_id_completion(text, "*", attr='forwardings')
+
 	def complete_payloads(self, text, line, begidx, endidx):
 		return [iface for iface in Interfaces().list if iface.startswith(text)]
 
@@ -1682,6 +1729,7 @@ class Core:
 		self.listener_counter = itertools.count(1)
 		self.session_counter = itertools.count(1)
 		self.fileserver_counter = itertools.count(1)
+		self.forwarding_counter = itertools.count(1)
 		self.counter_lock = threading.Lock()
 
 		self.hosts = defaultdict(list)
@@ -1706,6 +1754,10 @@ class Core:
 		elif name == 'new_fileserverID':
 			with self.counter_lock:
 				return next(self.fileserver_counter)
+
+		elif name == 'new_forwardingID':
+			with self.counter_lock:
+				return next(self.forwarding_counter)
 		else:
 			raise AttributeError(name)
 
@@ -1964,6 +2016,33 @@ def Connect(host, port):
 		if not handed_off:
 			_socket.close()
 	return False
+
+class Forwarding:
+
+	def __init__(self, session, info, control, thread, server):
+		self.session = session
+		self.info = info            # (_type, lhost, lport, rhost, rport)
+		self.control = control
+		self.thread = thread
+		self.server = server
+		self.id = core.new_forwardingID
+		core.forwardings[self.id] = self
+		session.tasks['portfwd'].append(self)
+
+	def __str__(self):
+		_type, lhost, lport, rhost, rport = self.info
+		arrow = '->' if _type == 'L' else '<-'
+		return f"{lhost}:{lport} {arrow} {rhost}:{rport}"
+
+	def stop(self):
+		logger.warning(f"Stopping Port Forwarding: {self}")
+		self.server.shutdown()
+		self.thread.join()
+		core.forwardings.pop(self.id, None)
+		try:
+			self.session.tasks['portfwd'].remove(self)
+		except ValueError:
+			pass
 
 class TCPListener:
 
@@ -4119,8 +4198,7 @@ class Session:
 
 		session = self
 		control = ControlQueue()
-		stop = threading.Event()
-		task = [(_type, lhost, lport, rhost, rport), control, stop]
+		info = (_type, lhost, lport, rhost, rport)
 
 		class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 			def handle(self):
@@ -4190,6 +4268,7 @@ class Session:
 		class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 			allow_reuse_address = True
 			request_queue_size = 100
+			daemon_threads = True
 
 			@handle_bind_errors
 			def server_bind(self, lhost, lport):
@@ -4201,14 +4280,11 @@ class Session:
 				if not server.server_bind(lhost, lport):
 					return False
 				server.server_activate()
-				task.append(server)
+				Forwarding(session, info, control, threading.current_thread(), server)
 				logger.info(f"Setup Port Forwarding: {lhost}:{lport} {'->' if _type=='L' else '<-'} {rhost}:{rport}")
-				session.tasks['portfwd'].append(task)
 				server.serve_forever()
-			stop.set()
 
 		portfwd_thread = threading.Thread(target=server_thread)
-		task.append(portfwd_thread)
 		portfwd_thread.start()
 
 	def maintain(self):
@@ -4284,15 +4360,8 @@ class Session:
 			self.attaching = False
 			menu.show()
 
-		for portfwd in self.tasks['portfwd']:
-			info, control, stop, thread, server = portfwd
-			logger.warning(f"Stopping Port Forwarding: {info[1]}:{info[2]} {'->' if info[0]=='L' else '<-'} {info[3]}:{info[4]}")
-			server.shutdown()
-			server.server_close()
-			while not stop.is_set(): # TEMP
-				control << "stop"
-				#print("stop")
-			thread.join()
+		for fwd in tuple(self.tasks['portfwd']):	# copy: stop() mutates the list
+			fwd.stop()
 
 		if self.OS:
 			threading.Thread(target=self.maintain).start()
@@ -6380,3 +6449,4 @@ load_rc()
 
 if __name__ == "__main__":
 	main()
+
