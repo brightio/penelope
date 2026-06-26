@@ -1110,6 +1110,10 @@ class MainMenu(BetterCMD):
 				cmdlogger.warning(f"Invalid {label} port: '{port}'. Valid numbers: 1-65535")
 				return False
 
+		if _type == 'R':
+			cmdlogger.warning("Reverse (<-) port forwarding is not implemented yet")
+			return False
+
 		core.sessions[self.sid].portfwd(_type=_type, lhost=lhost, lport=lport, rhost=rhost, rport=int(rport))
 
 	@session_operation(current=True)
@@ -2836,7 +2840,9 @@ class Session:
 								try:
 									data = stdin_src.recv(options.network_buffer_size)
 								except OSError:
-									pass # TEEEEMP
+									data = b""
+							else:
+								data = b""
 							stdin_stream.write(data)
 							if not data:
 								#stdin_stream << b""
@@ -4130,41 +4136,44 @@ class Session:
 				code = rf"""
 				import socket
 				client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-				frlist = [stdin_stream]
-				connected = False
-				while True:
-					readables, _, _ = select(frlist, [], [])
-
-					for readable in readables:
-						if readable is stdin_stream:
-							data = stdin_stream.read({options.network_buffer_size})
-							if not connected:
-								client.connect(("{rhost}", {rport}))
-								client.setblocking(False)
-								frlist.append(client)
-								connected = True
-							try:
-								client.sendall(data)
-							except OSError:
-								break
-							if not data:
-								frlist.remove(stdin_stream)
-								break
-						if readable is client:
-							try:
-								data = client.recv({options.network_buffer_size})
+				try:
+					client.connect(("{rhost}", {rport}))
+					connected = True
+				except socket.error:
+					connected = False
+				if connected:
+					client.setblocking(False)
+					frlist = [stdin_stream, client]
+					while True:
+						readables, _, _ = select(frlist, [], [])
+						for readable in readables:
+							if readable is stdin_stream:
+								data = stdin_stream.read({options.network_buffer_size})
+								try:
+									client.sendall(data)
+								except socket.error:
+									break
+								if not data:
+									try:
+										client.shutdown(socket.SHUT_WR)
+									except socket.error:
+										pass
+									frlist.remove(stdin_stream)
+									continue
+							if readable is client:
+								try:
+									data = client.recv({options.network_buffer_size})
+								except socket.error:
+									break
 								stdout_stream.write(data)
 								if not data:
-									frlist.remove(client) # TEMP
 									break
-							except OSError:
-								frlist.remove(client) # TEMP
-								break
-					else:
-						continue
-					break
-				#client.shutdown(socket.SHUT_RDWR)
-				client.close()
+						else:
+							continue
+						break
+					client.close()
+				else:
+					client.close()
 				"""
 				session.exec(
 					code,
