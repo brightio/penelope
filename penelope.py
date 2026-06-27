@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.2"
+__version__ = "0.21.3"
 
 import os
 import io
@@ -5359,13 +5359,15 @@ class cleanup(Module):
 					logger.error(f"'{p}' does not exist anymore")
 
 class FileServer:
-	def __init__(self, *items, port=None, host=None, url_prefix=None, quiet=False):
+	def __init__(self, *items, port=None, host=None, url_prefix=None, quiet=False, upload=False, upload_dir=None):
 		self.port = port or options.default_fileserver_port
 		self.host = host or options.default_interface
 		self.host = Interfaces().translate(self.host)
 		self.items = items
 		self.url_prefix = url_prefix + '/' if url_prefix else ''
 		self.quiet = quiet
+		self.upload = upload
+		self.upload_dir = os.path.abspath(normalize_path(upload_dir)) if upload_dir else os.getcwd()
 		self.init = threading.Event()
 		self.term = threading.Event()
 		self.filemap = {}
@@ -5415,13 +5417,22 @@ class FileServer:
 
 		for ip in ips:
 			output.extend(('', f'{EMOJIS["home"]} http://' + str(paint(ip).cyan) + ":" + str(paint(self.port).orange) + '/' + self.url_prefix))
+			if self.upload:
+				url = f"http://{ip}:{self.port}/{self.url_prefix}"
+				linux_cmd = f" curl {url} -T <filepath>"
+				win_cmd = f"(New-Object Net.WebClient).UploadFile('{url}','POST','<filepath>')"
+				output.append(f'⬆  Upload enabled -> {paint(self.upload_dir).green}')
+				output.append(f"     Linux   : {linux_cmd}")
+				output.append(f"     Windows : {win_cmd}")
 			table = Table(joinchar=' -> ')
 			for urlpath, filepath in self.filemap.items():
 				table += (
 					paint(f"{EMOJIS['folder'] if os.path.isdir(filepath) else EMOJIS['file']} ").green +
 					paint(f"http://{ip}:{self.port}{urlpath}").white_BLUE, filepath
 				)
-			output.append(str(table))
+			table_str = str(table)
+			if table_str:
+				output.append(table_str)
 			output.append("─" * len(output[1]))
 
 		return '\n'.join(output)
@@ -5431,9 +5442,12 @@ class FileServer:
 
 	def _start(self):
 		filemap, host, port, url_prefix, quiet = self.filemap, self.host, self.port, self.url_prefix, self.quiet
+		upload, upload_dir = self.upload, self.upload_dir
 
-		class CustomTCPServer(socketserver.TCPServer):
+		class CustomTCPServer(socketserver.ThreadingTCPServer):
 			allow_reuse_address = True
+			daemon_threads = True
+			block_on_close = False
 
 			def __init__(self, *args, **kwargs):
 				self.client_sockets = []
@@ -5463,6 +5477,12 @@ class FileServer:
 					if self.path == '/' + url_prefix:
 						from html import escape
 						response = ''
+						if upload:
+							response += (
+								'<form method="POST" enctype="multipart/form-data">'
+								'<input type="file" name="file" multiple>'
+								'<input type="submit" value="Upload"></form><hr>'
+							)
 						for path in filemap.keys():
 							safe_path = escape(path)
 							response += f'<li><a href="{safe_path}">{safe_path}</a></li>'
@@ -5478,6 +5498,77 @@ class FileServer:
 				except Exception as e:
 					logger.error(e)
 
+			def _save_upload(self, filename, data):
+				filename = os.path.basename((filename or '').replace('\\', '/')).lstrip('.') or f"upload_{int(time.time())}"
+				dest = os.path.join(upload_dir, filename)
+				base, ext = os.path.splitext(dest)
+				while os.path.exists(dest):
+					dest = base + '_' + ext
+					base += '_'
+				with open(dest, 'wb') as f:
+					f.write(data or b'')
+				if not quiet:
+					logger.info(
+						f"{paint('[').white}{paint(self.log_date_time_string()).magenta}] "
+						f"FileServer({host}:{port}) [{paint(self.address_string()).cyan}] "
+						f"{paint('⬆ UPLOAD').yellow} -> {paint(dest).green} "
+						f"({paint(str(len(data or b''))).orange} bytes)"
+					)
+				return dest
+
+			def _read_body(self):
+				length = int(self.headers.get('Content-Length', 0) or 0)
+				return self.rfile.read(length) if length else b''
+
+			def _reject_upload(self, method):
+				self.send_error(501, f"Unsupported method ('{method}')")
+
+			def do_PUT(self):
+				if not upload:
+					return self._reject_upload('PUT')
+				try:
+					self._save_upload(unquote(self.path), self._read_body())
+					self.send_response(201)
+					self.send_header("Content-Length", "0")
+					self.end_headers()
+				except Exception as e:
+					logger.error(e)
+					self.send_error(500)
+
+			def do_POST(self):
+				if not upload:
+					return self._reject_upload('POST')
+				try:
+					ctype = self.headers.get('Content-Type', '')
+					body = self._read_body()
+					saved = []
+					if ctype.startswith('multipart/form-data'):
+						import email
+						msg = email.message_from_bytes(
+							b'Content-Type: ' + ctype.encode() + b'\r\nMIME-Version: 1.0\r\n\r\n' + body
+						)
+						for part in msg.walk():
+							fname = part.get_filename()
+							if fname:
+								saved.append(self._save_upload(fname, part.get_payload(decode=True)))
+					else:
+						saved.append(self._save_upload(unquote(self.path), body))
+
+					if ctype.startswith('multipart/form-data'):
+						self.send_response(303)
+						self.send_header("Location", '/' + url_prefix)
+						self.send_header("Content-Length", "0")
+						self.end_headers()
+					else:
+						msg = ('\n'.join(os.path.basename(p) for p in saved) + '\n').encode()
+						self.send_response(201)
+						self.send_header("Content-Length", str(len(msg)))
+						self.end_headers()
+						self.wfile.write(msg)
+				except Exception as e:
+					logger.error(e)
+					self.send_error(500)
+
 			def translate_path(self, path):
 				path = path.split('?', 1)[0]
 				path = path.split('#', 1)[0]
@@ -5490,7 +5581,7 @@ class FileServer:
 				for urlpath, filepath in filemap.items():
 					if path == urlpath:
 						return filepath
-					elif path.startswith(urlpath):
+					elif path.startswith(urlpath + '/'):
 						relpath = path[len(urlpath):].lstrip('/')
 						return os.path.join(filepath, relpath)
 				return ""
@@ -6210,6 +6301,8 @@ def main():
 	fileserver = parser.add_argument_group("File server")
 	fileserver.add_argument("-s", "--serve", help="Run HTTP file server mode", action="store_true")
 	fileserver.add_argument("-prefix", "--url-prefix", help="URL path prefix", type=str, metavar='')
+	fileserver.add_argument("-u", "--upload", help="Enable file upload (PUT/POST) to the server", action="store_true")
+	fileserver.add_argument("-ud", "--upload-dir", help="Directory to store uploads (default: CWD)", type=str, metavar='')
 
 	debug = parser.add_argument_group("Debug")
 	debug.add_argument("-N", "--no-bins", help="Simulate missing binaries on target (comma-separated)", metavar='')
@@ -6266,8 +6359,12 @@ def main():
 	# File Server
 	elif options.serve:
 		for port in options.ports:
-			server = FileServer(*options.args or '.', port=port, host=options.interface, url_prefix=options.url_prefix)
-			if server.filemap:
+			server = FileServer(
+				*(options.args or (() if options.upload else ('.',))),
+				port=port, host=options.interface, url_prefix=options.url_prefix,
+				upload=options.upload, upload_dir=options.upload_dir
+			)
+			if server.filemap or server.upload:
 				server.start()
 			else:
 				logger.error("No files to serve")
@@ -6476,4 +6573,5 @@ load_rc()
 
 if __name__ == "__main__":
 	main()
+
 
