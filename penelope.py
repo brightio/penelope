@@ -4221,34 +4221,49 @@ class Session:
 					connected = False
 				if connected:
 					client.setblocking(False)
-					frlist = [stdin_stream, client]
+					pending = "".encode()
+					stdin_done = False
+					wr_shutdown = False
+					remote_done = False
 					while True:
-						readables, _, _ = select(frlist, [], [])
-						for readable in readables:
-							if readable is stdin_stream:
-								data = stdin_stream.read({options.network_buffer_size})
-								try:
-									client.sendall(data)
-								except socket.error:
-									break
-								if not data:
-									try:
-										client.shutdown(socket.SHUT_WR)
-									except socket.error:
-										pass
-									frlist.remove(stdin_stream)
-									continue
-							if readable is client:
-								try:
-									data = client.recv({options.network_buffer_size})
-								except socket.error:
-									break
+						rlist = []
+						if not remote_done:
+							rlist.append(client)
+						if not stdin_done and not pending:
+							rlist.append(stdin_stream)
+						wlist = []
+						if pending:
+							wlist.append(client)
+						if not rlist and not wlist:
+							break
+						readables, writables, _ = select(rlist, wlist, [])
+						if stdin_stream in readables:
+							data = stdin_stream.read({options.network_buffer_size})
+							if not data:
+								stdin_done = True
+							else:
+								pending = pending + data
+						if client in writables:
+							try:
+								sent = client.send(pending)
+							except socket.error:
+								break
+							pending = pending[sent:]
+						if stdin_done and not pending and not wr_shutdown:
+							try:
+								client.shutdown(socket.SHUT_WR)
+							except socket.error:
+								pass
+							wr_shutdown = True
+						if client in readables:
+							try:
+								data = client.recv({options.network_buffer_size})
+							except socket.error:
+								break
+							if not data:
+								remote_done = True
+							else:
 								stdout_stream.write(data)
-								if not data:
-									break
-						else:
-							continue
-						break
 					client.close()
 				else:
 					client.close()
@@ -4360,7 +4375,7 @@ class Session:
 			self.attaching = False
 			menu.show()
 
-		for fwd in tuple(self.tasks['portfwd']):	# copy: stop() mutates the list
+		for fwd in tuple(self.tasks['portfwd']):
 			fwd.stop()
 
 		if self.OS:
@@ -4438,6 +4453,7 @@ class Stream:
 		self.writebuf = None
 		self.feed_thread = None
 		self.session = _session
+		self.read_closed = False
 
 		if self.session is None:
 			self.writefunc = lambda data: respond(self.id + data)
@@ -4474,16 +4490,21 @@ class Stream:
 	def write(self, data):
 		self.writefunc(data)
 
+	def close_read(self):
+		if not self.read_closed:
+			self.read_closed = True
+			try:
+				os.close(self._read)
+			except OSError:
+				pass
+
 	def read(self, n):
 		try:
 			data = os.read(self._read, n)
 		except OSError:
 			return "".encode()
 		if not data:
-			try:
-				os.close(self._read)
-			except OSError:
-				pass
+			self.close_read()
 		return data
 
 def agent():
@@ -4560,7 +4581,16 @@ def agent():
 			cloexec(fd)
 
 		while True:
-			rfds, wfds, _ = select(rlist, wlist, [])
+			try:
+				rfds, wfds, _ = select(rlist, wlist, [])
+			except Exception:
+				for _fdlist in (rlist, wlist):
+					for _fd in _fdlist[:]:
+						try:
+							select([_fd], [], [], 0)
+						except Exception:
+							_fdlist.remove(_fd)
+				continue
 
 			for readable in rfds:
 				if readable is control_out:
@@ -4640,10 +4670,7 @@ def agent():
 										{}
 									except:
 										stderr_stream << (str(sys.exc_info()[1]) + "\n").encode()
-									try:
-										os.close(stdin_stream._read)
-									except:
-										pass
+									stdin_stream.close_read()
 
 									#if stdin_stream_id in streams:
 									#	del streams[stdin_stream_id]
