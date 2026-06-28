@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.3"
+__version__ = "0.21.4"
 
 import os
 import io
@@ -1784,8 +1784,13 @@ class Core:
 						return x.fileno() >= 0
 					except Exception:
 						return False
-				self.rlist = [x for x in self.rlist if _valid_fd(x)]
-				self.wlist = [x for x in self.wlist if _valid_fd(x)]
+				for lst in (self.rlist, self.wlist):
+					for x in tuple(lst):
+						if not _valid_fd(x):
+							try:
+								lst.remove(x)
+							except ValueError:
+								pass
 				continue
 
 			for readable in readables:
@@ -3426,10 +3431,6 @@ class Session:
 		core.rlist.remove(sys.stdin)
 
 		if self.type == 'Readline':
-			try:
-				os.write(sys.stdin.fileno(), b'\n')
-			except OSError:
-				pass
 			if hasattr(self, '_readline_thread') and self._readline_thread.is_alive():
 				self._readline_thread.join(timeout=2)
 
