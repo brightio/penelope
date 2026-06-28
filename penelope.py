@@ -1330,11 +1330,10 @@ class MainMenu(BetterCMD):
 			if line.isnumeric():
 				num = int(line)
 				options.maintain = num
-				refreshed = False
-				for host in tuple(core.hosts.values()):
-					if len(host) < num:
-						refreshed = True
-						host[0].maintain()
+				targets = [h[0] for h in core.hosts.values() if h and len(h) < options.maintain]
+				refreshed = bool(targets)
+				for first in targets:
+					first.maintain()
 				if not refreshed:
 					self.onecmd("maintain")
 			else:
@@ -1716,14 +1715,11 @@ class Core:
 
 	def __init__(self):
 		self.started = False
-
 		self.control = ControlQueue()
 		self.rlist = [self.control]
 		self.wlist = []
 
 		self.attached_session = None
-
-		self.lock = threading.Lock() # TO REMOVE
 		self.conn_semaphore = threading.Semaphore(5)
 
 		self.listener_counter = itertools.count(1)
@@ -1732,7 +1728,6 @@ class Core:
 		self.forwarding_counter = itertools.count(1)
 		self.counter_lock = threading.Lock()
 
-		self.hosts = defaultdict(list)
 		self.sessions = {}
 		self.listeners = {}
 		self.fileservers = {}
@@ -1760,6 +1755,15 @@ class Core:
 				return next(self.forwarding_counter)
 		else:
 			raise AttributeError(name)
+
+	@property
+	def hosts(self):
+		result = {}
+		for session in tuple(self.sessions.values()):
+			name = getattr(session, 'name', None)
+			if name:
+				result.setdefault(name, []).append(session)
+		return result
 
 	@property
 	def threads(self):
@@ -1803,7 +1807,7 @@ class Core:
 				# The listeners
 				elif readable.__class__ is TCPListener:
 					_socket, endpoint = readable.socket.accept()
-					if sum(1 for s in self.sessions.values() if s.ip == endpoint[0]) >= options.max_sessions:
+					if sum(1 for s in tuple(self.sessions.values()) if s.ip == endpoint[0]) >= options.max_sessions:
 						_socket.close()
 						logger.debug(f"Rejected {endpoint}: max sessions per host ({options.max_sessions}) reached")
 						continue
@@ -2314,7 +2318,6 @@ class Session:
 				if self not in core.rlist:
 					return
 				self.id = core.new_sessionID
-				core.hosts[self.name].append(self)
 				core.sessions[self.id] = self
 
 				new_banner = f"[New {self.source.title()} Shell]"
@@ -4303,16 +4306,15 @@ class Session:
 		portfwd_thread.start()
 
 	def maintain(self):
-		with core.lock:
-			current_num = len(core.hosts[self.name]) if core.hosts else 0
-			if 0 < current_num < options.maintain:
-				session = core.hosts[self.name][-1]
-				logger.warning(paint(
-						f" --- Session {session.id} is trying to maintain {options.maintain} "
-						f"active shells on {self.name} ---"
-					).blue)
-				return session.spawn()
+		hosts = core.hosts.get(self.name)
+		if not (hosts and len(hosts) < options.maintain):
 			return True
+		session = hosts[-1]
+		logger.warning(paint(
+			f" --- Session {session.id} is trying to maintain {options.maintain} "
+			f"active shells on {self.name} ---"
+		).blue)
+		return session.spawn()
 
 	def kill(self):
 		if self not in core.rlist:
@@ -4356,11 +4358,12 @@ class Session:
 			message = f"Incomplete shell from {self.ip} died during setup {EMOJIS['invalid_shell']}"
 		else:
 			message = f"Session [{self.id}] died..."
-			if self in core.hosts.get(self.name, ()):
-				core.hosts[self.name].remove(self)
-				if not core.hosts[self.name]:
-					message += f" We lost {self.name_colored} {EMOJIS['lost']}"
-					del core.hosts[self.name]
+			others = any(
+				s is not self and getattr(s, 'name', None) == self.name
+				for s in tuple(core.sessions.values())
+			)
+			if not others:
+				message += f" We lost {self.name_colored} {EMOJIS['lost']}"
 
 		if self.id in core.sessions:
 			del core.sessions[self.id]
