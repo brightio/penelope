@@ -330,8 +330,7 @@ class Size:
 				num, unit = int(string[:-1]), string[-1]
 				_bytes = num * 1024 ** __class__.units.index(unit)
 			except ValueError:
-				logger.error("Invalid size specified")
-				return # TEMP
+				raise ValueError(f"Invalid size specified: {string!r}")
 		return cls(_bytes)
 
 
@@ -798,6 +797,8 @@ class BetterCMD:
 
 class MainMenu(BetterCMD):
 
+	help_prompt = re.compile(r"Run 'help [^\']*' for more information")
+
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
 		self.set_id(None)
@@ -873,12 +874,11 @@ class MainMenu(BetterCMD):
 				core.sessions[menu.sid].subchannel.control << 'stop'
 
 	def show_help(self, command):
-		help_prompt = re.compile(r"Run 'help [^\']*' for more information") # TODO
 		parts = dedent(getattr(self, f"do_{command.split('|')[0]}").__doc__).split("\n")
 		print("\n", paint(command).green, paint(parts[1]).blue, "\n")
 		modified_parts = []
 		for part in parts[2:]:
-			part = help_prompt.sub('', part)
+			part = self.help_prompt.sub('', part)
 			modified_parts.append(part)
 		print(indent("\n".join(modified_parts), '    '))
 
@@ -2339,7 +2339,7 @@ class Session:
 					self.histfile = self.directory / "readline_history"
 					self.logfile = open(self.logpath, 'ab', buffering=0)
 					if not options.no_timestamps:
-						self.logfile.write(str(paint(datetime.now().strftime("%Y-%m-%d %H:%M:%S: ")).magenta).encode())
+						self.logfile.write(str(paint(datetime.now().strftime(LOG_TIMESTAMP_FMT)).magenta).encode())
 
 				for module in modules().values():
 					if module.enabled and module.on_session_start:
@@ -2702,7 +2702,7 @@ class Session:
 		return newfunc
 
 	def send(self, data, stdin=False):
-		with self.wlock: #TODO
+		with self.wlock:
 			if not self in core.rlist:
 				return False
 
@@ -2727,7 +2727,7 @@ class Session:
 		data = re.sub(rb'\x1b\x63', b'', data) # Need to include all Clear escape codes
 
 		if not options.no_timestamps:
-			timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S: ") #TEMP
+			timestamp = datetime.now().strftime(LOG_TIMESTAMP_FMT)
 			if not options.no_colored_timestamps:
 				timestamp = paint(timestamp).magenta
 			data = re.sub(rb'\r\n|\r|\n|\v|\f', rf"\g<0>{timestamp}".encode(), data)
@@ -2840,7 +2840,7 @@ class Session:
 		stderr_stream=None,	# stderr_stream object
 		agent_control=None	# control queue
 	):
-		if self.agent and not agent_typing: # TODO environment will not be the same as shell
+		if self.agent and not agent_typing: # Environment will not be the same as the PTY shell
 			if cmd:
 				cmd = dedent(cmd)
 				if value:
@@ -3943,30 +3943,33 @@ class Session:
 				del self.streams[stdout_stream.id]
 				del self.streams[stderr_stream.id]
 
-			else: # TODO
+			else:
 				tar_buffer.seek(0)
-				data = base64.b64encode(tar_buffer.read()).decode()
+				raw = tar_buffer.read()
+				data = base64.b64encode(raw).decode()
 				temp = self.tmp + "/" + rand(8)
 
 				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
-				pbar = PBar(len(data), caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+				pbar = PBar(len(raw), caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+				sent = 0
 				for chunk in chunks(data, options.upload_chunk_size):
-					response = self.exec(f"printf {chunk} >> {temp}")
+					response = self.exec(f"printf '%s' {chunk} >> {temp}")
 					if response is False:
 						pbar.terminate()
 						logger.error("Upload interrupted")
 						self.exec(f"rm {temp}")
 						return []
-					pbar.update(len(chunk))
+					sent += len(chunk)
+					pbar.update(int(len(raw) * sent / len(data)) - pbar.pos)
 
-				#logger.info(paint("--- Remote unpacking...").blue)
-				dest = f"-C {remote_path}" if remote_path else ""
+				logger.debug(paint("--- Remote unpacking...").blue)
+				dest = f"-C {shlex.quote(remote_path)}" if remote_path else ""
 				cmd = f"base64 -d < {temp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True)
 				exit_code = self.exec("echo $temp", value=True)
 				self.exec(f"rm {temp}")
 				if not (isinstance(exit_code, str) and exit_code.strip() == "0"):
-					logger.error(response)
+					logger.error(response if response else "Remote unpacking failed or timed out")
 					return []
 
 		elif self.OS == 'Windows':
@@ -6440,7 +6443,7 @@ stdout_handler.terminator = ''
 
 file_handler = logging.FileHandler(options.logfile)
 file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
-file_handler.setLevel('INFO') # ??? TODO
+file_handler.setLevel(logging.INFO)
 file_handler.terminator = ''
 
 debug_file_handler = logging.FileHandler(options.debug_logfile)
@@ -6473,6 +6476,7 @@ def terminal_emulator():
 	candidates += ['x-terminal-emulator', 'xdg-terminal-exec', *TERMINALS]
 	return next((term for term in candidates if shutil.which(term)), None)
 MAX_CMD_PROMPT_LEN = 335
+LOG_TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S: "
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 URLS = {
 	'python_linux_x86_64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-x86_64-unknown-linux-musl-install_only_stripped.tar.gz',
