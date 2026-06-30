@@ -6527,7 +6527,7 @@ URLS = {
 	'dirtyfrag':		"https://raw.githubusercontent.com/V4bel/dirtyfrag/refs/heads/master/exp.c",
 	'dirtypipe_zip':	"https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits/archive/refs/heads/main.zip",
 	'fullpowers':		"https://github.com/itm4n/FullPowers/releases/download/v0.1/FullPowers.exe",
-	'enablealltokenprivs':	"https://raw.githubusercontent.com/fashionproof/EnableAllTokenPrivs/master/EnableAllTokenPrivs.ps1",
+	'enablealltokenprivs':	"https://raw.githubusercontent.com/fashionproof/EnableAllTokenPrivs/3f108e80d6c460a2e554b18e9d3391d976b93ed2/EnableAllTokenPrivs.ps1",
 }
 
 PYTHON_STANDALONE_BINARIES = {
