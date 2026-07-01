@@ -32,6 +32,7 @@ import shlex
 import queue
 import struct
 import shutil
+import atexit
 import socket
 import signal
 import base64
@@ -75,7 +76,7 @@ from string import ascii_letters
 from random import choice, randint
 rand = lambda _len: ''.join(choice(ascii_letters) for i in range(_len))
 caller = lambda: inspect.stack()[2].function
-bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
+#bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
 pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{path}\x07{path.name}\x1b]8;;\x07'
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
@@ -385,7 +386,7 @@ class PBar:
 			self.speed = self.pos - self.pos_prev
 			self.pos_prev = self.pos
 			self.speed_avg = self.pos / self.elapsed
-			if self.speed_avg: self.eta = int((self.end - self.pos) / self.speed_avg)
+			if self.speed_avg: self.eta = max(0, int((self.end - self.pos) / self.speed_avg))
 			if self: self.render()
 
 	def update(self, step=1):
@@ -545,7 +546,10 @@ class LineBuffer:
 		return b'\n'.join(self.lines)
 
 def stdout(data, record=True):
-	os.write(sys.stdout.fileno(), data)
+	try:
+		os.write(sys.stdout.fileno(), data)
+	except OSError:
+		pass
 	if record:
 		core.output_line_buffer << data
 
@@ -3287,7 +3291,7 @@ class Session:
 				if python_binary:
 					if python_binary.endswith(".gz"):
 						python_binary = self.exec(f'PY_TMP="$(mktemp -d)" && tar -xzf "{python_binary}" -C "$PY_TMP" && export PATH="$PY_TMP/python/bin:$PATH" && ls $PY_TMP/python/bin/python3', value=True)
-						if not python_binary.startswith("/"):
+						if not (isinstance(python_binary, str) and python_binary.startswith("/")):
 							logger.error("Failed to deploy standalone python...")
 							python_binary = None
 					if python_binary:
@@ -3487,10 +3491,11 @@ class Session:
 				if not response:
 					logger.error("Cannot determine remote size")
 					return []
-				#errors = [line[4:] for line in response.splitlines() if line.startswith('du: ')]
-				#for error in errors:
-				#	logger.error(error)
-				remote_size = int(response.splitlines()[-1].split()[0]) * 1024
+				last_fields = response.splitlines()[-1].split()
+				if not (last_fields and last_fields[0].isdigit()):
+					logger.error("Cannot determine remote size")
+					return []
+				remote_size = int(last_fields[0]) * 1024
 
 			need = remote_size - available_bytes
 
@@ -3799,8 +3804,6 @@ class Session:
 				stdout_stream << (str(stats.f_bavail) + ';' + str(stats.f_frsize)).encode()
 				""", python=True, value=True)
 
-				remote_available_blocks, remote_block_size = map(int, response.split(';'))
-				remote_space = remote_available_blocks * remote_block_size
 				if isinstance(response, str) and response.count(';') == 1:
 					remote_available_blocks, remote_block_size = response.split(';')
 					if remote_available_blocks.isdigit() and remote_block_size.isdigit():
@@ -4828,6 +4831,7 @@ class upload_potato(Module):
 
 		if session.OS == "Unix":
 			logger.error("This module runs only on Windows shells")
+			return
 		elif session.OS == "Windows":
 			tools = {
 				"GodPotato": lambda: session.upload(URLS['godpotato']),
@@ -4840,6 +4844,7 @@ class upload_potato(Module):
 			}
 		else:
 			logger.error(f"Unsupported OS: {session.OS}")
+			return
 		if not requested:
 			logger.info("No tools specified, uploading all")
 			print()
@@ -4924,6 +4929,9 @@ class upload_credump_scripts(Module):
 
 	def upload_mimikatz(session):
 		_, archive = url_to_bytes(URLS['mimikatz'])
+		if not archive:
+			logger.error("Failed to download Mimikatz")
+			return
 		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
 			target = Path(tmpdir) / "mimikatz"
 			target.mkdir(parents=True, exist_ok=True)
@@ -4947,7 +4955,7 @@ class upload_credump_scripts(Module):
 				"mimikatz": __class__.upload_mimikatz,
 				"lazagne": lambda session: session.upload(URLS['lazagne']),
 				"snaffler": lambda session: session.upload(URLS['snaffler']),
-				"sahrpweb": lambda session: session.upload(URLS['sharpweb'])
+				"sharpweb": lambda session: session.upload(URLS['sharpweb'])
 			}
 
 			if not requested:
@@ -4970,6 +4978,9 @@ class upload_ad_scripts(Module):
 
 	def upload_sharphound(session):
 		_, archive = url_to_bytes(URLS['sharphound'])
+		if not archive:
+			logger.error("Failed to download SharpHound")
+			return
 		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
 			target = Path(tmpdir) / "sharphound"
 			target.mkdir(parents=True, exist_ok=True)
@@ -5049,7 +5060,7 @@ class uac(Module):
 			else:
 				logger.error(f"Extraction to {session.tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
 				return False
-		#	UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
+			# UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
 			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
 			base = re.sub(r'\.tar\.gz$', '', path)
 			cmd = f"cd {base}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
@@ -5060,7 +5071,7 @@ class uac(Module):
 				f.write(cmd)
 			logger.info(f"UAC output will be stored at {session.tmp}/uac-%hostname%-%os%-%timestamp%")
 			session.script(tf)
-		#	Once completed, transfer the output files to your host
+			# Once completed, transfer the output files to your host
 		else:
 			logger.error("This module runs only on Unix shells")
 
@@ -5102,6 +5113,9 @@ class ligolo(Module):
 				return
 
 			_, archive = url_to_bytes(url)
+			if not archive:
+				logger.error("Ligolo-ng: download failed")
+				return
 			with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tf:
 				f = tf.extractfile(tf.getmember("agent"))
 				if f is None:
@@ -5118,6 +5132,9 @@ class ligolo(Module):
 				return
 
 			_, archive = url_to_bytes(url)
+			if not archive:
+				logger.error("Ligolo-ng: download failed")
+				return
 			with zipfile.ZipFile(io.BytesIO(archive)) as z:
 				try:
 					session.upload(url, url_to_bytes_fn=lambda x: ('agent.exe', z.read("agent.exe")))
@@ -5145,6 +5162,9 @@ class chisel(Module):
 				return
 
 			_, archive = url_to_bytes(url)
+			if not archive:
+				logger.error("Chisel: download failed")
+				return
 			with gzip.GzipFile(fileobj=io.BytesIO(archive), mode="rb") as g:
 				session.upload(url, url_to_bytes_fn=lambda x: ('chisel', g.read()))
 
@@ -5159,6 +5179,9 @@ class chisel(Module):
 				return
 
 			_, archive = url_to_bytes(url)
+			if not archive:
+				logger.error("Chisel: download failed")
+				return
 			with zipfile.ZipFile(io.BytesIO(archive)) as z:
 				try:
 					session.upload(url, url_to_bytes_fn=lambda x: ('chisel.exe', z.read("chisel.exe")))
@@ -5179,6 +5202,9 @@ class ngrok(Module):
 				return False
 
 			_, archive = url_to_bytes(URLS['ngrok_linux'])
+			if not archive:
+				logger.error("Failed to download ngrok")
+				return
 			with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tf:
 				f = tf.extractfile(tf.getmember("ngrok"))
 				if f is None:
@@ -5492,7 +5518,7 @@ class FileServer:
 								'<input type="file" name="file" multiple>'
 								'<input type="submit" value="Upload"></form><hr>'
 							)
-						for path in filemap.keys():
+						for path in list(filemap.keys()):
 							safe_path = escape(path)
 							response += f'<li><a href="{safe_path}">{safe_path}</a></li>'
 						response = response.encode()
@@ -5587,7 +5613,7 @@ class FileServer:
 					path = unquote(path)
 				path = os.path.normpath(path)
 
-				for urlpath, filepath in filemap.items():
+				for urlpath, filepath in list(filemap.items()):
 					if path == urlpath:
 						return filepath
 					elif path.startswith(urlpath + '/'):
@@ -5711,6 +5737,7 @@ class MCPServer:
 		try:
 			path.parent.mkdir(parents=True, exist_ok=True)
 			fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+			os.fchmod(fd, 0o600)
 			with os.fdopen(fd, 'w') as f:
 				json.dump({'host': self.host, 'port': self.port, 'token': self.token}, f)
 		except OSError as e:
@@ -6129,11 +6156,15 @@ def listener_menu():
 def load_rc():
 	RC = Path(options.basedir / "peneloperc")
 	try:
-		with open(RC, "r") as rc:
-			exec(rc.read(), globals())
+		st = os.stat(RC)
 	except FileNotFoundError:
-		RC.touch()
-	os.chmod(RC, 0o600)
+		RC.touch(mode=0o600)
+		return
+	if st.st_uid not in (os.getuid(), 0) or (st.st_mode & 0o022):
+		logger.error(f"Refusing to load {RC}: writable by others or not owned by you "
+			f"(mode {oct(st.st_mode & 0o777)})")
+	with open(RC, "r") as rc:
+		exec(rc.read(), globals())
 
 # OPTIONS
 class Options:
@@ -6227,6 +6258,12 @@ class Options:
 			if value and value < self.maintain:
 				show(f"Max sessions per host increased to {self.maintain} to satisfy Maintain")
 				value = self.maintain
+
+		elif option == 'network_buffer_size':
+			_max = (1 << (8 * Messenger.LEN_BYTES)) - 1 - Messenger.TYPE_BYTES - Messenger.STREAM_BYTES
+			if isinstance(value, int) and value > _max:
+				show(f"network_buffer_size capped to {_max} (TLV frame limit)")
+				value = _max
 
 		elif option == 'no_bins':
 			if value is None:
@@ -6569,6 +6606,13 @@ try:
 except ImportError:
 	readline = None
 	default_readline_delims = None
+def _restore_terminal():
+	try:
+		termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
+		os.write(sys.stdout.fileno(), b"\x1b[?25h")
+	except Exception:
+		pass
+atexit.register(_restore_terminal)
 
 ## Create basic objects
 core = Core()
