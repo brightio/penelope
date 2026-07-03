@@ -340,14 +340,15 @@ from threading import Thread, RLock, current_thread
 class PBar:
 	pbars = []
 
-	def __init__(self, end, caption="", barlen=None, queue=None, metric=None):
+	def __init__(self, end, caption="", barlen=None, queue=None, metric=None, reverse=False):
 		self.end = end
 		if type(self.end) is not int: self.end = len(self.end)
 		self.active = True if self.end > 0 else False
 		self.pos = 0
 		self.percent = 0
 		self.caption = caption
-		self.bar = '#'
+		self.bar = '•'
+		self.reverse = reverse
 		self.barlen = barlen
 		self.percent_prev = -1
 		self.queue = queue
@@ -399,11 +400,12 @@ class PBar:
 
 	def render_one(self):
 		self.percent_prev = self.percent
-		left = f"{self.caption}["
+		left = f"{self.caption}"
 		elapsed = "" if not hasattr(self, 'elapsed') else f" | Elapsed {timedelta(seconds=self.elapsed)}"
 		speed = "" if not hasattr(self, 'speed') else f" | {self.metric(self.speed)}/s"
 		eta = "" if not hasattr(self, 'eta') else f" | ETA {timedelta(seconds=self.eta)}"
-		right = f"] {str(self.percent).rjust(3)}% ({self.metric(self.pos)}/{self.metric(self.end)}){speed}{elapsed}{eta}"
+		info = f"{str(self.percent).rjust(3)}% ({self.metric(self.pos)}/{self.metric(self.end)}){speed}{elapsed}{eta}"
+		right = f" {paint(info).darkgrey}"
 		if self.barlen:
 			bar_space = self.barlen
 		else:
@@ -412,8 +414,12 @@ class PBar:
 			except OSError:
 				columns = 80
 			bar_space = columns - len(left) - len(right)
-		bars = int(self.percent * bar_space / 100) * self.bar
-		print(f'\x1b[2K{left}{bars.ljust(bar_space, ".")}{right}\n', end='', flush=True)
+		n = int(self.percent * bar_space / 100)
+		color = 'softgreen' if self.reverse else 'softorange'
+		fill  = f"{getattr(paint(self.bar * n), color)}"
+		track = f"{paint('◦' * (bar_space - n)).darkgrey}"
+		filled = track + fill if self.reverse else fill + track
+		print(f'\x1b[2K{left}{filled}{right}\n', end='', flush=True)
 
 	def render(self):
 		if hasattr(__class__, 'render_lock'): __class__.render_lock.acquire()
@@ -455,7 +461,7 @@ class PBarReader:
 
 class paint:
 	_codes = {'RESET':0, 'BRIGHT':1, 'DIM':2, 'UNDERLINE':4, 'BLINK':5, 'NORMAL':22}
-	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':208, 'white':15, 'lightgrey':250, 'darkgrey':242}
+	_colors = {'black':0, 'red':1, 'green':2, 'yellow':3, 'blue':4, 'magenta':5, 'cyan':6, 'orange':208, 'white':15, 'lightgrey':250, 'darkgrey':242, 'softorange':173, 'softgreen':71}
 	_escape = lambda codes: f"\001\x1b[{codes}m\002"
 
 	def __init__(self, text=None, colors=None):
@@ -469,7 +475,7 @@ class paint:
 		return self.text
 
 	def __len__(self):
-		return len(self.text)
+		return len(re.sub(r'\x1b\[[0-9;]*m|[\x01\x02]', '', self.text)) if self.text else 0
 
 	def __add__(self, text):
 		return str(self) + str(text)
@@ -993,6 +999,7 @@ class MainMenu(BetterCMD):
 						if session.rtt_ms is not None:
 							jit = f"±{session.jitter_ms:.0f}" if session.jitter_ms else ""
 							sig += " " + str(paint(f"{session.rtt_ms:.0f}{jit}ms").darkgrey)
+						sig = paint(sig)
 						table += [
 							ID,
 							paint(session.type).CYAN if session.type == 'PTY' else session.type,
@@ -1732,7 +1739,7 @@ def signal_bars(level):
 	glyphs = "▁▃▅▇"
 	if level < 0:
 		return str(paint(" ···").darkgrey)
-	color = ("darkgrey", "red", "yellow", "green", "green")[level]
+	color = ("darkgrey", "red", "orange", "yellow", "green")[level]
 	return "".join(
 		str(getattr(paint(g), color)) if i < level else str(paint(g).darkgrey)
 		for i, g in enumerate(glyphs)
@@ -3684,7 +3691,7 @@ class Session:
 				send_size = int(send_size)
 
 				logger.trace(paint(f"⇣ Downloading to {local_download_folder}").cyan)
-				pbar = PBar(send_size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+				pbar = PBar(send_size, caption=f" {paint('⤷').softgreen} ", barlen=30, metric=Size, reverse=True)
 				b64data = io.BytesIO()
 				for offset in range(0, send_size, options.download_chunk_size):
 					response = self.exec(f"cut -c{offset + 1}-{offset + options.download_chunk_size} {temp}")
@@ -3715,7 +3722,7 @@ class Session:
 
 			pbar = None
 			if self.agent and remote_size:
-				pbar = PBar(remote_size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+				pbar = PBar(remote_size, caption=f" {paint('⤷').softgreen} ", barlen=30, metric=Size, reverse=True)
 				_oread = tar.fileobj.read
 				def _read_pbar(*a, _oread=_oread, _pbar=pbar, **k):
 					data = _oread(*a, **k)
@@ -3986,7 +3993,7 @@ class Session:
 
 			pbar = None
 			if self.agent and local_size:
-				pbar = PBar(local_size, caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+				pbar = PBar(local_size, caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size)
 				_orig_addfile = tar.addfile
 				def addfile_pbar(tarinfo, fileobj=None, *args, **kwargs):
 					if fileobj is not None:
@@ -4049,7 +4056,7 @@ class Session:
 				temp = self.tmp + "/" + rand(8)
 
 				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
-				pbar = PBar(len(raw), caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+				pbar = PBar(len(raw), caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size)
 				sent = 0
 				for chunk in chunks(data, options.upload_chunk_size):
 					body = "\n".join(chunks(chunk, 512))
@@ -6174,7 +6181,7 @@ def url_to_bytes(URL):
 	size = response.headers.get('Content-Length')
 	data = bytearray()
 	if size:
-		pbar = PBar(int(size), caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
+		pbar = PBar(int(size), caption=f" {paint('⤷').softgreen} ", barlen=30, metric=Size, reverse=True)
 	while True:
 		try:
 			chunk = response.read(options.network_buffer_size)
@@ -6336,6 +6343,7 @@ class Options:
 		self.mcp_host = ''
 		self.mcp_port = 0
 		self.mcp_token = ''
+		self.no_bins = ''
 
 	def __getattribute__(self, option):
 		if option in ("logfile", "debug_logfile", "cmd_histfile", "debug_histfile"):
