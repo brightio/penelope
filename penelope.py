@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.4"
+__version__ = "0.21.5"
 
 import os
 import io
@@ -2902,9 +2902,14 @@ class Session:
 						return True
 					except (ValueError, OSError):
 						return False
+
+				pending = {}
+				closing = set()
+
 				while rlist != [agent_control]:
+					wlist = [dst for dst in pending if pending[dst]]
 					try:
-						r, _, _ = select(rlist, [], [], timeout)
+						r, w, _ = select(rlist, wlist, [], timeout)
 					except (ValueError, OSError):
 						rlist = [x for x in rlist if _selectable(x)]
 						if not rlist or rlist == [agent_control]:
@@ -2913,7 +2918,22 @@ class Session:
 
 					timeout = None
 
-					if not r:
+					for dst in w:
+						try:
+							pending[dst] = pending[dst][dst.send(pending[dst]):]
+						except BlockingIOError:
+							pass
+						except OSError:
+							pending[dst] = b""
+							closing.add(dst)
+
+					for dst in tuple(closing):
+						if not pending.get(dst):
+							if dst in rlist:
+								rlist.remove(dst)
+							closing.discard(dst)
+
+					if not r and not w:
 						#stdin_stream.terminate()
 						#stdout_stream.terminate()
 						#stderr_stream.terminate()
@@ -2942,7 +2962,8 @@ class Session:
 							stdin_stream.write(data)
 							if not data:
 								#stdin_stream << b""
-								rlist.remove(stdin_src)
+								if stdin_src in rlist:
+									rlist.remove(stdin_src)
 
 						if readable is stdout_stream:
 							data = readable.read(options.network_buffer_size)
@@ -2952,15 +2973,10 @@ class Session:
 								if hasattr(stdout_dst, 'write'): # FIX
 									stdout_dst.write(data)
 									stdout_dst.flush()
-								elif hasattr(stdout_dst, 'sendall'):
-									try:
-										stdout_dst.sendall(data)
-										if not data:
-											if stdout_dst in rlist:
-												rlist.remove(stdout_dst)
-									except OSError:
-										if stdout_dst in rlist:
-											rlist.remove(stdout_dst)
+								elif data:
+									pending[stdout_dst] = pending.get(stdout_dst, b"") + data
+								else:
+									closing.add(stdout_dst)
 							if not data:
 								rlist.remove(readable)
 								del self.streams[readable.id]
@@ -2973,15 +2989,10 @@ class Session:
 								if hasattr(stderr_dst, 'write'): # FIX
 									stderr_dst.write(data)
 									stderr_dst.flush()
-								elif hasattr(stderr_dst, 'sendall'):
-									try:
-										stderr_dst.sendall(data)
-										if not data:
-											if stderr_dst in rlist:
-												rlist.remove(stderr_dst)
-									except OSError:
-										if stderr_dst in rlist:
-											rlist.remove(stderr_dst)
+								elif data:
+									pending[stderr_dst] = pending.get(stderr_dst, b"") + data
+								else:
+									closing.add(stderr_dst)
 							if not data:
 								rlist.remove(readable)
 								del self.streams[readable.id]
@@ -2991,7 +3002,7 @@ class Session:
 
 				stdin_stream << b"" # TOCHECK
 				stdin_stream.write(b"")
-				os.close(stdin_stream._read)
+				stdin_stream.close_read()
 				del self.streams[stdin_stream.id]
 
 				return buffer.getvalue().rstrip().decode(errors="replace") if value else True
@@ -3649,10 +3660,10 @@ class Session:
 			if self.agent:
 				stderr_thread.join()
 				stdin_stream.write(b"")
-				os.close(stdin_stream._read)
-				os.close(stdin_stream._write)
+				stdin_stream.close_read()
+				stdin_stream.close_write()
 				del self.streams[stdin_stream.id]
-				os.close(stdout_stream._read)
+				stdout_stream.close_read()
 				del self.streams[stdout_stream.id]
 				del self.streams[stderr_stream.id]
 
@@ -3944,9 +3955,9 @@ class Session:
 							logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
 					else:
 						break
-				os.close(stdin_stream._read)
-				os.close(stdin_stream._write)
-				os.close(stdout_stream._read)
+				stdin_stream.close_read()
+				stdin_stream.close_write()
+				stdout_stream.close_read()
 				del self.streams[stdin_stream.id]
 				del self.streams[stdout_stream.id]
 				del self.streams[stderr_stream.id]
@@ -4230,7 +4241,7 @@ class Session:
 					return
 
 				code = rf"""
-				import socket
+				import socket, errno
 				client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 				try:
 					client.connect(("{rhost}", {rport}))
@@ -4263,10 +4274,10 @@ class Session:
 								pending = pending + data
 						if client in writables:
 							try:
-								sent = client.send(pending)
+								pending = pending[client.send(pending):]
 							except socket.error:
-								break
-							pending = pending[sent:]
+								if sys.exc_info()[1].args[0] not in (errno.EAGAIN, errno.EWOULDBLOCK):
+									break
 						if stdin_done and not pending and not wr_shutdown:
 							try:
 								client.shutdown(socket.SHUT_WR)
@@ -4277,11 +4288,13 @@ class Session:
 							try:
 								data = client.recv({options.network_buffer_size})
 							except socket.error:
-								break
-							if not data:
-								remote_done = True
+								if sys.exc_info()[1].args[0] not in (errno.EAGAIN, errno.EWOULDBLOCK):
+									break
 							else:
-								stdout_stream.write(data)
+								if not data:
+									remote_done = True
+								else:
+									stdout_stream.write(data)
 					client.close()
 				else:
 					client.close()
@@ -4296,7 +4309,9 @@ class Session:
 					stdout_dst=self.request,
 					agent_control=control
 				)
-				os.close(stderr_stream._read) #TEMP
+				stderr_stream.close_read()
+				stderr_stream.close_write()
+				del session.streams[stderr_stream.id]
 
 		class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 			allow_reuse_address = True
@@ -4472,6 +4487,7 @@ class Stream:
 		self.feed_thread = None
 		self.session = _session
 		self.read_closed = False
+		self.write_closed = False
 
 		if self.session is None:
 			self.writefunc = lambda data: respond(self.id + data)
@@ -4492,10 +4508,7 @@ class Stream:
 		while True:
 			data = self.writebuf.get()
 			if not data:
-				try:
-					os.close(self._write)
-				except OSError:
-					pass
+				self.close_write()
 				break
 			try:
 				os.write(self._write, data)
@@ -4507,6 +4520,21 @@ class Stream:
 
 	def write(self, data):
 		self.writefunc(data)
+
+	def close_write(self):
+		if not self.write_closed:
+			self.write_closed = True
+			try:
+				os.close(self._write)
+			except OSError:
+				pass
+
+	def close(self):
+		self.close_read()
+		self.close_write()
+
+	def __del__(self):
+		self.close()
 
 	def close_read(self):
 		if not self.read_closed:
@@ -4682,9 +4710,9 @@ def agent():
 									os.dup2(stderr_stream._write, 2)
 									os.execl("{}", "sh", "-c", cmd)
 									os._exit(1)
-								os.close(stdin_stream._read)
-								os.close(stdout_stream._write)
-								os.close(stderr_stream._write)
+								stdin_stream.close_read()
+								stdout_stream.close_write()
+								stderr_stream.close_write()
 
 							elif __type == 'P'.encode():
 								def run(stdin_stream, stdout_stream, stderr_stream):
@@ -4693,9 +4721,8 @@ def agent():
 									except:
 										stderr_stream << (str(sys.exc_info()[1]) + "\n").encode()
 									stdin_stream.close_read()
-
-									#if stdin_stream_id in streams:
-									#	del streams[stdin_stream_id]
+									stdin_stream << "".encode()
+									streams.pop(stdin_stream.id, None)
 									stdout_stream << "".encode()
 									stderr_stream << "".encode()
 								threading.Thread(target=run, args=(stdin_stream, stdout_stream, stderr_stream)).start()
@@ -4703,9 +4730,9 @@ def agent():
 						# Incoming streams
 						elif _type == Messenger.STREAM:
 							stream_id, data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
-							if not stream_id in streams:
-								streams[stream_id] = Stream(stream_id)
-							streams[stream_id] << data
+							target_stream = streams.get(stream_id)
+							if target_stream is not None:
+								target_stream << data
 
 				# Outgoing streams
 				else:
