@@ -1815,7 +1815,12 @@ class Core:
 
 				# The listeners
 				elif readable.__class__ is TCPListener:
-					_socket, endpoint = readable.socket.accept()
+					try:
+						_socket, endpoint = readable.socket.accept()
+					except BlockingIOError:
+						continue
+					except OSError:
+						continue
 					if sum(1 for s in tuple(self.sessions.values()) if s.ip == endpoint[0]) >= options.max_sessions:
 						_socket.close()
 						logger.debug(f"Rejected {endpoint}: max sessions per host ({options.max_sessions}) reached")
@@ -4241,7 +4246,7 @@ class Session:
 					return
 
 				code = rf"""
-				import socket, errno
+				import socket
 				client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 				try:
 					client.connect(("{rhost}", {rport}))
@@ -4265,7 +4270,7 @@ class Session:
 							wlist.append(client)
 						if not rlist and not wlist:
 							break
-						readables, writables, _ = select(rlist, wlist, [])
+						readables, writables, _ = select.select(rlist, wlist, [])
 						if stdin_stream in readables:
 							data = stdin_stream.read({options.network_buffer_size})
 							if not data:
@@ -4554,16 +4559,7 @@ class Stream:
 		return data
 
 def agent():
-	import os
-	import sys
-	import pty
-	import shlex
-	import fcntl
-	import struct
-	import signal
-	import termios
-	import threading
-	from select import select
+	import os, sys, pty, shlex, fcntl, errno, struct, signal, termios, select, threading
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 	normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
@@ -4632,12 +4628,12 @@ def agent():
 
 		while True:
 			try:
-				rfds, wfds, _ = select(rlist, wlist, [])
+				rfds, wfds, _ = select.select(rlist, wlist, [])
 			except Exception:
 				for _fdlist in (rlist, wlist):
 					for _fd in _fdlist[:]:
 						try:
-							select([_fd], [], [], 0)
+							select.select([_fd], [], [], 0)
 						except Exception:
 							_fdlist.remove(_fd)
 				continue
@@ -4649,7 +4645,10 @@ def agent():
 				elif readable is master_fd:
 					try:
 						data = os.read(master_fd, NET_BUF_SIZE)
-					except:
+					except OSError:
+						e = sys.exc_info()[1]
+						if e.args and e.args[0] in (errno.EAGAIN, errno.EWOULDBLOCK):
+							continue
 						data = ''.encode()
 					respond(data, Messenger.SHELL)
 					if not data:
@@ -4662,7 +4661,10 @@ def agent():
 				elif readable is pty.STDIN_FILENO:
 					try:
 						data = os.read(pty.STDIN_FILENO, NET_BUF_SIZE)
-					except:
+					except OSError:
+						e = sys.exc_info()[1]
+						if e.args and e.args[0] in (errno.EAGAIN, errno.EWOULDBLOCK):
+							continue
 						data = None
 					if not data:
 						rlist.remove(pty.STDIN_FILENO)
@@ -4755,7 +4757,9 @@ def agent():
 					try:
 						sent = os.write(writable, sendbuf.getvalue())
 					except OSError:
-						wlist.remove(writable)
+						e = sys.exc_info()[1]
+						if not (e.args and e.args[0] in (errno.EAGAIN, errno.EWOULDBLOCK)):
+							wlist.remove(writable)
 						if sendbuf is outbuf:
 							wlock.release()
 						continue
