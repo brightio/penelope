@@ -980,7 +980,7 @@ class MainMenu(BetterCMD):
 						continue
 					print('\n➤  ' + sessions[0].name_colored)
 					table = Table(joinchar=' | ')
-					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source')]
+					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source', 'Recv ↓', 'Sent ↑', 'Signal')]
 					for session in tuple(sessions):
 						if self.sid == session.id:
 							ID = paint('[' + str(session.id) + ']').red
@@ -989,11 +989,18 @@ class MainMenu(BetterCMD):
 						else:
 							ID = paint(' ' + str(session.id)).yellow
 						source = session.listener or f'Connect({session._host}:{session.port})'
+						sig = signal_bars(session.signal)
+						if session.rtt_ms is not None:
+							jit = f"±{session.jitter_ms:.0f}" if session.jitter_ms else ""
+							sig += " " + str(paint(f"{session.rtt_ms:.0f}{jit}ms").darkgrey)
 						table += [
 							ID,
 							paint(session.type).CYAN if session.type == 'PTY' else session.type,
 							session.user or 'N/A',
-							source
+							source,
+							Size(session.bytes_received),
+							Size(session.bytes_sent),
+							sig
 						]
 					print("\n", indent(str(table), "    "), "\n", sep="")
 			else:
@@ -1714,6 +1721,22 @@ class ControlQueue:
 		except OSError:
 			pass
 
+def signal_level(rtt_ms, loss=False, jitter_ms=0):
+	if rtt_ms is None:
+		return -1
+	lvl = 4 if rtt_ms < 30 else 3 if rtt_ms < 80 else 2 if rtt_ms < 150 else 1
+	unstable = loss or (jitter_ms or 0) > 30
+	return max(1, lvl - (1 if unstable else 0))
+
+def signal_bars(level):
+	glyphs = "▁▃▅▇"
+	if level < 0:
+		return str(paint(" ···").darkgrey)
+	color = ("darkgrey", "red", "yellow", "green", "green")[level]
+	return "".join(
+		str(getattr(paint(g), color)) if i < level else str(paint(g).darkgrey)
+		for i, g in enumerate(glyphs)
+	)
 
 class Core:
 
@@ -1776,6 +1799,30 @@ class Core:
 	def start(self):
 		self.started = True
 		threading.Thread(target=self.loop, name="Core").start()
+		threading.Thread(target=self.sample_signals, name="SignalSampler", daemon=True).start()
+
+	def sample_signals(self):
+		prev = {}
+		while self.started:
+			for session in tuple(self.sessions.values()):
+				try:
+					sig = session.tcp_signal()
+					if sig is not None:
+						rtt, jitter, retrans = sig
+						loss = retrans > prev.get(session.id, retrans)
+						prev[session.id] = retrans
+					elif session.latency is not None:
+						rtt, jitter, loss = session.latency * 1000.0, 0, False
+					else:
+						continue
+					session.rtt_ms    = rtt    if session.rtt_ms    is None else 0.7 * session.rtt_ms    + 0.3 * rtt
+					session.jitter_ms = jitter if session.jitter_ms is None else 0.7 * session.jitter_ms + 0.3 * jitter
+					session.signal = signal_level(session.rtt_ms, loss, session.jitter_ms)
+				except Exception:
+					continue
+			for sid in set(prev) - set(self.sessions):
+				prev.pop(sid, None)
+			time.sleep(2)
 
 	def loop(self):
 
@@ -1870,6 +1917,7 @@ class Core:
 						logger.debug("Died while reading")
 						readable.kill()
 						break
+					readable.bytes_received += len(data)
 
 					# TODO need thread sync
 					target = readable.shell_response_buf\
@@ -1919,6 +1967,7 @@ class Core:
 				with writable.wlock:
 					try:
 						sent = writable.socket.send(writable.outbuf.getvalue())
+						writable.bytes_sent += sent
 					except BlockingIOError:
 						continue
 					except OSError:
@@ -2262,6 +2311,11 @@ class Session:
 			self.wlock = threading.Lock()
 
 			self.outbuf = io.BytesIO()
+			self.bytes_sent = 0
+			self.bytes_received = 0
+			self.rtt_ms = None
+			self.jitter_ms = None
+			self.signal = -1
 			self.shell_response_buf = io.BytesIO()
 
 			self.tasks = {"portfwd":[], "scripts":[]}
@@ -2713,6 +2767,21 @@ class Session:
 			return func(self, *args, **kwargs)
 		return newfunc
 
+	def tcp_signal(self):
+		TCP_INFO = getattr(socket, 'TCP_INFO', None)
+		if TCP_INFO is None:
+			return None
+		try:
+			buf = self.socket.getsockopt(socket.IPPROTO_TCP, TCP_INFO, 104)
+		except OSError:
+			return None
+		if len(buf) < 104:
+			return None
+		rtt     = struct.unpack_from('I', buf, 68)[0] / 1000.0
+		jitter  = struct.unpack_from('I', buf, 72)[0] / 1000.0
+		retrans = struct.unpack_from('I', buf, 100)[0]
+		return rtt, jitter, retrans
+
 	def send(self, data, stdin=False):
 		with self.wlock:
 			if not self in core.rlist:
@@ -3086,6 +3155,7 @@ class Session:
 
 			last_data = time.perf_counter()
 			need_check = False
+			first_byte = True
 			try:
 				while self.subchannel.result is None:
 					logger.debug(paint(f"Waiting for data (timeout={timeout})...").blue)
@@ -3100,8 +3170,13 @@ class Session:
 							break
 
 					if self.subchannel in readables:
-						logger.debug(f"Latency: {time.perf_counter() - last_data}")
-						last_data = time.perf_counter()
+						now = time.perf_counter()
+						if first_byte:
+							rtt = now - last_data
+							self.latency = rtt if self.latency is None else 0.7 * self.latency + 0.3 * rtt
+							first_byte = False
+						logger.debug(f"Latency: {now - last_data}")
+						last_data = now
 
 						data = self.subchannel.read()
 						buffer.write(data)
@@ -3977,7 +4052,9 @@ class Session:
 				pbar = PBar(len(raw), caption=f" {paint('⤷').cyan} ", barlen=40, metric=Size)
 				sent = 0
 				for chunk in chunks(data, options.upload_chunk_size):
-					response = self.exec(f"printf '%s' {chunk} >> {temp}")
+					body = "\n".join(chunks(chunk, 512))
+					term = "UP_" + rand(16)
+					response = self.exec(f"cat >> {temp} <<'{term}'\n{body}\n{term}\n:")
 					if response is False:
 						pbar.terminate()
 						logger.error("Upload interrupted")
@@ -3988,7 +4065,7 @@ class Session:
 
 				logger.debug(paint("--- Remote unpacking...").blue)
 				dest = f"-C {shlex.quote(remote_path)}" if remote_path else ""
-				cmd = f"base64 -d < {temp} | tar xz {dest} 2>&1; temp=$?"
+				cmd = f"{{ base64 -d 2>/dev/null || base64 -D; }} < {temp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True)
 				exit_code = self.exec("echo $temp", value=True)
 				self.exec(f"rm {temp}")
@@ -6242,7 +6319,7 @@ class Options:
 		self.max_open_files = 5
 		self.verify_ssl_cert = True
 		self.proxy = ''
-		self.upload_chunk_size = 51200
+		self.upload_chunk_size = 1048576
 		self.download_chunk_size = 1048576
 		self.network_buffer_size = 32768
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
