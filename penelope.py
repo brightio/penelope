@@ -30,6 +30,7 @@ import gzip
 import json
 import shlex
 import queue
+import codecs
 import struct
 import shutil
 import atexit
@@ -65,11 +66,9 @@ from binascii import Error as binascii_error
 from functools import wraps
 from contextlib import ExitStack
 from collections import deque, defaultdict
-from http.server import SimpleHTTPRequestHandler
 from urllib.parse import unquote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ################################## PYTHON MISSING BATTERIES ####################################
 from string import ascii_letters
@@ -130,7 +129,7 @@ def Open(item, terminal=False):
 	if process.stderr in r:
 		error = os.read(process.stderr.fileno(), 1024)
 		if error:
-			logger.error(error.decode())
+			logger.error(error.decode(errors="replace"))
 			return False
 	return True
 
@@ -163,7 +162,7 @@ class Interfaces:
 		if busybox:
 			params.insert(0, 'busybox')
 		try:
-			output = subprocess.check_output(params, stderr=subprocess.DEVNULL).decode()
+			output = subprocess.check_output(params, stderr=subprocess.DEVNULL).decode(errors="replace")
 		except (subprocess.CalledProcessError, OSError):
 			return interfaces
 		for line in output.splitlines():
@@ -181,7 +180,7 @@ class Interfaces:
 	def ifconfig():
 		interfaces = []
 		try:
-			output = subprocess.check_output(['ifconfig'], stderr=subprocess.DEVNULL).decode()
+			output = subprocess.check_output(['ifconfig'], stderr=subprocess.DEVNULL).decode(errors="replace")
 		except (subprocess.CalledProcessError, OSError):
 			return interfaces
 		current_interface = None
@@ -517,10 +516,10 @@ class CustomFormatter(logging.Formatter):
 		suffix = "\r\n"
 
 		if core.wait_input:
-			suffix += bytes(core.output_line_buffer).decode() + (readline.get_line_buffer() if readline else '')
+			suffix += bytes(core.output_line_buffer).decode(errors="replace") + (readline.get_line_buffer() if readline else '')
 
 		elif core.attached_session:
-			suffix += bytes(core.output_line_buffer).decode()
+			suffix += bytes(core.output_line_buffer).decode(errors="replace")
 
 		text = f"{template['prefix']}{thread} {logging.Formatter.format(self, record)}"
 		return f"{prefix}{getattr(paint(text), template['color'])}{suffix}"
@@ -1903,7 +1902,7 @@ class Core:
 							session.detach()
 						else:
 							if session.type == 'Raw':
-								session.record(data, _input=not session.interactive)
+								session.record(data, _input=True)
 
 							elif session.agent:
 								data = Messenger.message(Messenger.SHELL, data)
@@ -2408,7 +2407,8 @@ class Session:
 				self.directory = options.basedir / "sessions" / self.name.replace("/", "_")
 				if not options.no_log:
 					self.directory.mkdir(parents=True, exist_ok=True)
-					self.logpath = self.directory / f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}-{self.user.replace("/", "_")}.log'
+					self.logpath = self.directory /\
+					f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}-{re.sub(r"[\\/]", "_", self.user).replace("(", "_").replace(")", "")}.log'
 					self.histfile = self.directory / "readline_history"
 					self.logfile = open(self.logpath, 'ab', buffering=0)
 					if not options.no_timestamps:
@@ -2697,11 +2697,13 @@ class Session:
 					binaries = [
 						"sh", "bash", "python", "python3", "uname",
 						"tty", "echo", "base64", "wget", "curl", "tar",
-						"rm", "stty", "setsid", "find", "nc"
+						"rm", "stty", "setsid", "find", "nc",
+						"tr", "sed", "stat", "awk", "tail", "cut", "df", "id",
+						"cat", "mkfifo", "grep", "mktemp", "gzip", "chmod"
 					]
 					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
 					if response:
-						self._bin.update(zip(binaries, response.decode().splitlines()))
+						self._bin.update(zip(binaries, response.decode(errors="replace").splitlines()))
 
 					missing = [b for b in binaries if not os.path.isabs(self._bin[b])]
 
@@ -2713,7 +2715,7 @@ class Session:
 							'test -f $_bin && break || unset _bin; done; echo $_bin; done'
 						)
 						if response:
-							self._bin.update(dict(zip(missing, response.decode().splitlines())))
+							self._bin.update(dict(zip(missing, response.decode(errors="replace").splitlines())))
 
 				for binary in options.no_bins:
 					self._bin[binary] = None
@@ -2740,7 +2742,7 @@ class Session:
 				else:
 					candidate_dirs = self.exec("find / -type d -writable 2>/dev/null")
 					if candidate_dirs:
-						for directory in candidate_dirs.decode().splitlines():
+						for directory in candidate_dirs.decode(errors="replace").splitlines():
 							if directory in common_dirs:
 								continue
 							if self.exec(f'echo {tmpname} > {directory}/{tmpname} 2>/dev/null && echo OK', value=True) == 'OK':
@@ -2814,16 +2816,17 @@ class Session:
 		#data=re.sub(rb'(\x1b\x63|\x1b\x5b\x3f\x31\x30\x34\x39\x68|\x1b\x5b\x3f\x31\x30\x34\x39\x6c)', b'', data)
 		data = re.sub(rb'\x1b\x63', b'', data) # Need to include all Clear escape codes
 
+		if _input:
+			data = re.sub(rb'[^\r\n]+',
+				lambda m: str(paint(m.group().decode(errors="replace")).GREEN_white).encode(), data)
+
 		if not options.no_timestamps:
 			timestamp = datetime.now().strftime(LOG_TIMESTAMP_FMT)
 			if not options.no_colored_timestamps:
 				timestamp = paint(timestamp).magenta
 			data = re.sub(rb'\r\n|\r|\n|\v|\f', rf"\g<0>{timestamp}".encode(), data)
 		try:
-			if _input:
-				self.logfile.write(bytes(paint('ISSUED ==>').GREEN + ' ', encoding='utf8'))
 			self.logfile.write(data)
-
 		except ValueError:
 			logger.debug("The session killed abnormally")
 
@@ -2858,6 +2861,8 @@ class Session:
 
 			if var_value1 + var_value2 in response:
 				self.OS = 'Unix'
+				if not options.keep_history:
+					self.exec("export HISTFILE=/dev/null HISTCONTROL=ignorespace 2>/dev/null")
 				self.prompt = re.search(f"{var_value1}{var_value2}\n(.*)", response, re.DOTALL)
 				if self.prompt:
 					self.prompt = self.prompt.group(1).encode()
@@ -3123,7 +3128,7 @@ class Session:
 						cmd = (
 							f" {token[0]}={token[1]} {token[2]}={token[3]};"
 							f"printf ${token[0]}${token[2]};"
-							f"{cmd.decode()};"
+							f"{initial_cmd};"
 							f"printf ${token[2]}${token[0]}\n".encode()
 						)
 
@@ -3131,13 +3136,13 @@ class Session:
 						if self.subtype == 'cmd':
 							cmd = (
 								f"set {token[0]}={token[1]}&set {token[2]}={token[3]}\r\n"
-								f"echo %{token[0]}%%{token[2]}%&{cmd.decode()}&"
+								f"echo %{token[0]}%%{token[2]}%&{initial_cmd}&"
 								f"echo %{token[2]}%%{token[0]}%\r\n".encode()
 							)
 						elif self.subtype == 'psh':
 							cmd = (
 								f"$env:{token[0]}=\"{token[1]}\";$env:{token[2]}=\"{token[3]}\"\r\n"
-								f"echo $env:{token[0]}$env:{token[2]};{cmd.decode()};"
+								f"echo $env:{token[0]}$env:{token[2]};{initial_cmd};"
 								f"echo $env:{token[2]}$env:{token[0]}\r\n".encode()
 							)
 						# TODO check the maxlength on powershell
@@ -3154,7 +3159,7 @@ class Session:
 				if self.agent and agent_typing:
 					cmd = Messenger.message(Messenger.SHELL, cmd)
 				self.send(cmd)
-				self.subchannel.allow_receive_shell_data = False # TODO
+				self.subchannel.allow_receive_shell_data = False # It works but maybe needs better sync
 
 			data_timeout = self.timeout_short if timeout is False else timeout
 			continuation_timeout = options.latency
@@ -3245,6 +3250,7 @@ class Session:
 				self.subchannel.result = self.subchannel.result.strip().decode(errors="replace") # TODO check strip
 			logger.debug(f"{paint('FINAL RESPONSE: ').white_BLUE}{self.subchannel.result}")
 			self.subchannel.active = False
+			self.subchannel.allow_receive_shell_data = True
 
 			if separate and self.subchannel.result:
 				marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
@@ -3444,6 +3450,7 @@ class Session:
 				logger.error(f"Maximum prompt length is {MAX_CMD_PROMPT_LEN} characters. Current prompt is {len(cmd)}")
 			else:
 				if core.attached_session == self:
+					self.record(cmd.encode() + b"\n", _input=True)
 					self.send(cmd.encode() + b"\n")
 
 	def attach(self):
@@ -3632,7 +3639,7 @@ class Session:
 					tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 				else:
 					tarfile.TarFile.posix = True
-				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream, dereference={repr(options.link_dereference)})
+				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream, dereference={repr(options.link_dereference)}, bufsize=NET_BUF_SIZE)
 				def handle_exceptions(func):
 					def inner(*args, **kwargs):
 						try:
@@ -3658,16 +3665,18 @@ class Session:
 
 				logger.trace(paint(f"⇣ Downloading to {local_download_folder}").cyan)
 				def drain_stderr():
+					dec = codecs.getincrementaldecoder('utf-8')(errors='replace')
 					error_buffer = ''
 					while True:
 						r, _, _ = select([stderr_stream], [], [])
 						data = stderr_stream.read(options.network_buffer_size)
 						if data:
-							error_buffer += data.decode()
+							error_buffer += dec.decode(data)
 							while '\n' in error_buffer:
 								line, error_buffer = error_buffer.split('\n', 1)
 								logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
 						else:
+							error_buffer += dec.decode(b'', final=True)
 							break
 				stderr_thread = threading.Thread(target=drain_stderr)
 				stderr_thread.start()
@@ -3698,6 +3707,8 @@ class Session:
 					if response is False:
 						pbar.terminate()
 						logger.error("Download interrupted")
+						if self:
+							self.exec(f"rm {temp}")
 						return []
 					b64data.write(response)
 					pbar.update(len(response))
@@ -3715,7 +3726,7 @@ class Session:
 
 			# Local extraction
 			try:
-				tar = tarfile.open(mode=mode, fileobj=tar_source)
+				tar = tarfile.open(mode=mode, fileobj=tar_source, bufsize=options.network_buffer_size)
 			except Exception:
 				logger.error("Invalid data returned")
 				return []
@@ -3801,10 +3812,9 @@ class Session:
 				)
 
 				with tempfile.NamedTemporaryFile("w", suffix=".bat", delete=False) as f:
-					f.write(cmd)
 					tempfile_bat = f.name
-
-				stack.callback(lambda p=tempfile_bat: os.path.exists(p) and os.remove(p))
+					stack.callback(lambda p=tempfile_bat: os.path.exists(p) and os.remove(p))
+					f.write(cmd)
 
 				server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
 				urlpath_bat = server.add(tempfile_bat)
@@ -3814,6 +3824,9 @@ class Session:
 				stack.callback(lambda: server.term.wait(options.timeout_short))
 				stack.callback(lambda: server.stop())
 				server.init.wait(options.timeout_short)
+
+				if not hasattr(server, 'id'):
+					return []
 
 				_url = f'http://{self._host}:{server.port}{urlpath_bat}'
 				_dest = f'%TEMP%\\{temp_remote_file_bat}'
@@ -3958,11 +3971,14 @@ class Session:
 					tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 				else:
 					tarfile.TarFile.posix = True
-				tar = tarfile.open(name='', mode='r|gz', fileobj=stdin_stream)
+				tar = tarfile.open(name='', mode='r|gz', fileobj=stdin_stream, bufsize=NET_BUF_SIZE)
 				tar.errorlevel = 1
 				for item in tar:
 					try:
-						tar.extract(item, path=normalize_path('{destination}'))
+						if sys.version_info >= (3, 12):
+							tar.extract(item, path=normalize_path('{destination}'), filter='fully_trusted')
+						else:
+							tar.extract(item, path=normalize_path('{destination}'))
 					except:
 						stderr_stream << (str(sys.exc_info()[1]) + '\n').encode()
 				tar.close()
@@ -3980,7 +3996,7 @@ class Session:
 				tar_buffer = io.BytesIO()
 				tar_destination, mode = tar_buffer, "r:gz"
 
-			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, dereference=options.link_dereference)
+			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, dereference=options.link_dereference, bufsize=options.network_buffer_size)
 
 			def handle_exceptions(func):
 				def inner(*args, **kwargs):
@@ -4028,6 +4044,7 @@ class Session:
 				if pbar:
 					pbar.update(pbar.end)
 				stdin_stream.write(b"")
+				dec = codecs.getincrementaldecoder('utf-8')(errors='replace')
 				error_buffer = ''
 				while True:
 					r, _, _ = select([stderr_stream], [], [], self.timeout_short)
@@ -4036,11 +4053,12 @@ class Session:
 							return []
 					data = stderr_stream.read(options.network_buffer_size)
 					if data:
-						error_buffer += data.decode()
+						error_buffer += dec.decode(data)
 						while '\n' in error_buffer:
 							line, error_buffer = error_buffer.split('\n', 1)
 							logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
 					else:
+						error_buffer += dec.decode(b'', final=True)
 						break
 				stdin_stream.close_read()
 				stdin_stream.close_write()
@@ -4219,7 +4237,7 @@ class Session:
 			first_line = input_file.readline().strip()
 			#input_file.seek(0) # Maybe it is not needed
 			if first_line.startswith(b'#!'):
-				program = first_line[2:].decode()
+				program = first_line[2:].decode(errors="replace")
 			else:
 				logger.error("No shebang found")
 				return False
@@ -5632,6 +5650,7 @@ class FileServer:
 						pass
 				super().shutdown()
 
+		from http.server import SimpleHTTPRequestHandler
 		class CustomHandler(SimpleHTTPRequestHandler):
 			def do_GET(self):
 				try:
@@ -6199,6 +6218,7 @@ def url_to_bytes(URL):
 	return filename, data
 
 def check_urls():
+	from concurrent.futures import ThreadPoolExecutor, as_completed
 	threads = 10
 	global URLS
 	urls = URLS.values()
@@ -6317,6 +6337,7 @@ class Options:
 		self.single_session = False
 		self.no_attach = False
 		self.no_upgrade = False
+		self.keep_history = False
 		self.debug = False
 		self.dev_mode = False
 		self.latency = .01
@@ -6463,6 +6484,7 @@ def main():
 	misc.add_argument("-ms", "--max-sessions", help="Max active sessions per host (default 5, 0 = reject all new)", type=int, metavar='')
 	misc.add_argument("-C", "--no-attach", help="Do not auto-attach on new sessions", action="store_true")
 	misc.add_argument("-U", "--no-upgrade", help="Disable shell auto-upgrade", action="store_true")
+	misc.add_argument("-H", "--keep-history", help="Keep target shell history (do not set HISTFILE=/dev/null)", action="store_true")
 	misc.add_argument("-O", "--oscp-safe", help="Enable OSCP-safe mode", action="store_true")
 
 	mcp = parser.add_argument_group("MCP")
