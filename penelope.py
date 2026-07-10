@@ -2847,7 +2847,7 @@ class Session:
 				return re.search('or operable.*>', data, re.DOTALL)
 			elif re.search('Microsoft Windows.*>', data, re.DOTALL):
 				return True
-			elif re.search(r'[A-Za-z]:\\[^\r\n]*>\s*$', response):
+			elif re.search(r'(?<!PS )[A-Za-z]:\\[^\r\n]*>\s*$', data):
 				return True
 
 		response = self.exec(
@@ -2871,7 +2871,7 @@ class Session:
 
 			elif f"'{var_name1}' is not recognized as an internal or external command" in response or \
 					re.search('Microsoft Windows.*>', response, re.DOTALL) or \
-					re.search(r'[A-Za-z]:\\[^\r\n]*>\s*$', response):
+					re.search(r'(?<!PS )[A-Za-z]:\\[^\r\n]*>\s*$', response):
 				self.OS = 'Windows'
 				self.type = 'Raw'
 				self.subtype = 'cmd'
