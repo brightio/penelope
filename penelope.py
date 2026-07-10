@@ -2346,6 +2346,7 @@ class Session:
 			self._tmp = None
 			self._cwd = None
 			self._can_deploy_agent = None
+			self._has_persistent_shell = None
 
 			self.upgrade_attempted = False
 			self.upgrade_standalone_attempted = False
@@ -2513,6 +2514,21 @@ class Session:
 					self._can_deploy_agent = False
 
 		return self._can_deploy_agent
+
+	@property
+	def has_persistent_shell(self):
+		if self._has_persistent_shell is None:
+			if self.OS != "Unix":
+				self._has_persistent_shell = True
+			else:
+				pid1 = self.exec("echo $$", value=True)
+				pid2 = self.exec("echo $$", value=True)
+				self._has_persistent_shell = not (
+					pid1 and pid2
+					and pid1.isdigit() and pid2.isdigit()
+					and pid1 != pid2
+				)
+		return self._has_persistent_shell
 
 	def get_system_info(self):
 		self.hostname = self.system = self.arch = ''
@@ -2773,6 +2789,31 @@ class Session:
 				else:
 					logger.error("This can only run in python agent mode")
 					return False
+			return func(self, *args, **kwargs)
+		return newfunc
+
+	def persistent_shell_only(func):
+		@wraps(func)
+		def newfunc(self, *args, **kwargs):
+			if not self.agent and not self.has_persistent_shell:
+				logger.error(
+					"This shell runs each command in a fresh process; "
+					f"'{func.__name__}' needs a persistent shell. Run 'spawn' "
+					"and use the resulting session."
+				)
+				return []
+			return func(self, *args, **kwargs)
+		return newfunc
+
+	def prefer_agent(func):
+		@wraps(func)
+		def newfunc(self, *args, **kwargs):
+			if (not self.agent
+					and not self.upgrade_attempted
+					and not options.no_upgrade
+					and self.can_deploy_agent):
+				logger.debug(f"'{func.__name__}' prefers the agent; attempting upgrade")
+				self.upgrade()
 			return func(self, *args, **kwargs)
 		return newfunc
 
@@ -3316,6 +3357,21 @@ class Session:
 				logger.error("Cannot detect shell. Abort upgrading...")
 				return False
 
+			if not self.has_persistent_shell:
+				logger.warning(
+					"Non-persistent shell (fresh process per command); the Python "
+					"agent cannot attach in-band. Spawning a persistent reverse "
+					"shell on the same listener to upgrade."
+				)
+				if self.spawn():
+					self.type = 'Readline'
+					return True
+				logger.error("Could not spawn a persistent shell for upgrade")
+				if readline:
+					self.type = 'Readline'
+					return True
+				return False
+
 			standalone_file = self.directory / "standalone_python"
 			if not self.standalone_python and standalone_file.exists():
 				self.standalone_python = standalone_file.read_text().strip()
@@ -3566,6 +3622,8 @@ class Session:
 
 		return True
 
+	@persistent_shell_only
+	@prefer_agent
 	def download(self, remote_items):
 		# Initialization
 		try:
@@ -3862,6 +3920,8 @@ class Session:
 
 		return downloaded
 
+	@persistent_shell_only
+	@prefer_agent
 	def upload(self, local_items, remote_path=None, randomize_fname=False, url_to_bytes_fn=None):
 
 		url_to_bytes_fn = url_to_bytes_fn or url_to_bytes
@@ -5937,6 +5997,9 @@ class MCPServer:
 			local_path = (args.get('local_path') or '').strip()
 			if not local_path:
 				raise ValueError('local_path is required')
+			if not s.agent and not s.has_persistent_shell:
+				return {'error': 'this shell runs each command in a fresh process; '
+					'file transfer needs a persistent shell. Run spawn first.'}
 			uploaded = s.upload(local_path, remote_path=args.get('remote_path') or None)
 			return {'uploaded': uploaded}
 
@@ -5945,6 +6008,9 @@ class MCPServer:
 			remote = (args.get('remote_path') or '').strip()
 			if not remote:
 				raise ValueError('remote_path is required')
+			if not s.agent and not s.has_persistent_shell:
+				return {'error': 'this shell runs each command in a fresh process; '
+					'file transfer needs a persistent shell. Run spawn first.'}
 			return {'downloaded': [str(p) for p in s.download(remote)]}
 
 		raise ValueError(f'unknown tool: {name}')
