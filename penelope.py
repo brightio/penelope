@@ -808,7 +808,7 @@ class BetterCMD:
 
 	@staticmethod
 	def file_completer(text):
-		matches = glob(text + '*')
+		matches = glob(os.path.expanduser(text) + '*')
 		results = []
 		for m in matches:
 			if os.path.isdir(m):
@@ -2424,11 +2424,11 @@ class Session:
 				)
 
 				self.directory = options.basedir / "sessions" / self.name.replace("/", "_")
+				self.directory.mkdir(parents=True, exist_ok=True)
+				self.histfile = self.directory / "readline_history"
 				if not options.no_log:
-					self.directory.mkdir(parents=True, exist_ok=True)
 					self.logpath = self.directory /\
 					f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}-{re.sub(r"[\\/]", "_", self.user).replace("(", "_").replace(")", "")}.log'
-					self.histfile = self.directory / "readline_history"
 					self.logfile = open(self.logpath, 'ab', buffering=0)
 					if not options.no_timestamps:
 						self.logfile.write(str(paint(datetime.now().strftime(LOG_TIMESTAMP_FMT)).magenta).encode())
@@ -2680,14 +2680,14 @@ class Session:
 				)
 				result = self.exec(code, python=True, value=True)
 				if result:
-					return result.splitlines()
+					return [line.replace(' ', '\\ ') for line in result.splitlines()]
 
 			elif self.OS == 'Unix':
 				safe_pattern = shlex.quote(text) + "*"
 				cmd = f"ls -p -1 -d {safe_pattern} 2>/dev/null"
 				result = self.exec(cmd, value=True)
 				if result:
-					return result.splitlines()
+					return [line.replace(' ', '\\ ') for line in result.splitlines()]
 
 			elif self.OS == 'Windows':
 				win_text = text.replace('/', '\\')
@@ -2697,7 +2697,7 @@ class Session:
 				if result:
 					if any(err in result for err in ["File Not Found", "The system cannot find", "Volume in drive"]):
 						return []
-					return result.splitlines()
+					return [line.replace(' ', '\\ ') for line in result.splitlines()]
 		except Exception:
 			pass
 
@@ -5373,8 +5373,8 @@ class uac(Module):
 			session.uploaded_paths[base] = int(time.time())
 			cmd = f"cd {base}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
 			#session.exec(cmd)
-			tf = f"/tmp/{rand(8)}"
-			with open(tf, "w") as f:
+			fd, tf = tempfile.mkstemp(prefix="penelope-", suffix=".sh")
+			with os.fdopen(fd, "w") as f:
 				f.write("#!/bin/sh\n")
 				f.write(cmd)
 			logger.info(f"UAC output will be stored at {session.tmp}/uac-%hostname%-%os%-%timestamp%")
@@ -5537,8 +5537,8 @@ class ngrok(Module):
 			cmd = f"cd {session.exec_tmp}; ./ngrok tcp {tcp_port} --log=stdout"
 			print(cmd)
 			#session.exec(cmd)
-			tf = f"/tmp/{rand(8)}"
-			with open(tf, "w") as f:
+			fd, tf = tempfile.mkstemp(prefix="penelope-", suffix=".sh")
+			with os.fdopen(fd, "w") as f:
 				f.write("#!/bin/sh\n")
 				f.write(cmd)
 			logger.info(f"ngrok session open")
@@ -6537,6 +6537,7 @@ class Options:
 		self.default_interface = "0.0.0.0"
 		self.payloads = False
 		self.no_log = False
+		self.no_disk = False
 		self.no_timestamps = False
 		self.no_colored_timestamps = False
 		self.max_maintain = 5
@@ -6694,6 +6695,7 @@ def main():
 	misc.add_argument("-U", "--no-upgrade", help="Disable shell auto-upgrade", action="store_true")
 	misc.add_argument("-H", "--keep-history", help="Keep target shell history (do not set HISTFILE=/dev/null)", action="store_true")
 	misc.add_argument("-O", "--oscp-safe", help="Enable OSCP-safe mode", action="store_true")
+	misc.add_argument("--no-disk", help="Keep all state in RAM (tmpfs); nothing persists to disk", action="store_true")
 
 	mcp = parser.add_argument_group("MCP")
 	mcp.add_argument("--mcp", help="Enable the MCP server over local HTTP", action="store_true")
@@ -6821,6 +6823,18 @@ if not sys.version_info >= (3, 6):
 
 # Apply default options
 options = Options()
+
+# Setup for ephemeral mode
+if '--no-disk' in sys.argv:
+	options.no_disk = True
+	_ram = Path("/dev/shm") if Path("/dev/shm").is_dir() and os.access("/dev/shm", os.W_OK) else None
+	_ephemeral_root = Path(tempfile.mkdtemp(prefix="penelope-", dir=str(_ram) if _ram else None))
+	options.basedir = _ephemeral_root
+	tempfile.tempdir = str(_ephemeral_root)
+	atexit.register(lambda p=_ephemeral_root: shutil.rmtree(p, ignore_errors=True))
+	if _ram is None:
+		print(paint(f"[!] --no-disk: no tmpfs (/dev/shm) on this platform (e.g. macOS); "
+			f"state lives in a temp dir on DISK ({_ephemeral_root}), wiped on exit, but NOT true RAM.").yellow)
 
 # Loggers
 ## Add TRACE logging level
