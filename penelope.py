@@ -80,6 +80,8 @@ chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(
 pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{path}\x07{path.name}\x1b]8;;\x07'
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 shell_unescape = lambda s: re.sub(r'\\(.)', r'\1', s)
+shell_escape   = lambda s: ''.join({' ': '\\ ', chr(39): chr(92)+chr(39), chr(34): chr(92)+chr(34), chr(92): chr(92)+chr(92)}.get(c, c) for c in s)
+shell_escape_glob = lambda s: re.sub(r'[^\w@%+=:,./~*?\[\]-]', lambda m: '\\' + m.group(0), s)
 
 def Open(item, terminal=False):
 	if myOS != 'Darwin' and not DISPLAY:
@@ -824,7 +826,7 @@ class BetterCMD:
 		for m in lister(pattern):
 			if not m.startswith(pattern):
 				continue
-			escaped = ''.join({' ': '\\ ', "'": "\\'", '"': '\\"', '\\': '\\\\'}.get(c, c) for c in (unescaped + m[len(pattern):]))
+			escaped = shell_escape(unescaped + m[len(pattern):])
 			if escaped.startswith(prefix_escaped):
 				results.append(escaped[len(prefix_escaped):])
 		return results
@@ -3782,7 +3784,7 @@ class Session:
 					logger.error(response)
 					return []
 			else:
-				cmd = f"du -ck {remote_items}"
+				cmd = f"du -ck {' '.join(shell_escape_glob(os.path.join(self.cwd, part)) for part in shlex.split(remote_items))}"
 				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot determine remote size")
@@ -3869,8 +3871,7 @@ class Session:
 
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
-				_shq_glob = lambda x: re.sub(r'[^\w@%+=:,./~*?\[\]-]', lambda m: '\\' + m.group(0), x)
-				remote_items = ' '.join([_shq_glob(os.path.join(self.cwd, part)) for part in shlex.split(remote_items)])
+				remote_items = ' '.join([shell_escape_glob(os.path.join(self.cwd, part)) for part in shlex.split(remote_items)])
 				temp = self.tmp + "/" + rand(8)
 				cmd = rf'tar -czf - {"-h " if options.link_dereference else ""}{remote_items}|base64|tr -d "\n" > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
