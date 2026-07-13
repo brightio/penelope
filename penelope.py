@@ -79,6 +79,7 @@ caller = lambda: inspect.stack()[2].function
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
 pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{path}\x07{path.name}\x1b]8;;\x07'
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
+shell_unescape = lambda s: re.sub(r'\\(.)', r'\1', s)
 
 def Open(item, terminal=False):
 	if myOS != 'Darwin' and not DISPLAY:
@@ -816,14 +817,14 @@ class BetterCMD:
 			if head[j] == ' ':
 				arg_start = j + 1
 			j += 1
-		unescaped      = line[arg_start:endidx].replace('\\ ', ' ')
+		unescaped      = shell_unescape(line[arg_start:endidx])
 		pattern        = expand(unescaped)
 		prefix_escaped = line[arg_start:begidx]
 		results = []
 		for m in lister(pattern):
 			if not m.startswith(pattern):
 				continue
-			escaped = (unescaped + m[len(pattern):]).replace(' ', '\\ ')
+			escaped = ''.join({' ': '\\ ', "'": "\\'", '"': '\\"', '\\': '\\\\'}.get(c, c) for c in (unescaped + m[len(pattern):]))
 			if escaped.startswith(prefix_escaped):
 				results.append(escaped[len(prefix_escaped):])
 		return results
@@ -850,7 +851,7 @@ class MainMenu(BetterCMD):
 			"Session Operations":['run', 'upload', 'download', 'open', 'maintain', 'spawn', 'upgrade', 'exec', 'script', 'portfwd'],
 			"Session Management":['sessions', 'use', 'interact', 'kill', 'dir|.'],
 			"Shell Management"  :['listeners', 'payloads', 'connect', 'Interfaces'],
-			"Miscellaneous"     :['help', 'modules', 'history', 'cd', 'reset', 'reload', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
+			"Miscellaneous"     :['help', 'modules', 'history', 'cd', 'lcd', 'reset', 'reload', 'SET', 'DEBUG', 'exit|quit|q|Ctrl+D']
 		}
 
 	@property
@@ -964,23 +965,48 @@ class MainMenu(BetterCMD):
 				print(table)
 			print()
 
+	@session_operation(current=True)
 	def do_cd(self, path):
 		"""
-		[path]
-		Show/change Penelope's current directory
+		[remote path]
+		Show/change the session's REMOTE working directory (used for transfers)
 
 		Examples:
 
-			cd		Show current directory
-			cd /path	Change current directory to /path
+			cd		Show remote directory
+			cd /tmp		Change remote directory to /tmp
+		"""
+		session = core.sessions[self.sid]
+		if not path:
+			print(paint(session.cwd).yellow)
+			return
+		path = shell_unescape(path)
+		target = session.exec(f"cd {shlex.quote(path)} 2>/dev/null && pwd", value=True)
+		if isinstance(target, str) and target.startswith('/'):
+			session._cwd = target
+			if session.agent:
+				session.exec(f"os.chdir({target!r})", python=True, value=True)
+			logger.info(f"Remote directory changed to: {paint(target).yellow}")
+		else:
+			logger.error(f"Cannot change remote directory to: {paint(path).red}")
+
+	def do_lcd(self, path):
+		"""
+		[local path]
+		Show/change Penelope's LOCAL working directory
+
+		Examples:
+
+			lcd		Show local directory
+			lcd /path	Change local directory to /path
 		"""
 		if not path:
 			print(paint(os.getcwd()).yellow)
 		else:
-			path = Path(path.replace('\\ ', ' ')).expanduser().resolve()
+			path = Path(shell_unescape(path)).expanduser().resolve()
 			try:
 				os.chdir(path)
-				logger.info(f"Penelope's current directory changed to: {paint(path).yellow}")
+				logger.info(f"Penelope's local directory changed to: {paint(path).yellow}")
 			except Exception as e:
 				logger.error(e)
 
@@ -1686,12 +1712,13 @@ class MainMenu(BetterCMD):
 		return self.complete_path(line, begidx, endidx, self._local_lister, expand=lambda p: os.path.expandvars(os.path.expanduser(p)))
 
 	complete_script = complete_upload
-	complete_cd = complete_upload
+	complete_lcd = complete_upload
 
 	def complete_download(self, text, line, begidx, endidx):
 		return self.complete_path(line, begidx, endidx, core.sessions[self.sid].get_remote_completion)
 
 	complete_open = complete_download
+	complete_cd = complete_download
 
 	def complete_use(self, text, line, begidx, endidx):
 		return self.get_core_id_completion(text, "none")
@@ -3842,7 +3869,8 @@ class Session:
 
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
-				remote_items = ' '.join([shlex.quote(os.path.join(self.cwd, part)) for part in shlex.split(remote_items)])
+				_shq_glob = lambda x: re.sub(r'[^\w@%+=:,./~*?\[\]-]', lambda m: '\\' + m.group(0), x)
+				remote_items = ' '.join([_shq_glob(os.path.join(self.cwd, part)) for part in shlex.split(remote_items)])
 				temp = self.tmp + "/" + rand(8)
 				cmd = rf'tar -czf - {"-h " if options.link_dereference else ""}{remote_items}|base64|tr -d "\n" > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
@@ -4395,7 +4423,7 @@ class Session:
 			with open(local_script, "wb") as input_file:
 				input_file.write(data)
 		else:
-			local_script = Path(normalize_path(local_script.replace('\\ ', ' ')))
+			local_script = Path(normalize_path(shell_unescape(local_script)))
 
 		output_file_name = local_script_folder / (prefix + "output.txt")
 
