@@ -80,8 +80,9 @@ chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(
 pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{path}\x07{path.name}\x1b]8;;\x07'
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 shell_unescape = lambda s: re.sub(r'\\(.)', r'\1', s)
-shell_escape   = lambda s: ''.join({' ': '\\ ', chr(39): chr(92)+chr(39), chr(34): chr(92)+chr(34), chr(92): chr(92)+chr(92)}.get(c, c) for c in s)
+shell_escape   = lambda s: ''.join((chr(92) + c if c in (' ' + chr(39) + chr(34) + chr(92) + ';&(|<>=:') else c) for c in s)
 shell_escape_glob = lambda s: re.sub(r'[^\w@%+=:,./~*?\[\]-]', lambda m: '\\' + m.group(0), s)
+visible_len   = lambda s: len(re.sub(r'\x1b\[[0-9;]*m|[\x01\x02]', '', str(s)))
 
 def Open(item, terminal=False):
 	if myOS != 'Darwin' and not DISPLAY:
@@ -334,7 +335,7 @@ class Size:
 		while new_size >= 1024 and index < len(__class__.units) - 1:
 			new_size /= 1024
 			index += 1
-		return f"{new_size:.1f} {__class__.units[index]}Bytes"
+		return f"{new_size:.1f} {__class__.units[index]}B"
 
 	@classmethod
 	def from_str(cls, string):
@@ -354,7 +355,8 @@ from threading import Thread, RLock, current_thread
 class PBar:
 	pbars = []
 
-	def __init__(self, end, caption="", barlen=None, queue=None, metric=None, reverse=False):
+	def __init__(self, end, caption="", barlen=None, queue=None, metric=None, reverse=False, clear=False):
+		self.clear = clear
 		self.end = end
 		if type(self.end) is not int: self.end = len(self.end)
 		self.active = True if self.end > 0 else False
@@ -420,14 +422,14 @@ class PBar:
 		eta = "" if not hasattr(self, 'eta') else f" | ETA {timedelta(seconds=self.eta)}"
 		info = f"{str(self.percent).rjust(3)}% ({self.metric(self.pos)}/{self.metric(self.end)}){speed}{elapsed}{eta}"
 		right = f" {paint(info).darkgrey}"
+		try:
+			columns = os.get_terminal_size().columns
+		except OSError:
+			columns = 80
 		if self.barlen:
-			bar_space = self.barlen
+			bar_space = min(self.barlen, max(1, columns - visible_len(left) - visible_len(right)))
 		else:
-			try:
-				columns = os.get_terminal_size().columns
-			except OSError:
-				columns = 80
-			bar_space = columns - len(left) - len(right)
+			bar_space = columns - visible_len(left) - visible_len(right)
 		n = int(self.percent * bar_space / 100)
 		color = 'softgreen' if self.reverse else 'softorange'
 		fill  = f"{getattr(paint(self.bar * n), color)}"
@@ -455,8 +457,12 @@ class PBar:
 			self.active = False
 			if hasattr(self, 'eta'): del self.eta
 			if not any(__class__.pbars):
-				self.render()
-				print("\x1b[?25h" + '\n' * len(__class__.pbars), end='', flush=True)
+				n = len(__class__.pbars)
+				if self.clear:
+					print("\x1b[?25h" + ("\x1b[2K\x1b[1B" * n) + f"\x1b[{n}A", end='', flush=True)
+				else:
+					self.render()
+					print("\x1b[?25h" + '\n' * n, end='', flush=True)
 				__class__.pbars.clear()
 		finally:
 			if hasattr(__class__, 'render_lock'): __class__.render_lock.release()
@@ -489,7 +495,7 @@ class paint:
 		return self.text
 
 	def __len__(self):
-		return len(re.sub(r'\x1b\[[0-9;]*m|[\x01\x02]', '', self.text)) if self.text else 0
+		return visible_len(self.text) if self.text else 0
 
 	def __add__(self, text):
 		return str(self) + str(text)
@@ -2733,7 +2739,8 @@ class Session:
 
 			elif self.OS == 'Unix':
 				safe_pattern = shlex.quote(text) + "*"
-				cmd = f"ls -p -1 -d {safe_pattern} 2>/dev/null"
+				cd = f"cd {shlex.quote(self.cwd)} 2>/dev/null; " if self.cwd else ""
+				cmd = f"{cd}ls -p -1 -d {safe_pattern} 2>/dev/null"
 				result = self.exec(cmd, value=True)
 				if result:
 					return result.splitlines()
@@ -4099,6 +4106,8 @@ class Session:
 					items = list(Path().glob(item))
 				if items:
 					resolved_items.extend(items)
+				elif os.path.lexists(item):
+					resolved_items.append(Path(item))
 				else:
 					logger.error(f"No such file or directory: {item}")
 
@@ -6299,7 +6308,8 @@ def get_glob_size(_glob, block_size, dereference=False):
 			return 0
 	total_size = 0
 	for part in shlex.split(_glob):
-		for item in glob(normalize_path(part)):
+		p = normalize_path(part)
+		for item in (glob(p) or ([p] if os.path.lexists(p) else [])):
 			if os.path.isfile(item):
 				total_size += size_on_disk(item)
 			elif os.path.isdir(item):
@@ -6737,6 +6747,18 @@ def main():
 
 	global keyboard_interrupt
 	signal.signal(signal.SIGINT, lambda num, stack: core.stop())
+
+	def _terminate(num, stack):
+		core.stop()
+		deadline = time.time() + 3
+		while core.sessions and time.time() < deadline:
+			time.sleep(0.05)
+		_restore_terminal()
+		os._exit(0)
+	for _signame in ("SIGTERM", "SIGHUP"):
+		_sig = getattr(signal, _signame, None)
+		if _sig is not None:
+			signal.signal(_sig, _terminate)
 
 	if options.mcp:
 		cfg = MCPServer.load_config()
