@@ -90,7 +90,7 @@ pipx install penelope-shell-handler
 
 ## Usage
 ### Sample Typical Usage
-```
+```bash
 penelope                          # Listening for reverse shells on 0.0.0.0:4444
 penelope -p 5555                  # Listening for reverse shells on 0.0.0.0:5555
 penelope -p 4444,5555             # Listening for reverse shells on 0.0.0.0:4444 and 0.0.0.0:5555
@@ -106,6 +106,22 @@ penelope -i eth0 -p 5555 -- ssh -l user -p 2222 target  # Get a reverse shell fr
 penelope -s <File/Folder>         # Share a file or folder via HTTP
 ```
 ![Penelope](https://github.com/user-attachments/assets/b8e5cd84-60a5-4d79-b041-68bee901ab19)
+
+### HTTP File Server (`-s`)
+Penelope can be used also as a quick HTTP file server.
+
+```bash
+penelope -s file.txt                 # Serve a single file on 0.0.0.0:8000
+penelope -s /path/to/dir             # Serve a whole folder
+penelope -s a.sh b.elf notes.txt     # Serve several items at once
+penelope -s . -p 80                  # Serve the current dir on port 80
+penelope -s secret.txt -prefix xk9   # Hide behind a URL prefix: /xk9/secret.txt
+penelope -s -u                       # Upload mode: accept PUT/POST into the CWD
+penelope -s -u -ud /tmp/loot         # Upload mode, store received files in /tmp/loot
+```
+
+On start, Penelope prints a ready-to-use link per interface (and an upload hint
+when `-u` is set), so you can copy-paste straight into the target shell.
 
 ### Demonstrating Random Usage
 
@@ -160,7 +176,9 @@ Misc:
   -ms, --max-sessions           Max active sessions per host (default 5, 0 = reject all new)
   -C, --no-attach               Do not auto-attach on new sessions
   -U, --no-upgrade              Disable shell auto-upgrade
+  -H, --keep-history            Keep target shell history (do not set HISTFILE=/dev/null)
   -O, --oscp-safe               Enable OSCP-safe mode
+  --no-disk                     Keep all state in RAM (tmpfs); nothing persists to disk
 
 MCP:
   --mcp                         Enable the MCP server over local HTTP
@@ -171,6 +189,8 @@ MCP:
 File server:
   -s, --serve                   Run HTTP file server mode
   -prefix, --url-prefix         URL path prefix
+  -u, --upload                  Enable file upload (PUT/POST) to the server
+  -ud, --upload-dir             Directory to store uploads (default: CWD)
 
 Debug:
   -N, --no-bins                 Simulate missing binaries on target (comma-separated)

