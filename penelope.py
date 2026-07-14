@@ -66,7 +66,7 @@ from binascii import Error as binascii_error
 from functools import wraps
 from contextlib import ExitStack
 from collections import deque, defaultdict
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -77,7 +77,7 @@ rand = lambda _len: ''.join(choice(ascii_letters) for i in range(_len))
 caller = lambda: inspect.stack()[2].function
 #bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
-pathlink = lambda path: f'\x1b]8;;file://{path.parents[0]}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{path}\x07{path.name}\x1b]8;;\x07'
+pathlink = lambda path: f'\x1b]8;;file://{quote(str(path.parents[0]))}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{quote(str(path))}\x07{path.name}\x1b]8;;\x07'
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 shell_unescape = lambda s: re.sub(r'\\(.)', r'\1', s)
 shell_escape   = lambda s: ''.join((chr(92) + c if c in (' ' + chr(39) + chr(34) + chr(92) + ';&(|<>=:') else c) for c in s)
@@ -1011,7 +1011,7 @@ class MainMenu(BetterCMD):
 		if not path:
 			print(paint(os.getcwd()).yellow)
 		else:
-			path = Path(shell_unescape(path)).expanduser().resolve()
+			path = Path(normalize_path(shell_unescape(path))).resolve()
 			try:
 				os.chdir(path)
 				logger.info(f"Penelope's local directory changed to: {paint(path).yellow}")
@@ -1243,8 +1243,10 @@ class MainMenu(BetterCMD):
 	@session_operation(current=True)
 	def do_download(self, remote_items):
 		"""
-		<glob>...
+		<glob>... [-o <folder>]
 		Download files / folders from the target
+
+		-o <folder>   Save into <folder>
 
 		Examples:
 
@@ -1253,8 +1255,18 @@ class MainMenu(BetterCMD):
 			download /etc/cron*		Download multiple remote files and directories using glob
 			download /etc/issue /var/spool	Download multiple remote files and directories at once
 		"""
+		download_folder = None
+		remote_items = remote_items or ''
+
+		m = re.search(r'\s+(?:-o|--output)\s+((?:\\.|\S)+)\s*$', remote_items)
+		if m:
+			download_folder = shell_unescape(m.group(1))
+			remote_items = remote_items[:m.start()]
+
+		reroot = download_folder is not None
+		remote_items = remote_items.strip()
 		if remote_items:
-			core.sessions[self.sid].download(remote_items)
+			core.sessions[self.sid].download(remote_items, download_folder=download_folder, reroot=reroot)
 		else:
 			cmdlogger.warning("No files or directories specified")
 
@@ -1723,6 +1735,10 @@ class MainMenu(BetterCMD):
 	complete_lcd = complete_upload
 
 	def complete_download(self, text, line, begidx, endidx):
+		# LOCAL path completion right after -o/--output, REMOTE paths otherwise
+		if re.search(r'(?:^|\s)(?:-o|--output)\s*$', line[:begidx]):
+			return self.complete_path(line, begidx, endidx, self._local_lister,
+				expand=lambda p: os.path.expandvars(os.path.expanduser(p)))
 		return self.complete_path(line, begidx, endidx, core.sessions[self.sid].get_remote_completion)
 
 	complete_open = complete_download
@@ -3757,15 +3773,21 @@ class Session:
 	@persistent_shell_only
 	@prefer_agent
 	@require('tar', 'base64', 'tr', 'cut')
-	def download(self, remote_items):
+	def download(self, remote_items, download_folder=None, reroot=False):
 		# Initialization
 		try:
-			shlex.split(remote_items) # Early check for shlex errors
+			parts = shlex.split(remote_items) # Early check for shlex errors
 		except ValueError as e:
 			logger.error(e)
 			return []
 
-		local_download_folder = self.directory / "downloads"
+		strip_prefixes = None
+		if reroot:
+			strip_prefixes = sorted(
+				{os.path.dirname(os.path.normpath(os.path.join(self.cwd, p))).lstrip('/') for p in parts},
+				key=len, reverse=True)
+
+		local_download_folder = Path(normalize_path(download_folder)) if download_folder else self.directory / "downloads"
 		try:
 			local_download_folder.mkdir(parents=True, exist_ok=True)
 		except Exception as e:
@@ -3940,7 +3962,7 @@ class Session:
 				tar.fileobj.read = _read_pbar
 
 			try:
-				safe_tar_extractall(tar, local_download_folder, streaming=self.agent)
+				extracted = safe_tar_extractall(tar, local_download_folder, streaming=self.agent, strip_prefixes=strip_prefixes)
 			except Exception as e:
 				if pbar:
 					pbar.terminate()
@@ -3968,6 +3990,8 @@ class Session:
 				remote_paths = ''
 				for part in shlex.split({repr(remote_items)}):
 					result = glob(normalize_path(part))
+					if not result and os.path.exists(part):
+						result = [part]
 					if result:
 						for item in result:
 							if os.path.exists(item):
@@ -3993,12 +4017,17 @@ class Session:
 
 			# Present the downloads
 			downloaded = []
-			for path in remote_paths:
-				local_path = local_download_folder / path[1:]
-				if os.path.isabs(path) and os.path.exists(local_path):
-					downloaded.append(local_path)
-				else:
-					logger.error(f"{paint('Download Failed').RED_white} {shlex.quote(path)}")
+			if reroot:
+				base = os.path.realpath(local_download_folder)
+				tops = {os.path.relpath(p, base).split(os.sep)[0] for p in extracted}
+				downloaded = [local_download_folder / t for t in sorted(tops)]
+			else:
+				for path in remote_paths:
+					local_path = local_download_folder / path[1:]
+					if os.path.isabs(path) and os.path.exists(local_path):
+						downloaded.append(local_path)
+					else:
+						logger.error(f"{paint('Download Failed').RED_white} {shlex.quote(path)}")
 
 		elif self.OS == 'Windows':
 
@@ -6323,11 +6352,22 @@ def _is_within_directory(directory, target):
        except ValueError:
                return False
 
-def safe_tar_extractall(tar, dest, streaming=False):
+def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 	dest_real = os.path.realpath(dest)
 	orig_extract_member = tar._extract_member
+	extracted = []
 
 	def guarded(tarinfo, targetpath, *args, **kwargs):
+		if strip_prefixes:
+			name = tarinfo.name.lstrip("/")
+			for pref in strip_prefixes:
+				if pref and (name == pref or name.startswith(pref + "/")):
+					name = name[len(pref):].lstrip("/")
+					break
+			if not name:
+				return
+			targetpath = os.path.join(dest_real, name)
+
 		if not _is_within_directory(dest_real, targetpath):
 			logger.error(str(paint("<LOCAL>").yellow) + " " +
 				str(paint(f"Refusing unsafe path in archive: {tarinfo.name}").red))
@@ -6365,12 +6405,14 @@ def safe_tar_extractall(tar, dest, streaming=False):
 		tarinfo.mode &= ~0o6000
 		tarinfo.mode |= 0o200
 		orig_extract_member(tarinfo, targetpath, *args, **kwargs)
+		extracted.append(targetpath)
 
 	tar._extract_member = guarded
 	import warnings
 	with warnings.catch_warnings():
 		warnings.simplefilter("ignore", category=DeprecationWarning)
 		tar.extractall(dest)
+	return extracted
 
 def url_to_bytes(URL):
 
