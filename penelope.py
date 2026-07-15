@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.6"
+__version__ = "0.21.7"
 
 import os
 import io
@@ -835,10 +835,11 @@ class BetterCMD:
 			for m in lister(pattern):
 				if not m.lower().startswith(pat_ci):
 					continue
+				is_dir = m.endswith(('\\', '/'))
 				if quoted:
-					rendered = m + '"'
+					rendered = m if is_dir else m + '"'
 				elif ' ' in m:
-					continue
+					rendered = ('"' + m) if is_dir else ('"' + m + '"')
 				else:
 					rendered = m
 				results.append(rendered[cut:])
@@ -3816,6 +3817,8 @@ class Session:
 	@prefer_agent
 	@require('tar', 'base64', 'tr', 'cut')
 	def download(self, remote_items, download_folder=None, reroot=False):
+		if self.OS == 'Windows' and remote_items.count('"') % 2:
+			remote_items += '"'
 		# Initialization
 		try:
 			parts = shlex.split(remote_items, posix=(self.OS != 'Windows'))
