@@ -655,7 +655,7 @@ class BetterCMD:
 					if self.cmdqueue:
 						line = self.cmdqueue.pop(0)
 					else:
-						line = input(self.prompt, self.histfile, self.histlen, self.complete, " \t\n\"'><=;|&(:")
+						line = input(self.prompt, self.histfile, self.histlen, self.complete, " \t\n\"'><=;|&(")
 
 					signal.signal(signal.SIGINT, lambda num, stack: self.interrupt())
 					line = self.precmd(line)
@@ -816,7 +816,34 @@ class BetterCMD:
 			return None
 
 	@staticmethod
-	def complete_path(line, begidx, endidx, lister, expand=lambda p: p):
+	def complete_path(line, begidx, endidx, lister, expand=lambda p: p, windows=False):
+		if windows:
+			arg_start, quoted, i = 0, False, 0
+			while i < endidx:
+				c = line[i]
+				if c == '"':
+					quoted = not quoted
+					if quoted:
+						arg_start = i + 1
+				elif c == ' ' and not quoted:
+					arg_start = i + 1
+				i += 1
+			pattern = expand(line[arg_start:endidx])
+			cut = begidx - arg_start
+			pat_ci = pattern.lower()
+			results = []
+			for m in lister(pattern):
+				if not m.lower().startswith(pat_ci):
+					continue
+				if quoted:
+					rendered = m + '"'
+				elif ' ' in m:
+					continue
+				else:
+					rendered = m
+				results.append(rendered[cut:])
+			return results
+
 		head, j, arg_start = line[:endidx], 0, 0
 		while j < len(head):
 			if head[j] == '\\':
@@ -1739,7 +1766,9 @@ class MainMenu(BetterCMD):
 		if re.search(r'(?:^|\s)(?:-o|--output)\s*$', line[:begidx]):
 			return self.complete_path(line, begidx, endidx, self._local_lister,
 				expand=lambda p: os.path.expandvars(os.path.expanduser(p)))
-		return self.complete_path(line, begidx, endidx, core.sessions[self.sid].get_remote_completion)
+		session = core.sessions[self.sid]
+		return self.complete_path(line, begidx, endidx, session.get_remote_completion,
+			windows=(session.OS == 'Windows'))
 
 	complete_open = complete_download
 	complete_cd = complete_download
@@ -2760,13 +2789,26 @@ class Session:
 
 			elif self.OS == 'Windows':
 				win_text = text.replace('/', '\\')
-				cmd = f'dir /b "{win_text}*"'
+				sep = "PENELOPE_SEP"
+				cmd = (f'dir /b /ad "{win_text}*" 2>NUL & echo {sep}'
+				       f' & dir /b /a-d "{win_text}*" 2>NUL')
 				result = self.exec(cmd, force_cmd=True, value=True)
 
 				if result:
-					if any(err in result for err in ["File Not Found", "The system cannot find", "Volume in drive"]):
-						return []
-					return result.splitlines()
+					cut = max(text.rfind('/'), text.rfind('\\'))
+					head = text[:cut + 1]
+					dirs_part, _, files_part = result.partition(sep)
+					bad = ("File Not Found", "The system cannot find", "Volume in drive", "Directory of")
+					matches = []
+					for name in dirs_part.splitlines():
+						name = name.strip()
+						if name and not any(b in name for b in bad):
+							matches.append(head + name + "\\")
+					for name in files_part.splitlines():
+						name = name.strip()
+						if name and not any(b in name for b in bad):
+							matches.append(head + name)
+					return matches
 		except Exception:
 			pass
 
@@ -3776,7 +3818,7 @@ class Session:
 	def download(self, remote_items, download_folder=None, reroot=False):
 		# Initialization
 		try:
-			parts = shlex.split(remote_items) # Early check for shlex errors
+			parts = shlex.split(remote_items, posix=(self.OS != 'Windows'))
 		except ValueError as e:
 			logger.error(e)
 			return []
@@ -4034,7 +4076,7 @@ class Session:
 			with ExitStack() as stack:
 				remote_tempfile = f"{self.tmp}\\{rand(10)}.zip"
 
-				remote_items_ps = r'\", \"'.join(shlex.split(remote_items))
+				remote_items_ps = r'\", \"'.join(t.strip('"') for t in shlex.split(remote_items, posix=False))
 				cmd = (
 					f'@powershell -command "$archivepath=\'{remote_tempfile}\';compress-archive -path \'{remote_items_ps}\''
 					' -DestinationPath $archivepath;'
