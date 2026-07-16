@@ -1286,11 +1286,18 @@ class MainMenu(BetterCMD):
 		download_folder = None
 		remote_items = remote_items or ''
 
-		m = re.search(r'\s+(?:-o|--output)\s+((?:\\.|\S)+)\s*$', remote_items)
+		m = re.search(r'\s+(?:-o|--output)\s+(.+)$', remote_items)
 		if m:
-			download_folder = shell_unescape(m.group(1))
+			folder = m.group(1).strip()
+			try:
+				parts = shlex.split(folder, posix=True)
+			except ValueError:
+				parts = None
+			download_folder = parts[0] if parts and len(parts) == 1 else folder
 			remote_items = remote_items[:m.start()]
 
+		if download_folder is None and options.download_folder:
+			download_folder = options.download_folder
 		reroot = download_folder is not None
 		remote_items = remote_items.strip()
 		if remote_items:
@@ -2729,7 +2736,7 @@ class Session:
 			if self.OS == 'Unix':
 				if self.agent:
 					if not self.exec(
-						f"stdout_stream << str(os.access(normalize_path('{directory}'), os.W_OK)).encode()",
+						f"stdout_stream << str(os.access(normalize_path({directory!r}), os.W_OK)).encode()",
 						python=True,
 						value=True
 					) == 'True':
@@ -3797,7 +3804,7 @@ class Session:
 				self._readline_thread.join(timeout=2)
 
 		if self.type == 'PTY':
-			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
+			restore_tty()
 
 		if self.id in core.sessions:
 			print()
@@ -3832,7 +3839,7 @@ class Session:
 				{os.path.dirname(os.path.normpath(os.path.join(self.cwd, p))).lstrip('/') for p in parts},
 				key=len, reverse=True)
 
-		local_download_folder = Path(normalize_path(download_folder)) if download_folder else self.directory / "downloads"
+		local_download_folder = Path(os.path.abspath(normalize_path(download_folder))) if download_folder else self.directory / "downloads"
 		try:
 			local_download_folder.mkdir(parents=True, exist_ok=True)
 		except Exception as e:
@@ -4190,7 +4197,7 @@ class Session:
 			remote_space = remote_block_size = None
 			if self.agent:
 				response = self.exec(f"""
-				stats = os.statvfs(normalize_path('{destination}'))
+				stats = os.statvfs(normalize_path({destination!r}))
 				stdout_stream << (str(stats.f_bavail) + ';' + str(stats.f_frsize)).encode()
 				""", python=True, value=True)
 
@@ -4253,9 +4260,9 @@ class Session:
 				for item in tar:
 					try:
 						if sys.version_info >= (3, 12):
-							tar.extract(item, path=normalize_path('{destination}'), filter='fully_trusted')
+							tar.extract(item, path=normalize_path({destination!r}), filter='fully_trusted')
 						else:
-							tar.extract(item, path=normalize_path('{destination}'))
+							tar.extract(item, path=normalize_path({destination!r}))
 					except:
 						stderr_stream << (str(sys.exc_info()[1]) + '\n').encode()
 				tar.close()
@@ -6283,7 +6290,15 @@ class MCPServer:
 	def start(self):
 		"""Bind and serve in a background thread; resolves self.port if it was 0. Returns self."""
 		import hmac
-		from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+		from http.server import BaseHTTPRequestHandler
+		try:
+			from http.server import ThreadingHTTPServer
+		except ImportError:  # Python 3.6 lacks ThreadingHTTPServer
+			import socketserver
+			from http.server import HTTPServer
+			class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+				daemon_threads = True
+				block_on_close = False
 		mcp = self
 
 		class Handler(BaseHTTPRequestHandler):
@@ -6503,6 +6518,10 @@ def url_to_bytes(URL):
 	else:
 		filename = URL.split('/')[-2]
 
+	filename = os.path.basename((filename or '').replace('\\', '/'))
+	if filename in ('', '.', '..'):
+		filename = f"download_{int(time.time())}"
+
 	size = response.headers.get('Content-Length')
 	data = bytearray()
 	if size:
@@ -6583,7 +6602,7 @@ def listener_menu():
 				func = menu.show
 				break
 			elif command == 'p':
-				termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
+				restore_tty()
 				print()
 				for listener in core.listeners.values():
 					print(listener.payloads(), end='\n\n')
@@ -6597,7 +6616,7 @@ def listener_menu():
 			continue
 		break
 
-	termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
+	restore_tty()
 	stdout(b"\x1b[?25h\r")
 	func()
 	os.close(listener_menu.control_r)
@@ -6628,7 +6647,7 @@ class Options:
 		if sudo_user:
 			real_home = Path(pwd.getpwnam(sudo_user).pw_dir)
 
-		self.basedir = real_home / f'.{__program__}'
+		self.basedir = globals().get('_ephemeral_root') or (real_home / f'.{__program__}')
 		self.default_listener_port = 4444
 		self.default_bindshell_port = 5555
 		self.default_fileserver_port = 8000
@@ -6657,6 +6676,7 @@ class Options:
 		self.upload_chunk_size = 1048576
 		self.download_chunk_size = 1048576
 		self.network_buffer_size = 32768
+		self.download_folder = ''
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
 		self.logfile = f"{__program__}.log"
 		self.debug_logfile = "debug.log"
@@ -6931,17 +6951,29 @@ if not sys.version_info >= (3, 6):
 	print("(!) Penelope requires Python version 3.6 or higher (!)")
 	sys.exit(1)
 
+# Store initial TTY settings
+try:
+	TTY_NORMAL = termios.tcgetattr(sys.stdin)
+except (termios.error, ValueError):
+	TTY_NORMAL = None
+def restore_tty():
+	if TTY_NORMAL is not None:
+		termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
+
+# Setup for ephemeral mode
+_ephemeral_root = None
+_ram = None
+if '--no-disk' in sys.argv:
+	_ram = Path("/dev/shm") if Path("/dev/shm").is_dir() and os.access("/dev/shm", os.W_OK) else None
+	_ephemeral_root = Path(tempfile.mkdtemp(prefix="penelope-", dir=str(_ram) if _ram else None))
+	tempfile.tempdir = str(_ephemeral_root)
+	atexit.register(lambda p=_ephemeral_root: shutil.rmtree(p, ignore_errors=True))
+
 # Apply default options
 options = Options()
 
-# Setup for ephemeral mode
-if '--no-disk' in sys.argv:
+if _ephemeral_root is not None:
 	options.no_disk = True
-	_ram = Path("/dev/shm") if Path("/dev/shm").is_dir() and os.access("/dev/shm", os.W_OK) else None
-	_ephemeral_root = Path(tempfile.mkdtemp(prefix="penelope-", dir=str(_ram) if _ram else None))
-	options.basedir = _ephemeral_root
-	tempfile.tempdir = str(_ephemeral_root)
-	atexit.register(lambda p=_ephemeral_root: shutil.rmtree(p, ignore_errors=True))
 	if _ram is None:
 		print(paint(f"[!] --no-disk: no tmpfs (/dev/shm) on this platform (e.g. macOS); "
 			f"state lives in a temp dir on DISK ({_ephemeral_root}), wiped on exit, but NOT true RAM.").yellow)
@@ -6983,7 +7015,6 @@ cmdlogger.addHandler(stdout_handler)
 
 # Set constants
 myOS = platform.system()
-TTY_NORMAL = termios.tcgetattr(sys.stdin)
 DISPLAY = 'DISPLAY' in os.environ
 TERMINALS = [
 	'gnome-terminal', 'mate-terminal', 'qterminal', 'terminator', 'alacritty', 'kitty', 'tilix',
@@ -7093,7 +7124,7 @@ except ImportError:
 	default_readline_delims = None
 def _restore_terminal():
 	try:
-		termios.tcsetattr(sys.stdin, termios.TCSADRAIN, TTY_NORMAL)
+		restore_tty()
 		os.write(sys.stdout.fileno(), b"\x1b[?25h")
 	except Exception:
 		pass
