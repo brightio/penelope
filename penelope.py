@@ -66,7 +66,7 @@ from binascii import Error as binascii_error
 from functools import wraps
 from contextlib import ExitStack
 from collections import deque, defaultdict
-from urllib.parse import unquote, quote
+from urllib.parse import unquote, quote, urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -2776,10 +2776,9 @@ class Session:
 
 		try:
 			if self.agent:
-				safe_text = text.replace("'", "\\'")
 				code = (
 					f"import glob, os; "
-					f"matches = glob.glob('{safe_text}*'); "
+					f"matches = glob.glob({(text + '*')!r}); "
 					f"result = '\\n'.join([p + '/' if os.path.isdir(p) else p for p in matches]); "
 					f"stdout_stream << result.encode()"
 				)
@@ -6525,32 +6524,45 @@ def url_to_bytes(URL):
 	filename = response.headers.get_filename()
 	if filename:
 		filename = filename.strip('"')
-	elif URL.split('/')[-1]:
-		filename = URL.split('/')[-1]
 	else:
-		filename = URL.split('/')[-2]
+		url_path = urlsplit(response.geturl()).path
+		path_parts = [part for part in url_path.split('/') if part]
+		filename = unquote(path_parts[-1]) if path_parts else ''
 
 	filename = os.path.basename((filename or '').replace('\\', '/'))
 	if filename in ('', '.', '..'):
 		filename = f"download_{int(time.time())}"
 
-	size = response.headers.get('Content-Length')
+	size_header = response.headers.get('Content-Length')
+	try:
+		size = int(size_header) if size_header is not None else None
+		if size is not None and size < 0:
+			raise ValueError
+	except (TypeError, ValueError):
+		logger.warning(f"Invalid Content-Length: {size_header!r}")
+		size = None
+
 	data = bytearray()
-	if size:
-		pbar = PBar(int(size), caption=f" {paint('⤷').softgreen} ", barlen=30, metric=Size, reverse=True)
+	pbar = None
+	if size is not None and size > 0:
+		pbar = PBar(size, caption=f" {paint('⤷').softgreen} ", barlen=30, metric=Size, reverse=True)
+
 	while True:
 		try:
 			chunk = response.read(options.network_buffer_size)
 			if not chunk:
 				break
 			data.extend(chunk)
-			if size:
+			if pbar is not None:
 				pbar.update(len(chunk))
 		except Exception as e:
-			if size:
+			if pbar is not None:
 				pbar.terminate()
 			logger.error(e)
 			return None, None
+
+	if pbar is not None:
+		pbar.terminate()
 
 	return filename, data
 
