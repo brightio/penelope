@@ -4813,7 +4813,7 @@ class Session:
 		for fwd in tuple(self.tasks['portfwd']):
 			fwd.stop()
 
-		if self.OS:
+		if self.OS and hasattr(self, 'name'):
 			threading.Thread(target=self.maintain).start()
 		return True
 
@@ -5973,12 +5973,17 @@ class FileServer:
 
 			def _save_upload(self, filename, data):
 				filename = os.path.basename((filename or '').replace('\\', '/')).lstrip('.') or f"upload_{int(time.time())}"
-				dest = os.path.join(upload_dir, filename)
-				base, ext = os.path.splitext(dest)
-				while os.path.exists(dest):
-					dest = base + '_' + ext
-					base += '_'
-				with open(dest, 'wb') as f:
+				os.makedirs(upload_dir, exist_ok=True)
+				base, ext = os.path.splitext(os.path.join(upload_dir, filename))
+				dest = base + ext
+				while True:
+					try:
+						fd = os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+						break
+					except FileExistsError:
+						base += '_'
+						dest = base + ext
+				with os.fdopen(fd, 'wb') as f:
 					f.write(data or b'')
 				if not quiet:
 					logger.info(
@@ -5991,7 +5996,14 @@ class FileServer:
 
 			def _read_body(self):
 				length = int(self.headers.get('Content-Length', 0) or 0)
-				return self.rfile.read(length) if length else b''
+				if length < 0:
+					raise ValueError(f"Negative Content-Length ({length})")
+				if not length:
+					return b''
+				data = self.rfile.read(length)
+				if len(data) != length:
+					raise ValueError(f"Truncated upload: {len(data)} of {length} bytes")
+				return data
 
 			def _reject_upload(self, method):
 				self.send_error(501, f"Unsupported method ('{method}')")
