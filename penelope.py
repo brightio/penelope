@@ -580,16 +580,16 @@ def stdout(data, record=True):
 		core.output_line_buffer << data
 
 def ask(text):
-        while True:
-                try:
-                        return input(f"{paint(f'[?] {text}').yellow}")
-                except EOFError:
-                        print()
-                        if not sys.stdin.isatty():
-                                return ''
-                except KeyboardInterrupt:
-                        print("^C")
-                        return ' '
+	while True:
+		try:
+			return input(f"{paint(f'[?] {text}').yellow}")
+		except EOFError:
+			print()
+			if not sys.stdin.isatty():
+				return ''
+		except KeyboardInterrupt:
+			print("^C")
+			return ' '
 
 def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
 	if threading.current_thread().name == 'MainThread':
@@ -6342,6 +6342,8 @@ class MCPServer:
 				if not self._authorized():
 					return self._reply(401)
 				length = int(self.headers.get('Content-Length') or 0)
+				if length < 0 or length > self.MAX_OUTPUT:
+					return self._reply(400)
 				try:
 					req = json.loads(self.rfile.read(length) or b'{}')
 				except json.JSONDecodeError:
@@ -6658,6 +6660,7 @@ def load_rc():
 	if st.st_uid not in (os.getuid(), 0) or (st.st_mode & 0o022):
 		logger.error(f"Refusing to load {RC}: writable by others or not owned by you "
 			f"(mode {oct(st.st_mode & 0o777)})")
+		return
 	with open(RC, "r") as rc:
 		exec(rc.read(), globals())
 
