@@ -84,6 +84,8 @@ shell_escape   = lambda s: ''.join((chr(92) + c if c in (' ' + chr(39) + chr(34)
 shell_escape_glob = lambda s: re.sub(r'[^\w@%+=:,./~*?\[\]-]', lambda m: '\\' + m.group(0), s)
 visible_len   = lambda s: len(re.sub(r'\x1b\[[0-9;]*m|[\x01\x02]', '', str(s)))
 sanitize_meta = lambda s: ''.join(c for c in s if c.isprintable()) if isinstance(s, str) else s
+HTTP_CONTROL_CHAR_TABLE = {char: r'\x{:02x}'.format(char) for char in list(range(32)) + list(range(127, 160))}
+HTTP_CONTROL_CHAR_TABLE[ord('\\')] = r'\\'
 
 def Open(item, terminal=False):
 	if myOS != 'Darwin' and not DISPLAY:
@@ -2532,8 +2534,8 @@ class Session:
 				self.directory.mkdir(parents=True, exist_ok=True)
 				self.histfile = self.directory / "readline_history"
 				if not options.no_log:
-					self.logpath = self.directory /\
-					f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}-{re.sub(r"[\\/]", "_", self.user).replace("(", "_").replace(")", "")}.log'
+					log_user = re.sub(r"[\\/]", "_", self.user).replace("(", "_").replace(")", "")
+					self.logpath = self.directory / f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}-{log_user}.log'
 					self.logfile = open(self.logpath, 'ab', buffering=0)
 					if not options.no_timestamps:
 						self.logfile.write(str(paint(datetime.now().strftime(LOG_TIMESTAMP_FMT)).magenta).encode())
@@ -3152,6 +3154,11 @@ class Session:
 		if self.agent and not agent_typing: # Environment will not be the same as the PTY shell
 			if cmd:
 				cmd = dedent(cmd)
+				cmd_bytes = cmd.encode()
+				max_cmd = Messenger.MAX_PAYLOAD - 1 - 3 * Messenger.STREAM_BYTES
+				if len(cmd_bytes) > max_cmd:
+					logger.error(f"Command too long for agent: {len(cmd_bytes)} bytes (max {max_cmd})")
+					return
 				if value:
 					buffer = io.BytesIO()
 				timeout = self.timeout_short if value else None
@@ -3175,7 +3182,7 @@ class Session:
 					stdin_stream.id +
 					stdout_stream.id +
 					stderr_stream.id +
-					cmd.encode()
+					cmd_bytes
 				))
 				logger.debug(cmd)
 				#print(stdin_stream.id, stdout_stream.id, stderr_stream.id)
@@ -4838,6 +4845,7 @@ class Messenger:
 	TYPE_BYTES = struct.calcsize(TYPE_CODE)
 
 	HEADER_CODE = '!' + LEN_CODE + TYPE_CODE
+	MAX_PAYLOAD = (1 << (8 * LEN_BYTES)) - 1 - TYPE_BYTES
 
 	def __init__(self, bufferclass):
 		self.len = None
@@ -4846,6 +4854,8 @@ class Messenger:
 		self.message_buffer = bufferclass()
 
 	def message(_type, _data):
+		if len(_data) > Messenger.MAX_PAYLOAD:
+			raise ValueError("Messenger frame payload too large: %d > %d bytes" % (len(_data), Messenger.MAX_PAYLOAD))
 		return struct.pack(Messenger.HEADER_CODE, len(_data) + Messenger.TYPE_BYTES, _type) + _data
 	message = staticmethod(message)
 
@@ -6081,7 +6091,8 @@ class FileServer:
 				if quiet:
 					return None
 				message = format % args
-				response = message.translate(self._control_char_table).split(' ')
+				control_char_table = getattr(self, '_control_char_table', HTTP_CONTROL_CHAR_TABLE)
+				response = message.translate(control_char_table).split(' ')
 				if len(response) < 4 or not response[0].startswith('"'):
 					return
 				if response[3][0] == '3':
@@ -6121,7 +6132,6 @@ class FileServer:
 
 class MCPServer:
 	PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
-	MAX_CMD_LEN = 65536
 	MAX_OUTPUT  = 10 * 1024 ** 2
 
 	TOOLS = [
@@ -6230,8 +6240,10 @@ class MCPServer:
 			cmd = (args.get('command') or '').strip()
 			if not cmd:
 				raise ValueError('command is required')
-			if len(cmd) > self.MAX_CMD_LEN:
-				raise ValueError(f'command too long (max {self.MAX_CMD_LEN} bytes)')
+			max_cmd = Messenger.MAX_PAYLOAD - 1 - 3 * Messenger.STREAM_BYTES
+			cmd_len = len(cmd.encode())
+			if cmd_len > max_cmd:
+				raise ValueError(f'command too long ({cmd_len} bytes, max {max_cmd})')
 			result = s.exec(cmd, value=True)
 			if result is False or result is None:
 				return {'error': 'exec failed or session not ready'}
@@ -6349,7 +6361,7 @@ class MCPServer:
 				if not self._authorized():
 					return self._reply(401)
 				length = int(self.headers.get('Content-Length') or 0)
-				if length < 0 or length > self.MAX_OUTPUT:
+				if length < 0 or length > mcp.MAX_OUTPUT:
 					return self._reply(400)
 				try:
 					req = json.loads(self.rfile.read(length) or b'{}')
