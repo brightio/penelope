@@ -19,7 +19,7 @@ Penelope is a modern shell handler for penetration testers and CTF players. It p
   - 🧩 [Modules](#modules)
 - 💻 [Usage](#usage)
   - ▶️ [Sample Typical Usage](#sample-typical-usage)
-  - 🎬 [Demonstrating Random Usage](#demonstrating-random-usage)
+  - 🎬 [Example Workflow](#example-workflow)
   - 🖲️ [Main Menu Commands](#main-menu-commands)
   - ⚡ [Command Line Options](#command-line-options)
 - 🔒 [Security considerations](#security-considerations)
@@ -29,7 +29,7 @@ Penelope is a modern shell handler for penetration testers and CTF players. It p
 
 ## Installation
 
-Penelope runs on Unix-like systems, including Linux, macOS and FreeBSD, and requires **Python 3.6+**.
+Penelope runs on Unix-like host systems, including Linux, macOS, FreeBSD and requires **Python 3.6+**.
 
 ### Kali Linux
 Penelope is available in Kali Linux:
@@ -72,12 +72,12 @@ pipx install penelope-shell-handler
 > ⚠️  Windows support is experimental and under active development.
 
 ### Global Features
-- Streamline interaction with the targets via modules
+- Streamlined interaction with targets through modules
 - Multiple sessions
 - Multiple listeners
-- Serve files/folders via HTTP (-s switch)
-- Can be imported by python3 exploits and get shell on the same terminal (see [extras/exploit_examples](https://github.com/brightio/penelope/tree/main/extras/exploit_examples))
-- Can work in conjunction with Metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
+- Serve files and folders over HTTP (`-s`)
+- Can be imported by Python exploits to handle shells in the same terminal (see [extras/exploit_examples](https://github.com/brightio/penelope/tree/main/extras/exploit_examples))
+- Can be used with Metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
 - Expose live sessions to an MCP client like Claude Code with the `--mcp` switch (local HTTP, token-authenticated), driving the same shells alongside you
 
 ### Modules
@@ -89,7 +89,7 @@ pipx install penelope-shell-handler
 ![meterpreter](https://github.com/user-attachments/assets/b9cda69c-e25c-41e1-abe2-ce18ba13c4ed)
 
 ## Usage
-### Sample Typical Usage
+### Typical Usage
 ```bash
 penelope                          # Listening for reverse shells on 0.0.0.0:4444
 penelope -p 5555                  # Listening for reverse shells on 0.0.0.0:5555
@@ -123,7 +123,7 @@ penelope -s -u -ud /tmp/loot         # Upload mode, store received files in /tmp
 On start, Penelope prints a ready-to-use link per interface (and an upload hint
 when `-u` is set), so you can copy-paste straight into the target shell.
 
-### Demonstrating Random Usage
+### Example Workflow
 
 As shown in the video below, within only a few seconds we can:
 1. Get a fully functional auto-resizable PTY shell while logging every interaction with the target
@@ -134,12 +134,12 @@ As shown in the video below, within only a few seconds we can:
 6. Upload an exploit-db exploit directly from URL
 7. Download and open a remote file locally
 8. Download the remote /etc directory
-9. Automatically spawn a new shell if an existing shell dies, helping keep access available during unstable shell sessions
+9. Automatically replace a shell when an existing session dies, helping maintain access during unstable sessions
 
 https://github.com/brightio/penelope/assets/65655412/7295da32-28e2-4c92-971f-09423eeff178
 
 ### Main Menu Commands
-Some Notes:
+Notes:
 - By default you need to press `F12` to detach the PTY shell and go to the Main Menu. If the upgrade was not possible and you ended up with a basic shell, you can detach it with `Ctrl+C`. This also prevents the accidental killing of the shell.
 - The Main Menu supports TAB completion and also short commands. For example instead of `interact 1` you can just type `i 1`.
 
@@ -252,7 +252,7 @@ In any case, the correct key is always displayed when you attach to a session. F
 ### ► How can I customize Penelope (change default options, create custom modules, etc.)?
 See [peneloperc](https://github.com/brightio/penelope/blob/main/extras/peneloperc)
 
-### ► Why aren’t my current working directory and/or user respected when I use menu commands like download/upload?
+### ► Why aren’t my current working directory or user preserved when I use menu commands like download/upload?
 This usually means you opened a new interactive shell, possibly under a different user. The Penelope agent only tracks the directory of the initial shell and keeps the permissions of the user from that first shell. The best workaround is to `cd /tmp` before opening a new shell, or, if you switched users, spawn a new reverse shell as the new user.
 
 ### ► How can I contribute?

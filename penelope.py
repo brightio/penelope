@@ -77,12 +77,13 @@ rand = lambda _len: ''.join(choice(ascii_letters) for i in range(_len))
 caller = lambda: inspect.stack()[2].function
 #bdebug = lambda file, data: open("/tmp/" + file, "a").write(repr(data) + "\n")
 chunks = lambda string, length: (string[0 + i:length + i] for i in range(0, len(string), length))
-pathlink = lambda path: f'\x1b]8;;file://{quote(str(path.parents[0]))}\x07{path.parents[0]}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{quote(str(path))}\x07{path.name}\x1b]8;;\x07'
+pathlink = lambda path: f'\x1b]8;;file://{quote(str(path.parents[0]))}\x07{sanitize_meta(str(path.parents[0]))}{os.path.sep}\x1b]8;;\x07\x1b]8;;file://{quote(str(path))}\x07{sanitize_meta(path.name)}\x1b]8;;\x07'
 normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
 shell_unescape = lambda s: re.sub(r'\\(.)', r'\1', s)
 shell_escape   = lambda s: ''.join((chr(92) + c if c in (' ' + chr(39) + chr(34) + chr(92) + ';&(|<>=:') else c) for c in s)
 shell_escape_glob = lambda s: re.sub(r'[^\w@%+=:,./~*?\[\]-]', lambda m: '\\' + m.group(0), s)
 visible_len   = lambda s: len(re.sub(r'\x1b\[[0-9;]*m|[\x01\x02]', '', str(s)))
+sanitize_meta = lambda s: ''.join(c for c in s if c.isprintable()) if isinstance(s, str) else s
 
 def Open(item, terminal=False):
 	if myOS != 'Darwin' and not DISPLAY:
@@ -1065,7 +1066,7 @@ class MainMenu(BetterCMD):
 	def do_sessions(self, line):
 		"""
 		[SessionID]
-		Show active sessions or interact with the SessionID
+		List active sessions or interact with a session
 
 		Examples:
 
@@ -1165,11 +1166,12 @@ class MainMenu(BetterCMD):
 
 		Examples:
 
-			portfwd				Show active Port Forwards
-			-> 192.168.0.1:80		Forward 127.0.0.1:80 to 192.168.0.1:80
-			0.0.0.0:8080 -> 192.168.0.1:80	Forward 0.0.0.0:8080 to 192.168.0.1:80
-			portfwd stop 1			Stop the Port Forward with ID 1
-			portfwd stop *			Stop all Port Forwards
+			portfwd					Show active Port Forwards
+			portfwd -> 192.168.0.1:80		Forward 127.0.0.1:80 to 192.168.0.1:80
+			portfwd 8888 -> 192.168.0.1:80		Forward 127.0.0.1:8888 to 192.168.0.1:80
+			portfwd 0.0.0.0:8080 -> 192.168.0.1:80	Forward 0.0.0.0:8080 to 192.168.0.1:80
+			portfwd stop 1				Stop the Port Forward with ID 1
+			portfwd stop *				Stop all Port Forwards
 		"""
 		if not line:
 			if core.forwardings:
@@ -1271,7 +1273,7 @@ class MainMenu(BetterCMD):
 	@session_operation(current=True)
 	def do_download(self, remote_items):
 		"""
-		<glob>... [-o <folder>]
+		<remote path|glob>... [-o|--output <local folder>]
 		Download files / folders from the target
 
 		-o <folder>   Save into <folder>
@@ -1308,8 +1310,8 @@ class MainMenu(BetterCMD):
 	@session_operation(current=True)
 	def do_open(self, remote_items):
 		"""
-		<glob>...
-		Download files / folders from the target and open them locally
+		<remote path|glob>...
+		Download remote files or directories and open them with the local default application
 
 		Examples:
 
@@ -1337,10 +1339,10 @@ class MainMenu(BetterCMD):
 	@session_operation(current=True)
 	def do_upload(self, local_items):
 		"""
-		<glob|URL>...
-		Upload files / folders / HTTP(S)/FTP(S) URLs to the target
-		HTTP(S)/FTP(S) URLs are downloaded locally and then pushed to the target. This is extremely useful
-		when the target has no Internet access
+		<path|glob|URL>...
+		Upload local files, directories, or HTTP(S)/FTP URLs to the target
+		URLs are downloaded by Penelope and then uploaded to the target, allowing transfers when
+		the target has no direct Internet access.
 
 		Examples:
 
@@ -1417,7 +1419,7 @@ class MainMenu(BetterCMD):
 	def do_spawn(self, line):
 		"""
 		[Port] [Host]
-		Spawn a new session.
+		Spawn another shell from the selected target
 
 		Examples:
 
@@ -1425,9 +1427,9 @@ class MainMenu(BetterCMD):
 						bind shell. If the current is reverse, it will spawn a reverse one
 
 			spawn 5555		Spawn a reverse shell on 5555 port. This can be used to get shell
-						on another tab. On the other tab run: ./penelope.py 5555
+						on another tab. In another tab run: penelope.py -p 5555
 
-			spawn 3333 10.10.10.10	Spawn a reverse shell on the port 3333 of the 10.10.10.10 host
+			spawn 3333 10.10.10.10	Connect a new reverse shell to 10.10.10.10:3333
 		"""
 		host, port = None, None
 
@@ -1502,7 +1504,7 @@ class MainMenu(BetterCMD):
 	def do_dir(self, ID):
 		"""
 		[SessionID]
-		Open the session's local folder. If no session specified, open the base folder
+		Open the selected session's local folder, or Penelope's base folder if no session is selected
 		"""
 		session = core.sessions.get(self.sid)
 		folder = session.directory if session else options.basedir
@@ -1513,7 +1515,7 @@ class MainMenu(BetterCMD):
 	def do_exec(self, cmdline):
 		"""
 		<remote command>
-		Execute a remote command
+		Execute a command on the target and print its output
 
 		Examples:
 			exec cat /etc/passwd
@@ -1538,7 +1540,7 @@ class MainMenu(BetterCMD):
 
 	def do_listeners(self, line):
 		"""
-		[add[-i<iface>][-p<port>]|stop<id>]
+		[add [-i <interface>] [-p <ports>] [-j <host:port>] | stop <id|*>]
 		Add / stop / view Listeners
 
 		Examples:
@@ -1621,7 +1623,7 @@ class MainMenu(BetterCMD):
 	def do_payloads(self, line):
 		"""
 		[interface_name]
-		Create reverse shell payloads based on the active listeners
+		Show example reverse-shell commands for the active listeners
 		"""
 		if core.listeners:
 			print()
@@ -2676,7 +2678,7 @@ class Session:
 			)
 
 			try:
-				self.hostname, self.system, self.arch = response.split("\t")
+				self.hostname, self.system, self.arch = (sanitize_meta(x) for x in response.split("\t"))
 			except Exception:
 				return False
 
@@ -2693,9 +2695,9 @@ class Session:
 				match = re.search(pattern, self.systeminfo, re.MULTILINE)
 				return match.group(1).replace(" ", "_").rstrip() if match else ''
 
-			self.hostname = extract_value(r"^Host Name:\s+(.+)").split('\x1b')[0]
-			self.system = extract_value(r"^OS Name:\s+(.+)").split('\x1b')[0]
-			self.arch = extract_value(r"^System Type:\s+(.+)").split('\x1b')[0]
+			self.hostname = sanitize_meta(extract_value(r"^Host Name:\s+(.+)"))
+			self.system = sanitize_meta(extract_value(r"^OS Name:\s+(.+)"))
+			self.arch = sanitize_meta(extract_value(r"^System Type:\s+(.+)"))
 
 		return True
 
@@ -2729,7 +2731,7 @@ class Session:
 				if '\x07' in response:
 					response = response.split('\x07')[-1] # conptyshell cmd
 
-		return response or ''
+		return sanitize_meta(response) if response else ''
 
 	def write_access(self, directory):
 		try:
@@ -3652,7 +3654,8 @@ class Session:
 			if not self.upgrade_standalone_attempted:
 				self.upgrade_standalone_attempted = True
 				logger.error("Cannot deploy agent with remote Python. Select an action below:")
-				dyn_key = PYTHON_STANDALONE_BINARIES.get((self.system, self.arch, self.libc))
+				key = (self.system, self.arch, self.libc) if self.system == 'Linux' else (self.system, self.arch)
+				dyn_key = PYTHON_STANDALONE_BINARIES.get(key)
 				python_binary = self._deploy_standalone_python(dyn_key)
 				if not python_binary:
 					logger.error(f'Failed to deploy standalone python for {self.system} {self.arch} ({self.libc})')
@@ -5285,6 +5288,10 @@ class upload_privesc_scripts(Module):
 				"fullpowers": lambda: session.upload(URLS['fullpowers']),
 				"enablealltokenprivs": lambda: session.upload(URLS['enablealltokenprivs']),
 			}
+
+		else:
+			logger.error(f"Unsupported OS: {session.OS}")
+			return
 
 		if not requested:
 			logger.info("No tools specified, uploading all")
