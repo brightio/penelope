@@ -18,7 +18,7 @@ Penelope is a modern shell handler for penetration testers and CTF players. It p
   - 🌍 [Global Features](#global-features)
   - 🧩 [Modules](#modules)
 - 💻 [Usage](#usage)
-  - ▶️ [Sample Typical Usage](#sample-typical-usage)
+  - ▶️ [Typical Usage](#typical-usage)
   - 🎬 [Example Workflow](#example-workflow)
   - 🖲️ [Main Menu Commands](#main-menu-commands)
   - ⚡ [Command Line Options](#command-line-options)
