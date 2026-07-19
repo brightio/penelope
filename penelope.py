@@ -2472,6 +2472,8 @@ class Session:
 			self.last_lines = LineBuffer(options.attach_lines)
 			self.lock = threading.Lock()
 			self.wlock = threading.Lock()
+			self.log_lock = threading.Lock()
+			self.logfile = io.BytesIO()
 
 			self.outbuf = io.BytesIO()
 			self.bytes_sent = 0
@@ -2571,9 +2573,8 @@ class Session:
 				if not options.no_log:
 					log_user = re.sub(r"[\\/]", "_", self.user).replace("(", "_").replace(")", "")
 					self.logpath = self.directory / f'{datetime.now().strftime("%Y_%m_%d-%H_%M_%S-%f")[:-3]}-{log_user}.log'
-					self.logfile = open(self.logpath, 'ab', buffering=0)
-					if not options.no_timestamps:
-						self.logfile.write(str(paint(datetime.now().strftime(LOG_TIMESTAMP_FMT)).magenta).encode())
+					logfile = open(self.logpath, 'ab', buffering=0)
+					self._activate_log(logfile)
 
 				for module in modules().values():
 					if module.enabled and module.on_session_start:
@@ -3074,10 +3075,23 @@ class Session:
 			if not options.no_colored_timestamps:
 				timestamp = paint(timestamp).magenta
 			data = re.sub(rb'\r\n|\r|\n|\v|\f', rf"\g<0>{timestamp}".encode(), data)
-		try:
-			self.logfile.write(data)
-		except ValueError:
-			logger.debug("The session killed abnormally")
+		with self.log_lock:
+			try:
+				self.logfile.write(data)
+			except ValueError:
+				logger.debug("The session killed abnormally")
+
+	def _activate_log(self, logfile):
+		with self.log_lock:
+			if self.logfile.closed:
+				logfile.close()
+				return False
+			if not options.no_timestamps:
+				logfile.write(str(paint(datetime.now().strftime(LOG_TIMESTAMP_FMT)).magenta).encode())
+			logfile.write(self.logfile.getvalue())
+			self.logfile.close()
+			self.logfile = logfile
+			return True
 
 	def determine(self, path=False):
 
@@ -4845,7 +4859,7 @@ class Session:
 			del core.sessions[self.id]
 		logger.error(message)
 
-		if hasattr(self, 'logfile'):
+		with self.log_lock:
 			self.logfile.close()
 
 		if self.is_attached:
