@@ -1290,15 +1290,50 @@ class MainMenu(BetterCMD):
 		download_folder = None
 		remote_items = remote_items or ''
 
-		m = re.search(r'\s+(?:-o|--output)\s+(.+)$', remote_items)
-		if m:
-			folder = m.group(1).strip()
-			try:
-				parts = shlex.split(folder, posix=True)
-			except ValueError:
-				parts = None
-			download_folder = parts[0] if parts and len(parts) == 1 else folder
-			remote_items = remote_items[:m.start()]
+		spans = []
+		start = None
+		quote = None
+		escaped = False
+		for i, char in enumerate(remote_items):
+			if start is None:
+				if char.isspace():
+					continue
+				start = i
+			if escaped:
+				escaped = False
+			elif char == '\\':
+				escaped = True
+			elif quote:
+				if char == quote:
+					quote = None
+			elif char in "'\"":
+				quote = char
+			elif char.isspace():
+				spans.append((start, i))
+				start = None
+		if start is not None:
+			spans.append((start, len(remote_items)))
+
+		remove = None
+		for index, (begin, end) in enumerate(spans):
+			token = remote_items[begin:end]
+			if token == '--':
+				remove = (begin, end)
+				break
+			if token in ('-o', '--output') and index + 1 < len(spans):
+				folder_begin, folder_end = spans[index + 1]
+				folder = remote_items[folder_begin:folder_end]
+				try:
+					parts = shlex.split(folder, posix=True)
+				except ValueError:
+					parts = None
+				if parts and len(parts) == 1:
+					download_folder = parts[0]
+					remove = (begin, folder_end)
+				break
+		if remove:
+			begin, end = remove
+			remote_items = remote_items[:begin] + remote_items[end:]
 
 		if download_folder is None and options.download_folder:
 			download_folder = options.download_folder
@@ -7191,3 +7226,4 @@ load_rc()
 
 if __name__ == "__main__":
 	main()
+
