@@ -789,6 +789,9 @@ class BetterCMD:
 	def completedefault(self, *ignored):
 		return []
 
+	def resolve_command(self, command):
+		return command
+
 	def completenames(self, text, *ignored):
 		dotext = 'do_' + text
 		return [a[3:] for a in dir(self.__class__) if a.startswith(dotext)]
@@ -805,6 +808,7 @@ class BetterCMD:
 				if cmd == '':
 					compfunc = self.completedefault
 				else:
+					cmd = self.resolve_command(cmd)
 					try:
 						compfunc = getattr(self, 'complete_' + cmd)
 					except AttributeError:
@@ -812,6 +816,18 @@ class BetterCMD:
 			else:
 				compfunc = self.completenames
 			self.completion_matches = compfunc(text, line, begidx, endidx)
+			active_arg, i = line[:endidx], 0
+			while i < len(active_arg):
+				if active_arg[i] == '\\':
+					i += 2
+					continue
+				if active_arg[i].isspace():
+					active_arg = active_arg[i + 1:]
+					i = 0
+					continue
+				i += 1
+			if self.completion_matches == [text] and ("\\'" in active_arg or '\\"' in active_arg):
+				self.completion_matches = []
 		try:
 			return self.completion_matches[state]
 		except IndexError:
@@ -895,6 +911,12 @@ class MainMenu(BetterCMD):
 	@property
 	def raw_commands(self):
 		return [command.split('|')[0] for command in sum(self.commands.values(), [])]
+
+	def resolve_command(self, command):
+		if command in self.raw_commands:
+			return command
+		matches = [candidate for candidate in self.raw_commands if candidate.startswith(command)]
+		return matches[0] if len(matches) == 1 else command
 
 	@property
 	def active_sessions(self):
