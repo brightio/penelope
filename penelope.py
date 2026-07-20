@@ -1289,6 +1289,7 @@ class MainMenu(BetterCMD):
 		"""
 		download_folder = None
 		remote_items = remote_items or ''
+		windows_paths = getattr(core.sessions[self.sid], 'OS', None) == 'Windows'
 
 		spans = []
 		start = None
@@ -1301,7 +1302,7 @@ class MainMenu(BetterCMD):
 				start = i
 			if escaped:
 				escaped = False
-			elif char == '\\':
+			elif char == '\\' and not windows_paths:
 				escaped = True
 			elif quote:
 				if char == quote:
@@ -1858,11 +1859,12 @@ class ControlQueue:
 				pass
 
 	def get(self):
+		command = self.queue.get()
 		try:
 			os.read(self._out, 1)
 		except OSError:
 			return 'stop'
-		return self.queue.get()
+		return command
 
 	def clear(self):
 		with self._lock:
@@ -4948,6 +4950,7 @@ class Stream:
 		self._read, self._write = os.pipe()
 		self.writebuf = None
 		self.feed_thread = None
+		self._feed_lock = threading.Lock()
 		self.session = _session
 		self.read_closed = False
 		self.write_closed = False
@@ -4960,12 +4963,16 @@ class Stream:
 			self.writefunc = lambda data: self.session.send(Messenger.message(Messenger.STREAM, self.id + data))
 
 	def __lshift__(self, data):
-		if not self.writebuf:
-			self.writebuf = queue.Queue()
-		self.writebuf.put(data)
-		if not self.feed_thread:
-			self.feed_thread = threading.Thread(target=self.feed, name="feed stream -> " + repr(self.id))
-			self.feed_thread.start()
+		self._feed_lock.acquire()
+		try:
+			if self.writebuf is None:
+				self.writebuf = queue.Queue()
+			self.writebuf.put(data)
+			if self.feed_thread is None:
+				self.feed_thread = threading.Thread(target=self.feed, name="feed stream -> " + repr(self.id))
+				self.feed_thread.start()
+		finally:
+			self._feed_lock.release()
 
 	def feed(self):
 		while True:
