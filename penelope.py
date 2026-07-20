@@ -588,10 +588,14 @@ def ask(text):
 			return ' '
 
 def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
+	readline_quote_chars_saved = None
 	if threading.current_thread().name == 'MainThread':
 		signal.signal(signal.SIGINT, keyboard_interrupt)
 
 	if readline:
+		if readline_basic_quote_chars is not None:
+			readline_quote_chars_saved = readline_basic_quote_chars.value
+			readline_basic_quote_chars.value = ctypes.addressof(_readline_empty_quote_chars)
 		readline.set_completer(completer)
 		readline.set_completer_delims(completer_delims or default_readline_delims)
 		readline.clear_history()
@@ -621,6 +625,8 @@ def my_input(text="", histfile=None, histlen=None, completer=lambda text, state:
 			#readline.set_auto_history(False)
 		return response
 	finally:
+		if readline_quote_chars_saved is not None:
+			readline_basic_quote_chars.value = readline_quote_chars_saved
 		core.wait_input = False
 
 class BetterCMD:
@@ -7291,13 +7297,23 @@ signal.signal(signal.SIGWINCH, WinResize)
 keyboard_interrupt = signal.getsignal(signal.SIGINT)
 try:
 	import readline
+	readline_basic_quote_chars = None
 	if getattr(readline, 'backend', '') == 'editline' or 'libedit' in (readline.__doc__ or ''):
 		readline.parse_and_bind("bind ^I rl_complete")
 	else:
 		readline.parse_and_bind("tab: complete")
+		try:
+			import ctypes
+			_readline_empty_quote_chars = ctypes.create_string_buffer(b'')
+			readline_basic_quote_chars = ctypes.c_void_p.in_dll(
+				ctypes.CDLL(readline.__file__), 'rl_basic_quote_characters'
+			)
+		except (AttributeError, OSError, ValueError):
+			pass
 	default_readline_delims = readline.get_completer_delims()
 except ImportError:
 	readline = None
+	readline_basic_quote_chars = None
 	default_readline_delims = None
 def _restore_terminal():
 	try:
