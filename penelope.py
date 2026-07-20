@@ -400,11 +400,15 @@ class PBar:
 	def watch_speed(self):
 		self.pos_prev = 0
 		self.elapsed = 0
+		started = previous = time.monotonic()
 		while self:
 			time.sleep(self.check_interval)
-			self.elapsed += self.check_interval
-			self.speed = self.pos - self.pos_prev
+			now = time.monotonic()
+			interval = now - previous
+			self.elapsed = now - started
+			self.speed = (self.pos - self.pos_prev) / interval if interval else 0
 			self.pos_prev = self.pos
+			previous = now
 			self.speed_avg = self.pos / self.elapsed
 			if self.speed_avg: self.eta = max(0, int((self.end - self.pos) / self.speed_avg))
 			if self: self.render()
@@ -420,7 +424,7 @@ class PBar:
 	def render_one(self):
 		self.percent_prev = self.percent
 		left = f"{self.caption}"
-		elapsed = "" if not hasattr(self, 'elapsed') else f" | Elapsed {timedelta(seconds=self.elapsed)}"
+		elapsed = "" if not hasattr(self, 'elapsed') else f" | Elapsed {timedelta(seconds=int(self.elapsed))}"
 		speed = "" if not hasattr(self, 'speed') else f" | {self.metric(self.speed)}/s"
 		eta = "" if not hasattr(self, 'eta') else f" | ETA {timedelta(seconds=self.eta)}"
 		info = f"{str(self.percent).rjust(3)}% ({self.metric(self.pos)}/{self.metric(self.end)}){speed}{elapsed}{eta}"
@@ -469,17 +473,6 @@ class PBar:
 				__class__.pbars.clear()
 		finally:
 			if hasattr(__class__, 'render_lock'): __class__.render_lock.release()
-
-
-class PBarReader:
-	def __init__(self, fileobj, pbar):
-		self.fileobj = fileobj
-		self.pbar = pbar
-	def read(self, *args, **kwargs):
-		data = self.fileobj.read(*args, **kwargs)
-		if data:
-			self.pbar.update(len(data))
-		return data
 
 
 class paint:
@@ -4302,11 +4295,37 @@ class Session:
 
 			# Start Uploading
 			if self.agent:
+				size_tar = tarfile.open(fileobj=io.BytesIO(), mode='w', dereference=options.link_dereference)
+				def tar_data_size(path, arcname):
+					try:
+						info = size_tar.gettarinfo(str(path), arcname)
+					except (OSError, ValueError):
+						return 0
+					if info is None:
+						return 0
+					total = info.size if info.isfile() else 0
+					if info.isdir():
+						try:
+							children = sorted(os.listdir(path))
+						except OSError:
+							return total
+						for child in children:
+							total += tar_data_size(Path(path) / child, os.path.join(arcname, child))
+					return total
+
+				upload_size = 0
+				for item in resolved_items:
+					if isinstance(item, tuple):
+						upload_size += len(item[1])
+					else:
+						upload_size += tar_data_size(item, item.name)
+				size_tar.close()
+
 				stdin_stream = self.new_streamID
 				stdout_stream = self.new_streamID
 				stderr_stream = self.new_streamID
 
-				if not all([stdin_stream, stderr_stream]):
+				if not all([stdin_stream, stdout_stream, stderr_stream]):
 					return []
 
 				code = rf"""
@@ -4315,7 +4334,38 @@ class Session:
 					tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 				else:
 					tarfile.TarFile.posix = True
-				tar = tarfile.open(name='', mode='r|gz', fileobj=stdin_stream, bufsize=NET_BUF_SIZE)
+				def _progress_tar(base, out):
+					class ProgressTar(base):
+						def _copy_progress(self, src, dst, length):
+							remaining = length
+							while remaining:
+								buf = src.read(min(NET_BUF_SIZE, remaining))
+								if not buf:
+									raise IOError('unexpected end of data')
+								dst.write(buf)
+								out << (str(len(buf)) + '\n').encode()
+								remaining -= len(buf)
+
+						def makefile(self, tarinfo, targetpath):
+							source = self.fileobj
+							source.seek(tarinfo.offset_data)
+							target = open(targetpath, 'wb')
+							try:
+								sparse = getattr(tarinfo, 'sparse', None)
+								if sparse is not None:
+									for offset, size in sparse:
+										target.seek(offset)
+										self._copy_progress(source, target, size)
+									target.seek(tarinfo.size)
+									target.truncate()
+								else:
+									self._copy_progress(source, target, tarinfo.size)
+							finally:
+								target.close()
+					return ProgressTar
+
+				ProgressTar = _progress_tar(tarfile.TarFile, stdout_stream)
+				tar = ProgressTar.open(name='', mode='r|gz', fileobj=stdin_stream, bufsize=NET_BUF_SIZE)
 				tar.errorlevel = 1
 				for item in tar:
 					try:
@@ -4336,6 +4386,48 @@ class Session:
 
 				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
 				tar_destination, mode = stdin_stream, "r|gz"
+				pbar = PBar(upload_size, caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size) if upload_size else None
+				remote_errors = []
+
+				def monitor_remote():
+					out_buf = b''
+					err_buf = b''
+					out_open = True
+					err_open = True
+					while out_open or err_open:
+						watch = []
+						if out_open:
+							watch.append(stdout_stream)
+						if err_open:
+							watch.append(stderr_stream)
+						readable, _, _ = select(watch, [], [])
+						if stdout_stream in readable:
+							data = stdout_stream.read(options.network_buffer_size)
+							if data:
+								out_buf += data
+								while b'\n' in out_buf:
+									line, out_buf = out_buf.split(b'\n', 1)
+									if pbar and line.strip().isdigit():
+										remaining = max(0, pbar.end - pbar.pos - 1)
+										pbar.update(min(int(line), remaining))
+							else:
+								out_open = False
+						if stderr_stream in readable:
+							data = stderr_stream.read(options.network_buffer_size)
+							if data:
+								err_buf += data
+								while b'\n' in err_buf:
+									line, err_buf = err_buf.split(b'\n', 1)
+									remote_errors.append(line)
+									logger.error(str(paint('<REMOTE>').cyan) + ' ' + str(paint(line.decode(errors='replace')).red))
+							else:
+								if err_buf:
+									remote_errors.append(err_buf)
+									logger.error(str(paint('<REMOTE>').cyan) + ' ' + str(paint(err_buf.decode(errors='replace')).red))
+								err_open = False
+
+				monitor_thread = threading.Thread(target=monitor_remote)
+				monitor_thread.start()
 			else:
 				tar_buffer = io.BytesIO()
 				tar_destination, mode = tar_buffer, "r:gz"
@@ -4350,16 +4442,6 @@ class Session:
 						logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
 				return inner
 			tar.add = handle_exceptions(tar.add)
-
-			pbar = None
-			if self.agent and local_size:
-				pbar = PBar(local_size, caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size)
-				_orig_addfile = tar.addfile
-				def addfile_pbar(tarinfo, fileobj=None, *args, **kwargs):
-					if fileobj is not None:
-						fileobj = PBarReader(fileobj, pbar)
-					return _orig_addfile(tarinfo, fileobj, *args, **kwargs)
-				tar.addfile = addfile_pbar
 
 			altnames = []
 			for item in resolved_items:
@@ -4385,31 +4467,24 @@ class Session:
 			tar.close()
 
 			if self.agent:
-				if pbar:
-					pbar.update(pbar.end)
 				stdin_stream.write(b"")
-				dec = codecs.getincrementaldecoder('utf-8')(errors='replace')
-				error_buffer = ''
-				while True:
-					r, _, _ = select([stderr_stream], [], [], self.timeout_short)
-					if not stderr_stream in r:
-						if not self.exec("stdout_stream << str('ping').encode()", python=True, value=True): # TEMP
-							return []
-					data = stderr_stream.read(options.network_buffer_size)
-					if data:
-						error_buffer += dec.decode(data)
-						while '\n' in error_buffer:
-							line, error_buffer = error_buffer.split('\n', 1)
-							logger.error(str(paint("<REMOTE>").cyan) + " " + str(paint(line).red))
-					else:
-						error_buffer += dec.decode(b'', final=True)
-						break
+				monitor_thread.join()
+				if not self:
+					if pbar:
+						pbar.terminate()
+					return []
 				stdin_stream.close_read()
 				stdin_stream.close_write()
 				stdout_stream.close_read()
-				del self.streams[stdin_stream.id]
-				del self.streams[stdout_stream.id]
-				del self.streams[stderr_stream.id]
+				self.streams.pop(stdin_stream.id, None)
+				self.streams.pop(stdout_stream.id, None)
+				self.streams.pop(stderr_stream.id, None)
+				if remote_errors:
+					if pbar:
+						pbar.terminate()
+					return []
+				if pbar:
+					pbar.update(pbar.end)
 
 			else:
 				tar_buffer.seek(0)
