@@ -4926,9 +4926,6 @@ class Session:
 					stdout_dst=self.request,
 					agent_control=control
 				)
-				stderr_stream.close_read()
-				stderr_stream.close_write()
-				del session.streams[stderr_stream.id]
 
 		class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 			allow_reuse_address = True
