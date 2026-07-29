@@ -2700,7 +2700,11 @@ class Session:
 					self.streamID = self.streamID % self.streams_max
 
 				_stream_ID_hex = struct.pack(self.stream_code, self.streamID)
-				self.streams[_stream_ID_hex] = Stream(_stream_ID_hex, self)
+				try:
+					self.streams[_stream_ID_hex] = Stream(_stream_ID_hex, self)
+				except OSError as e:
+					logger.error(f"Cannot allocate stream: {e}")
+					return None
 
 				return self.streams[_stream_ID_hex]
 		else:
@@ -3269,18 +3273,34 @@ class Session:
 					buffer = io.BytesIO()
 				timeout = self.timeout_short if value else None
 
+				own_stdin = stdin_stream is None
+				own_stdout = stdout_stream is None
+				own_stderr = stderr_stream is None
+				allocated_streams = []
+
+				def cleanup_allocated_streams():
+					for stream in allocated_streams:
+						stream.close()
+						self.streams.pop(stream.id, None)
+
 				if not stdin_stream:
 					stdin_stream = self.new_streamID
 					if not stdin_stream:
+						cleanup_allocated_streams()
 						return
+					allocated_streams.append(stdin_stream)
 				if not stdout_stream:
 					stdout_stream = self.new_streamID
 					if not stdout_stream:
+						cleanup_allocated_streams()
 						return
+					allocated_streams.append(stdout_stream)
 				if not stderr_stream:
 					stderr_stream = self.new_streamID
 					if not stderr_stream:
+						cleanup_allocated_streams()
 						return
+					allocated_streams.append(stderr_stream)
 
 				_type = 'S'.encode() if not python else 'P'.encode()
 				self.send(Messenger.message(
@@ -3301,11 +3321,13 @@ class Session:
 				if stderr_dst or value:
 					rlist.append(stderr_stream) # FIX
 				if not rlist:
+					if own_stdin:
+						try:
+							stdin_stream.write(b"")
+						except OSError:
+							pass
+					cleanup_allocated_streams()
 					return True
-
-				#rlist = [self.subchannel.control, stdout_stream, stderr_stream]
-				#if stdin_src:
-				#	rlist.append(stdin_src)
 
 				if not agent_control:
 					agent_control = self.subchannel.control # TEMP
@@ -3349,10 +3371,7 @@ class Session:
 							closing.discard(dst)
 
 					if not r and not w:
-						#stdin_stream.terminate()
-						#stdout_stream.terminate()
-						#stderr_stream.terminate()
-						break # TODO need to clear everything first
+						break # timeout
 
 					for readable in r:
 
@@ -3376,7 +3395,6 @@ class Session:
 								data = b""
 							stdin_stream.write(data)
 							if not data:
-								#stdin_stream << b""
 								if stdin_src in rlist:
 									rlist.remove(stdin_src)
 
@@ -5099,11 +5117,14 @@ class Messenger:
 class Stream:
 	def __init__(self, _id, _session=None):
 		self.id = _id
-		self._read, self._write = os.pipe()
 		self.writebuf = None
 		self.feed_thread = None
 		self._feed_lock = threading.Lock()
 		self.session = _session
+		self.read_closed = True
+		self.write_closed = True
+		self._read = self._write = None
+		self._read, self._write = os.pipe()
 		self.read_closed = False
 		self.write_closed = False
 
@@ -5352,6 +5373,8 @@ def agent():
 							target_stream = streams.get(stream_id)
 							if target_stream is not None:
 								target_stream << data
+								if not data:
+									streams.pop(stream_id, None)
 
 				# Outgoing streams
 				else:
@@ -7503,4 +7526,3 @@ load_rc()
 
 if __name__ == "__main__":
 	main()
-
