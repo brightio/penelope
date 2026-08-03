@@ -28,6 +28,7 @@ import ssl
 import time
 import gzip
 import json
+import zlib
 import shlex
 import queue
 import codecs
@@ -55,7 +56,6 @@ from math import ceil
 from glob import glob
 from json import dumps
 from code import interact
-from zlib import compress
 from errno import EADDRINUSE, EADDRNOTAVAIL
 from select import select
 from pathlib import Path, PureWindowsPath
@@ -2518,6 +2518,7 @@ class Session:
 
 			self.timeout_short = options.timeout_short
 			self.timeout_long = options.timeout_long
+			self.compression_level = options.compression_level
 
 			self.last_lines = LineBuffer(options.attach_lines)
 			self.lock = threading.Lock()
@@ -3752,7 +3753,7 @@ class Session:
 					self.bin['sh'] or self.bin['bash'],
 					_exec
 				)
-				payload = base64.b64encode(compress(agent.encode(), 9)).decode()
+				payload = base64.b64encode(zlib.compress(agent.encode(), 9)).decode()
 				cmd = f'{_bin} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
 				if self.pty_ready:
@@ -4049,12 +4050,20 @@ class Session:
 						items.extend(_items)
 					else:
 						items.append(part)
-				import tarfile
+				import tarfile, zlib
 				if hasattr(tarfile, 'DEFAULT_FORMAT'):
 					tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
 				else:
 					tarfile.TarFile.posix = True
-				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream, dereference={repr(options.link_dereference)}, bufsize=NET_BUF_SIZE)
+				_compression = {{}}
+				if sys.version_info >= (3, 12):
+					_compression['compresslevel'] = {self.compression_level}
+				tar = tarfile.open(name="", mode='w|gz', fileobj=stdout_stream, dereference={repr(options.link_dereference)}, bufsize=NET_BUF_SIZE, **_compression)
+				if not _compression:
+					try:
+						tar.fileobj.cmp = zlib.compressobj({self.compression_level}, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
+					except:
+						pass
 				def handle_exceptions(func):
 					def inner(*args, **kwargs):
 						try:
@@ -4524,7 +4533,13 @@ class Session:
 				tar_buffer = io.BytesIO()
 				tar_destination, mode = tar_buffer, "r:gz"
 
-			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, dereference=options.link_dereference, bufsize=options.network_buffer_size)
+			_compression = {}
+			if self.agent and sys.version_info >= (3, 12):
+				_compression['compresslevel'] = self.compression_level
+			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, dereference=options.link_dereference,
+				bufsize=options.network_buffer_size, **_compression)
+			if self.agent and not _compression:
+				tar.fileobj.cmp = zlib.compressobj(self.compression_level, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
 
 			def handle_exceptions(func):
 				def inner(*args, **kwargs):
@@ -5117,6 +5132,7 @@ class Messenger:
 class Stream:
 	def __init__(self, _id, _session=None):
 		self.id = _id
+		self.max_payload = Messenger.MAX_PAYLOAD - len(_id)
 		self.writebuf = None
 		self.feed_thread = None
 		self._feed_lock = threading.Lock()
@@ -5162,6 +5178,9 @@ class Stream:
 		return self._read
 
 	def write(self, data):
+		while len(data) > self.max_payload:
+			self.writefunc(data[:self.max_payload])
+			data = data[self.max_payload:]
 		self.writefunc(data)
 
 	def close_write(self):
@@ -7046,6 +7065,7 @@ class Options:
 		self.upload_chunk_size = 1048576
 		self.download_chunk_size = 1048576
 		self.network_buffer_size = 32768
+		self.compression_level = 1
 		self.download_folder = ''
 		self.escape = {'sequence':b'\x1b[24~', 'key':'F12'}
 		self.logfile = f"{__program__}.log"
@@ -7109,6 +7129,11 @@ class Options:
 			if isinstance(value, int) and value > _max:
 				show(f"network_buffer_size capped to {_max} (TLV frame limit)")
 				value = _max
+
+		elif option == 'compression_level':
+			if isinstance(value, int) and not 0 <= value <= 9:
+				value = min(max(value, 0), 9)
+				show(f"compression_level clamped to {value} (valid range: 0-9)")
 
 		elif option == 'no_bins':
 			if value is None:
