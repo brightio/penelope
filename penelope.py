@@ -4012,7 +4012,7 @@ class Session:
 					logger.error(response)
 					return []
 			else:
-				cmd = f"du -ck {' '.join(shell_escape_glob(os.path.join(self.cwd, part)) for part in shlex.split(remote_items))}"
+				cmd = f"du -ck {' '.join(shell_escape_glob(os.path.normpath(os.path.join(self.cwd, part))) for part in shlex.split(remote_items))}"
 				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot determine remote size")
@@ -4107,7 +4107,7 @@ class Session:
 
 				tar_source, mode = stdout_stream, "r|gz"
 			else:
-				remote_items = ' '.join([shell_escape_glob(os.path.join(self.cwd, part)) for part in shlex.split(remote_items)])
+				remote_items = ' '.join([shell_escape_glob(os.path.normpath(os.path.join(self.cwd, part))) for part in shlex.split(remote_items)])
 				remote_tmp = self.tmp
 				if not remote_tmp:
 					logger.error("No writable directory available on target for download staging")
