@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.9"
+__version__ = "0.21.10"
 
 import os
 import io
@@ -2959,7 +2959,7 @@ class Session:
 						"sh", "bash", "python", "python3", "uname",
 						"tty", "echo", "base64", "wget", "curl", "tar",
 						"rm", "stty", "find", "nc", "gzip", "chmod",
-						"tr", "sed", "stat", "awk", "tail", "cut", "df", "id",
+						"tr", "sed", "stat", "awk", "tail", "cut", "df", "id", "du",
 						"cat", "mkfifo", "grep", "mktemp"
 					]
 					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
@@ -3974,7 +3974,7 @@ class Session:
 
 	@persistent_shell_only
 	@prefer_agent
-	@require('tar', 'base64', 'tr', 'cut')
+	@require('tar', 'base64', 'tr', 'cut', 'du')
 	def download(self, remote_items, download_folder=None, reroot=False):
 		if self.OS == 'Windows' and remote_items.count('"') % 2:
 			remote_items += '"'
@@ -4115,7 +4115,8 @@ class Session:
 					logger.error("No writable directory available on target for download staging")
 					return []
 				temp = remote_tmp + "/" + rand(8)
-				cmd = rf'tar -czf - {"-h " if options.link_dereference else ""}{remote_items}|base64|tr -d "\n" > {temp}'
+				qtemp = shlex.quote(temp)
+				cmd = rf'tar -czf - {"-h " if options.link_dereference else ""}{remote_items}|base64|tr -d "\n" > {qtemp}'
 				response = self.exec(cmd, timeout=None, value=True)
 				if response is False:
 					logger.error("Cannot create archive")
@@ -4124,9 +4125,9 @@ class Session:
 				for error in errors:
 					logger.error(error)
 				send_size = self.exec(
-					rf"_s=$( (stat -x {temp} 2>/dev/null || stat {temp} 2>/dev/null) "
-					rf"| sed -n 's/.*Size: \([0-9]*\).*/\1/p' ); "
-					rf'[ -n "$_s" ] && echo "$_s" || wc -c < {temp}',
+					rf"_s=$( (stat -x {qtemp} 2>/dev/null || stat {qtemp} 2>/dev/null) "
+					rf"| sed -n 's/.*Size: \([0-9]*\).*/\1/p' 2>/dev/null ); "
+					rf'[ -n "$_s" ] && echo "$_s" || wc -c < {qtemp}',
 					value=True
 				)
 				if not (isinstance(send_size, str) and send_size.strip().isdigit()):
@@ -4138,16 +4139,16 @@ class Session:
 				pbar = PBar(send_size, caption=f" {paint('⤷').softgreen} ", barlen=30, metric=Size, reverse=True)
 				b64data = io.BytesIO()
 				for offset in range(0, send_size, options.download_chunk_size):
-					response = self.exec(f"cut -c{offset + 1}-{offset + options.download_chunk_size} {temp}")
+					response = self.exec(f"cut -c{offset + 1}-{offset + options.download_chunk_size} {qtemp}")
 					if response is False:
 						pbar.terminate()
 						logger.error("Download interrupted")
 						if self:
-							self.exec(f"rm {temp}")
+							self.exec(f"rm {qtemp}")
 						return []
 					b64data.write(response)
 					pbar.update(len(response))
-				self.exec(f"rm {temp}")
+				self.exec(f"rm {qtemp}")
 
 				try:
 					raw = base64.b64decode(b64data.getvalue())
@@ -4363,12 +4364,12 @@ class Session:
 						remote_block_size = int(remote_block_size)
 						remote_space = int(remote_available_blocks) * remote_block_size
 			else:
-				remote_block_size = self.exec(rf'stat -c "%o" {destination} 2>/dev/null || stat -f "%k" {destination}', value=True)
+				remote_block_size = self.exec(rf'stat -c "%o" {shlex.quote(destination)} 2>/dev/null || stat -f "%k" {shlex.quote(destination)}', value=True)
 				if isinstance(remote_block_size, str) and remote_block_size.isdigit():
 					remote_block_size = int(remote_block_size)
 				else:
 					remote_block_size = None
-				remote_available_kb = self.exec(f"df -k {destination}|tail -1|awk '{{print $4}}'", value=True)
+				remote_available_kb = self.exec(f"df -k {shlex.quote(destination)}|tail -1|awk '{{print $4}}'", value=True)
 				if isinstance(remote_available_kb, str) and remote_available_kb.isdigit():
 					remote_space = int(remote_available_kb) * 1024
 
@@ -4604,6 +4605,7 @@ class Session:
 					logger.error("No writable directory available on target for upload staging")
 					return []
 				temp = remote_tmp + "/" + rand(8)
+				qtemp = shlex.quote(temp)
 
 				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
 				pbar = PBar(raw_size, caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size)
@@ -4613,21 +4615,21 @@ class Session:
 					chunk = base64.b64encode(raw[offset:offset + slice_size])
 					body = b"\n".join(chunks(chunk, 512)).decode()
 					term = "UP_" + rand(16)
-					response = self.exec(f"cat >> {temp} <<'{term}'\n{body}\n{term}\n:")
+					response = self.exec(f"cat >> {qtemp} <<'{term}'\n{body}\n{term}\n:")
 					if response is False:
 						pbar.terminate()
 						logger.error("Upload interrupted")
-						self.exec(f"rm {temp}")
+						self.exec(f"rm {qtemp}")
 						return []
 					sent = min(offset + slice_size, raw_size)
 					pbar.update(sent - pbar.pos)
 
 				logger.debug(paint("--- Remote unpacking...").blue)
 				dest = f"-C {shlex.quote(remote_path)}" if remote_path else ""
-				cmd = f"{{ base64 -d 2>/dev/null || base64 -D; }} < {temp} | tar xz {dest} 2>&1; temp=$?"
+				cmd = f"{{ base64 -d 2>/dev/null || base64 -D; }} < {qtemp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True)
 				exit_code = self.exec("echo $temp", value=True)
-				self.exec(f"rm {temp}")
+				self.exec(f"rm {qtemp}")
 				if not (isinstance(exit_code, str) and exit_code.strip() == "0"):
 					logger.error(response if response else "Remote unpacking failed or timed out")
 					return []
@@ -5779,7 +5781,7 @@ class uac(Module):
 				logger.error("Failed to upload UAC")
 				return False
 			path = uploaded[0]
-			result = session.exec(f"tar xf {path} -C {session.exec_tmp} >/dev/null", value=True)
+			result = session.exec(f"tar xf {path} -C {shlex.quote(session.exec_tmp)} >/dev/null", value=True)
 			if not result:
 				session.exec(f"rm -f {path}")
 				logger.info(f"UAC successfully extracted on {session.exec_tmp}")
@@ -5788,9 +5790,9 @@ class uac(Module):
 				return False
 			# UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
 			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
-			base = re.sub(r'\.tar\.gz$', '', path)
-			session.uploaded_paths[base] = int(time.time())
-			cmd = f"cd {base}; ./uac -u -p ir_triage --output-format tar {session.tmp}"
+			base = re.sub(r'\.tar\.gz$', '', shlex.split(path)[0])
+			session.uploaded_paths[shlex.quote(base)] = int(time.time())
+			cmd = f"cd {shlex.quote(base)}; ./uac -u -p ir_triage --output-format tar {shlex.quote(session.tmp)}"
 			#session.exec(cmd)
 			fd, tf = tempfile.mkstemp(prefix="penelope-", suffix=".sh")
 			with os.fdopen(fd, "w") as f:
@@ -5820,7 +5822,7 @@ class linux_procmemdump(Module):
 			print(session.exec(f"ps -eo pid,cmd", value=True))
 			logger.info(f"Please provide the PID of the process to be acquired:")
 			PID = input("PID: ")
-			session.exec(f"{session.exec_tmp}/linux_procmemdump.sh -p {PID} -s -d {session.tmp}")
+			session.exec(f"{shlex.quote(session.exec_tmp + '/linux_procmemdump.sh')} -p {PID} -s -d {shlex.quote(session.tmp)}")
 			logger.info(f"Strings of the process dump will be stored at {session.tmp}/{PID}/")
 		else:
 			logger.error("This module runs only on Unix shells")
@@ -5906,12 +5908,12 @@ class ngrok(Module):
 				return False
 
 			token = input("Authtoken: ")
-			session.exec(f"{session.exec_tmp}/ngrok config add-authtoken {token}")
+			session.exec(f"{shlex.quote(session.exec_tmp + '/ngrok')} config add-authtoken {token}")
 			logger.info("Provide a TCP port number to be exposed in ngrok cloud:")
 			tcp_port = input("tcp_port: ")
 			#logger.info("Indicate if a TCP or an HTTP tunnel is required?:")
 			#tunnel = input("tunnel: ")
-			cmd = f"cd {session.exec_tmp}; ./ngrok tcp {tcp_port} --log=stdout"
+			cmd = f"cd {shlex.quote(session.exec_tmp)}; ./ngrok tcp {tcp_port} --log=stdout"
 			print(cmd)
 			#session.exec(cmd)
 			fd, tf = tempfile.mkstemp(prefix="penelope-", suffix=".sh")
@@ -6065,11 +6067,12 @@ class cleanup(Module):
 		Remove uploaded files and directories from the target
 		"""
 		for item in list(session.uploaded_paths.keys()):
-			p = item.strip('"').strip("'")
 			if session.OS == 'Unix':
-				response = session.exec(f'[ -e "{p}" ] && echo "exists" || echo "no"', value=True)
+				p = shlex.split(item)[0]
+				q = shlex.quote(p)
+				response = session.exec(f'[ -e {q} ] && echo "exists" || echo "no"', value=True)
 				if response == 'exists':
-					response = session.exec(f'rm -rf -- "{p}";echo $?', value=True)
+					response = session.exec(f'rm -rf -- {q};echo $?', value=True)
 					if response == '0':
 						logger.info(f"Deleted '{p}'")
 						del session.uploaded_paths[item]
@@ -6079,6 +6082,7 @@ class cleanup(Module):
 					logger.debug(f"'{p}' already gone")
 					del session.uploaded_paths[item]
 			else:
+				p = item.strip('"')
 				response = session.exec(f'cmd /Q /D /C if exist "{p}" (echo exists) else (echo no)', force_cmd=True, value=True)
 				if response == 'exists':
 					if session.subtype == 'cmd':
