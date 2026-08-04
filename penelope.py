@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.8"
+__version__ = "0.21.9"
 
 import os
 import io
@@ -3605,18 +3605,20 @@ class Session:
 				self.subchannel.result = self.subchannel.result.strip().decode(errors="replace") # TODO check strip
 			logger.debug(f"{paint('FINAL RESPONSE: ').white_BLUE}{self.subchannel.result}")
 
+			result, self.subchannel.result, self.subchannel.pattern = self.subchannel.result, None, None
+
 			if separate:
-				if not self.subchannel.result:
+				if not result:
 					with self.data_route_lock:
 						self.subchannel.active = False
 					return False
 				marker = struct.pack(Messenger._TYPE_CODE, Messenger.SHELL)
-				idx = self.subchannel.result.find(marker, Messenger.LEN_BYTES)
+				idx = result.find(marker, Messenger.LEN_BYTES)
 				if idx < 0:
 					with self.data_route_lock:
 						self.subchannel.active = False
 					return False
-				framed_result = self.subchannel.result[idx - Messenger.LEN_BYTES:]
+				framed_result = result[idx - Messenger.LEN_BYTES:]
 				buffer = io.BytesIO()
 				for _type, _value in self.messenger.feed(framed_result):
 					buffer.write(_value)
@@ -3628,7 +3630,7 @@ class Session:
 			with self.data_route_lock:
 				self.subchannel.active = False
 
-			return self.subchannel.result
+			return result
 
 	def _deploy_standalone_python(self, url_key):
 		if not url_key:
@@ -4122,9 +4124,9 @@ class Session:
 				for error in errors:
 					logger.error(error)
 				send_size = self.exec(
-					rf"(stat -x {temp} 2>/dev/null || stat {temp} 2>/dev/null) "
-					rf"| sed -n 's/.*Size: \([0-9]*\).*/\1/p' "
-					rf"| grep . || wc -c < {temp}",
+					rf"_s=$( (stat -x {temp} 2>/dev/null || stat {temp} 2>/dev/null) "
+					rf"| sed -n 's/.*Size: \([0-9]*\).*/\1/p' ); "
+					rf'[ -n "$_s" ] && echo "$_s" || wc -c < {temp}',
 					value=True
 				)
 				if not (isinstance(send_size, str) and send_size.strip().isdigit()):
@@ -4147,15 +4149,15 @@ class Session:
 					pbar.update(len(response))
 				self.exec(f"rm {temp}")
 
-				data = io.BytesIO()
 				try:
-					data.write(gzip.decompress(base64.b64decode(b64data.getvalue())))
+					raw = base64.b64decode(b64data.getvalue())
 				except Exception:
 					logger.error("Invalid data returned")
 					return []
-				data.seek(0)
+				b64data.close()
 
-				tar_source, mode = data, "r:"
+				tar_source, mode = io.BytesIO(raw), "r:gz"
+				del raw
 
 			# Local extraction
 			try:
@@ -4594,9 +4596,9 @@ class Session:
 					pbar.update(pbar.end)
 
 			else:
-				tar_buffer.seek(0)
-				raw = tar_buffer.read()
-				data = base64.b64encode(raw).decode()
+				raw = tar_buffer.getvalue()
+				tar_buffer.close()
+				raw_size = len(raw)
 				remote_tmp = self.tmp
 				if not remote_tmp:
 					logger.error("No writable directory available on target for upload staging")
@@ -4604,10 +4606,12 @@ class Session:
 				temp = remote_tmp + "/" + rand(8)
 
 				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
-				pbar = PBar(len(raw), caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size)
+				pbar = PBar(raw_size, caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size)
+				slice_size = max(3, options.upload_chunk_size // 4 * 3)
 				sent = 0
-				for chunk in chunks(data, options.upload_chunk_size):
-					body = "\n".join(chunks(chunk, 512))
+				for offset in range(0, raw_size, slice_size):
+					chunk = base64.b64encode(raw[offset:offset + slice_size])
+					body = b"\n".join(chunks(chunk, 512)).decode()
 					term = "UP_" + rand(16)
 					response = self.exec(f"cat >> {temp} <<'{term}'\n{body}\n{term}\n:")
 					if response is False:
@@ -4615,8 +4619,8 @@ class Session:
 						logger.error("Upload interrupted")
 						self.exec(f"rm {temp}")
 						return []
-					sent += len(chunk)
-					pbar.update(int(len(raw) * sent / len(data)) - pbar.pos)
+					sent = min(offset + slice_size, raw_size)
+					pbar.update(sent - pbar.pos)
 
 				logger.debug(paint("--- Remote unpacking...").blue)
 				dest = f"-C {shlex.quote(remote_path)}" if remote_path else ""
@@ -5475,7 +5479,7 @@ def upload_single_from_archive(session, url, member, arcname, remote_path=None):
 		logger.error(f"Failed to download {arcname}")
 		return False
 	buf = io.BytesIO(archive)
-	if member is None:                       # single-stream gzip
+	if member is None:
 		with gzip.GzipFile(fileobj=buf, mode="rb") as g:
 			data = g.read()
 	elif zipfile.is_zipfile(buf):
@@ -5486,7 +5490,7 @@ def upload_single_from_archive(session, url, member, arcname, remote_path=None):
 			except KeyError:
 				logger.error(f"File '{member}' not found in downloaded archive")
 				return False
-	else:                                    # tar.gz
+	else:
 		buf.seek(0)
 		with tarfile.open(fileobj=buf, mode="r:gz") as tf:
 			try:
@@ -6760,9 +6764,15 @@ def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 
 	tar._extract_member = guarded
 	import warnings
-	with warnings.catch_warnings():
-		warnings.simplefilter("ignore", category=DeprecationWarning)
-		tar.extractall(dest)
+	try:
+		with warnings.catch_warnings():
+			warnings.simplefilter("ignore", category=DeprecationWarning)
+			tar.extractall(dest)
+	finally:
+		try:
+			del tar._extract_member
+		except AttributeError:
+			tar._extract_member = orig_extract_member
 	return extracted
 
 def windows_zip_script(remote_items, archive_path):
