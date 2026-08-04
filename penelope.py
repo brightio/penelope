@@ -4534,13 +4534,14 @@ class Session:
 				tar_buffer = io.BytesIO()
 				tar_destination, mode = tar_buffer, "r:gz"
 
+			level = self.compression_level if self.agent else 6
 			_compression = {}
-			if self.agent and sys.version_info >= (3, 12):
-				_compression['compresslevel'] = self.compression_level
+			if sys.version_info >= (3, 12):
+				_compression['compresslevel'] = level
 			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, dereference=options.link_dereference,
 				bufsize=options.network_buffer_size, **_compression)
-			if self.agent and not _compression:
-				tar.fileobj.cmp = zlib.compressobj(self.compression_level, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
+			if not _compression:
+				tar.fileobj.cmp = zlib.compressobj(level, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
 
 			def handle_exceptions(func):
 				def inner(*args, **kwargs):
