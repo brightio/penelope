@@ -5222,7 +5222,7 @@ class Stream:
 		return data
 
 def agent():
-	import os, sys, pty, shlex, fcntl, errno, struct, signal, termios, select, threading
+	import os, sys, tty, pty, shlex, fcntl, errno, struct, signal, termios, select, threading
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 	normalize_path = lambda path: os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
@@ -5263,7 +5263,7 @@ def agent():
 	if shell_pid == pty.CHILD:
 		os.execl(SHELL, SHELL, '-i')
 	try:
-		pty.setraw(pty.STDIN_FILENO)
+		tty.setraw(pty.STDIN_FILENO)
 	except:
 		pass
 	try:
@@ -6705,11 +6705,11 @@ def get_glob_size(_glob, block_size, dereference=False):
 	return total_size
 
 def _is_within_directory(directory, target):
-       target = os.path.realpath(target)
-       try:
-               return os.path.commonpath([directory]) == os.path.commonpath([directory, target])
-       except ValueError:
-               return False
+	target = os.path.realpath(target)
+	try:
+		return os.path.commonpath([directory]) == os.path.commonpath([directory, target])
+	except ValueError:
+		return False
 
 def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 	dest_real = os.path.realpath(dest)
@@ -6725,6 +6725,7 @@ def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 					break
 			if not name:
 				return
+			tarinfo.name = name
 			targetpath = os.path.join(dest_real, name)
 
 		if not _is_within_directory(dest_real, targetpath):
@@ -6767,10 +6768,10 @@ def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 		extracted.append(targetpath)
 
 	tar._extract_member = guarded
-	import warnings
 	try:
-		with warnings.catch_warnings():
-			warnings.simplefilter("ignore", category=DeprecationWarning)
+		if hasattr(tarfile, 'data_filter'):
+			tar.extractall(dest, filter='fully_trusted')
+		else:
 			tar.extractall(dest)
 	finally:
 		try:
@@ -7403,12 +7404,12 @@ stdout_handler = logging.StreamHandler()
 stdout_handler.setFormatter(CustomFormatter())
 stdout_handler.terminator = ''
 
-file_handler = logging.FileHandler(options.logfile)
+file_handler = logging.FileHandler(options.logfile, encoding='utf-8', errors='replace')
 file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
 file_handler.setLevel(logging.INFO)
 file_handler.terminator = ''
 
-debug_file_handler = logging.FileHandler(options.debug_logfile)
+debug_file_handler = logging.FileHandler(options.debug_logfile, encoding='utf-8', errors='replace')
 debug_file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
 debug_file_handler.addFilter(lambda record: True if record.levelno == logging.DEBUG else False)
 debug_file_handler.terminator = ''
