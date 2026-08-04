@@ -255,9 +255,8 @@ class Interfaces:
 
 class Table:
 
-	def __init__(self, list_of_lists=[], header=None, fillchar=" ", joinchar=" "):
-		self.list_of_lists = list_of_lists
-
+	def __init__(self, list_of_lists=None, header=None, fillchar=" ", joinchar=" "):
+		self.list_of_lists = [] if list_of_lists is None else list_of_lists
 		self.joinchar = joinchar
 
 		if type(fillchar) is str:
@@ -550,22 +549,21 @@ class HelpFormatter(RawTextHelpFormatter):
 
 
 class LineBuffer:
-	def __init__(self, length):
-		self.len = length
-		self.lines = deque(maxlen=self.len)
+	def __init__(self, maxlines):
+		self.lines = deque(maxlen=maxlines)
+		self.lock = threading.Lock()
 
 	def __lshift__(self, data):
 		if isinstance(data, str):
 			data = data.encode()
-		if self.lines and not self.lines[-1].endswith(b'\n'):
-			current_partial = self.lines.pop()
-		else:
-			current_partial = b''
-		self.lines.extend((current_partial + data).split(b'\n'))
+		with self.lock:
+			partial = self.lines.pop() if self.lines else b''
+			self.lines.extend((partial + data).rsplit(b'\n', self.lines.maxlen))
 		return self
 
 	def __bytes__(self):
-		return b'\n'.join(self.lines)
+		with self.lock:
+			return b'\n'.join(self.lines)
 
 def stdout(data, record=True):
 	try:
@@ -943,7 +941,7 @@ class MainMenu(BetterCMD):
 				f"{session_part}{paint('>').cyan_DIM} "
 		)
 
-	def session_operation(current=False, extra=[]):
+	def session_operation(current=False, extra=()):
 		def inner(func):
 			@wraps(func)
 			def newfunc(self, ID):
@@ -1097,7 +1095,7 @@ class MainMenu(BetterCMD):
 			except Exception as e:
 				logger.error(e)
 
-	@session_operation(extra=['none'])
+	@session_operation(extra=('none',))
 	def do_use(self, ID):
 		"""
 		[SessionID|none]
@@ -1128,13 +1126,13 @@ class MainMenu(BetterCMD):
 				return True
 		else:
 			if core.sessions:
-				for host, sessions in tuple(core.hosts.items()):
+				for host, sessions in core.hosts.items():
 					if not sessions:
 						continue
 					print('\n➤  ' + sessions[0].name_colored)
 					table = Table(joinchar=' | ')
 					table.header = [paint(header).cyan for header in ('ID', 'Shell', 'User', 'Source', 'Recv ↓', 'Sent ↑', 'Signal')]
-					for session in tuple(sessions):
+					for session in sessions:
 						if self.sid == session.id:
 							ID = paint('[' + str(session.id) + ']').red
 						elif session.new:
@@ -1175,7 +1173,7 @@ class MainMenu(BetterCMD):
 		"""
 		return core.sessions[ID].attach()
 
-	@session_operation(extra=['*'])
+	@session_operation(extra=('*',))
 	def do_kill(self, ID):
 		"""
 		[SessionID|*]
@@ -1197,7 +1195,7 @@ class MainMenu(BetterCMD):
 					if options.maintain > 1:
 						options.maintain = 1
 						self.onecmd("maintain")
-					for session in reversed(tuple(core.sessions.values())):
+					for session in reversed(list(core.sessions.values())):
 						session.kill()
 				else:
 					return False
@@ -1227,7 +1225,7 @@ class MainMenu(BetterCMD):
 			if core.forwardings:
 				table = Table(joinchar=' | ')
 				table.header = [paint(header).orange for header in ('ID', 'Session', 'Type', 'Local', 'Remote')]
-				for fwd in core.forwardings.values():
+				for fwd in list(core.forwardings.values()):
 					_type, lhost, lport, rhost, rport = fwd.info
 					table += [fwd.id, fwd.session.id, 'Local' if _type == 'L' else 'Remote',
 						f"{lhost}:{lport}", f"{rhost}:{rport}"]
@@ -1243,7 +1241,7 @@ class MainMenu(BetterCMD):
 				cmdlogger.warning("Specify a Port Forward ID (or *) to stop")
 				return False
 			if args[1] == '*':
-				forwardings = tuple(core.forwardings.values())
+				forwardings = list(core.forwardings.values())
 				if not forwardings:
 					cmdlogger.warning("No Port Forwards to stop...")
 					return False
@@ -1661,7 +1659,7 @@ class MainMenu(BetterCMD):
 
 			elif args.command == "stop":
 				if args.id == '*':
-					listeners = tuple(core.listeners.values())
+					listeners = list(core.listeners.values())
 					if listeners:
 						for listener in listeners:
 							listener.stop()
@@ -1678,7 +1676,7 @@ class MainMenu(BetterCMD):
 			if core.listeners:
 				table = Table(joinchar=' | ')
 				table.header = [paint(header).orange for header in ('ID', 'Type', 'Host', 'Port')]
-				for listener in core.listeners.values():
+				for listener in list(core.listeners.values()):
 					table += [listener.id, listener.__class__.__name__, listener.host, listener.port]
 				print('\n', indent(str(table), '  '), '\n', sep='')
 			else:
@@ -1713,7 +1711,7 @@ class MainMenu(BetterCMD):
 		"""
 		if core.listeners:
 			print()
-			for listener in core.listeners.values():
+			for listener in list(core.listeners.values()):
 				print(listener.payloads(line))
 		else:
 			cmdlogger.warning("No Listeners to show payloads")
@@ -2005,7 +2003,7 @@ class Core:
 	@property
 	def hosts(self):
 		result = {}
-		for session in tuple(self.sessions.values()):
+		for session in list(self.sessions.values()):
 			name = getattr(session, 'name', None)
 			if name:
 				result.setdefault(name, []).append(session)
@@ -2023,7 +2021,7 @@ class Core:
 	def sample_signals(self):
 		prev = {}
 		while self.started:
-			for session in tuple(self.sessions.values()):
+			for session in list(self.sessions.values()):
 				try:
 					sig = session.tcp_signal()
 					if sig is not None:
@@ -2087,7 +2085,7 @@ class Core:
 						continue
 					except OSError:
 						continue
-					if sum(1 for s in tuple(self.sessions.values()) if s.ip == endpoint[0]) >= options.max_sessions:
+					if sum(1 for s in list(self.sessions.values()) if s.ip == endpoint[0]) >= options.max_sessions:
 						_socket.close()
 						logger.debug(f"Rejected {endpoint}: max sessions per host ({options.max_sessions}) reached")
 						continue
@@ -2206,13 +2204,13 @@ class Core:
 
 		if self.sessions:
 			logger.warning("Killing sessions...")
-			for session in reversed(tuple(self.sessions.values())):
+			for session in reversed(list(self.sessions.values())):
 				session.kill()
 
-		for listener in tuple(self.listeners.values()):
+		for listener in list(self.listeners.values()):
 			listener.stop()
 
-		for fileserver in tuple(self.fileservers.values()):
+		for fileserver in list(self.fileservers.values()):
 			fileserver.stop()
 
 		self.control << (lambda: setattr(self, 'started', False))
@@ -4818,7 +4816,7 @@ class Session:
 					port = port or self._port
 					host = host or self._host
 
-					if not next((listener for listener in core.listeners.values() if listener.port == port), None):
+					if not next((listener for listener in list(core.listeners.values()) if listener.port == port), None):
 						new_listener = TCPListener(host, port)
 						if not new_listener:
 							logger.error(f"Cannot listen on {host}:{port}. Spawning shell aborted")
@@ -5023,7 +5021,7 @@ class Session:
 
 		self.subchannel.control.close()
 		self.subchannel.close()
-		for stream in tuple(self.streams.values()):
+		for stream in list(self.streams.values()):
 			stream << b""
 
 		core.rlist.remove(self)
@@ -5043,7 +5041,7 @@ class Session:
 			message = f"Session [{self.id}] died..."
 			others = any(
 				s is not self and getattr(s, 'name', None) == self.name
-				for s in tuple(core.sessions.values())
+				for s in list(core.sessions.values())
 			)
 			if not others:
 				message += f" We lost {self.name_colored} {EMOJIS['lost']}"
@@ -5061,7 +5059,7 @@ class Session:
 			self.attaching = False
 			menu.show()
 
-		for fwd in tuple(self.tasks['portfwd']):
+		for fwd in list(self.tasks['portfwd']):
 			fwd.stop()
 
 		if self.OS and hasattr(self, 'name'):
@@ -7000,7 +6998,7 @@ def listener_menu():
 			elif command == 'p':
 				restore_tty()
 				print()
-				for listener in core.listeners.values():
+				for listener in list(core.listeners.values()):
 					print(listener.payloads(), end='\n\n')
 			elif command == '\x0C':
 				os.system("clear")
