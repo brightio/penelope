@@ -6400,8 +6400,13 @@ class FileServer:
 
 
 class MCPServer:
-	PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
+	MODERN_PROTOCOL_VERSION = '2026-07-28'
+	LEGACY_PROTOCOL_VERSIONS = ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05')
+	PROTOCOL_VERSIONS = (MODERN_PROTOCOL_VERSION,) + LEGACY_PROTOCOL_VERSIONS
 	MAX_OUTPUT  = 10 * 1024 ** 2
+	SERVER_INFO = {'name': 'penelope', 'version': '1.0.0'}
+	INSTRUCTIONS = ('List sessions before using a session-specific tool. Session IDs refer to live '
+		'Penelope sessions and may disappear when a shell closes.')
 
 	TOOLS = [
 		{'name': 'list_sessions',
@@ -6546,7 +6551,16 @@ class MCPServer:
 
 		raise ValueError(f'unknown tool: {name}')
 
-	def _jsonrpc(self, req):
+	def _success(self, req_id, result, modern=False):
+		if modern:
+			result = dict(result)
+			result.setdefault('resultType', 'complete')
+			meta = dict(result.get('_meta') or {})
+			meta.setdefault('io.modelcontextprotocol/serverInfo', self.SERVER_INFO)
+			result['_meta'] = meta
+		return {'jsonrpc': '2.0', 'id': req_id, 'result': result}
+
+	def _jsonrpc(self, req, modern=False):
 		"""Handle one JSON-RPC 2.0 message. Returns a response dict, or None for notifications."""
 		if not isinstance(req, dict):
 			return {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Invalid Request'}}
@@ -6556,14 +6570,22 @@ class MCPServer:
 
 		if method == 'initialize':
 			want = params.get('protocolVersion')
-			version = want if want in self.PROTOCOL_VERSIONS else self.PROTOCOL_VERSIONS[0]
+			version = want if want in self.LEGACY_PROTOCOL_VERSIONS else self.LEGACY_PROTOCOL_VERSIONS[0]
 			return {'jsonrpc': '2.0', 'id': req_id, 'result': {
 				'protocolVersion': version,
 				'capabilities': {'tools': {}},
-				'serverInfo': {'name': 'penelope', 'version': '1.0.0'}}}
+				'serverInfo': self.SERVER_INFO,
+				'instructions': self.INSTRUCTIONS}}
+
+		if method == 'server/discover':
+			return self._success(req_id, {
+				'supportedVersions': list(self.PROTOCOL_VERSIONS),
+				'capabilities': {'tools': {}},
+				'instructions': self.INSTRUCTIONS,
+			}, modern=True)
 
 		if method == 'tools/list':
-			return {'jsonrpc': '2.0', 'id': req_id, 'result': {'tools': self.TOOLS}}
+			return self._success(req_id, {'tools': self.TOOLS}, modern)
 
 		if method == 'tools/call':
 			try:
@@ -6576,8 +6598,8 @@ class MCPServer:
 			text = f"Error: {result['error']}" if 'error' in result else json.dumps(result, indent=2)
 			if len(text) > self.MAX_OUTPUT:
 				text = text[:self.MAX_OUTPUT] + f"\n...[truncated, {len(text)} bytes total]"
-			return {'jsonrpc': '2.0', 'id': req_id,
-				'result': {'content': [{'type': 'text', 'text': text}], 'isError': 'error' in result}}
+			return self._success(req_id,
+				{'content': [{'type': 'text', 'text': text}], 'isError': 'error' in result}, modern)
 
 		if method.startswith('notifications/'):
 			return None
@@ -6615,18 +6637,53 @@ class MCPServer:
 				if payload:
 					self.wfile.write(payload)
 
-			def _authorized(self):
+			def _valid_origin(self):
 				origin = self.headers.get('Origin')
-				if origin and not re.match(r'^https?://(127\.0\.0\.1|localhost)(:\d+)?$', origin):
-					return False
+				return not origin or bool(re.match(r'^https?://(127\.0\.0\.1|localhost)(:\d+)?$', origin))
+
+			def _authorized(self):
 				auth = self.headers.get('Authorization', '')
 				prefix = 'Bearer '
 				return auth.startswith(prefix) and hmac.compare_digest(auth[len(prefix):], mcp.token)
+
+			def _modern_error(self, req, code, message, data=None):
+				error = {'code': code, 'message': message}
+				if data is not None:
+					error['data'] = data
+				payload = json.dumps({'jsonrpc': '2.0',
+					'id': req.get('id') if isinstance(req, dict) else None, 'error': error}).encode()
+				self._reply(400, payload)
+
+			def _validate_modern(self, req):
+				version = self.headers.get('MCP-Protocol-Version')
+				if not version or version in mcp.LEGACY_PROTOCOL_VERSIONS:
+					return False, None
+				if version != mcp.MODERN_PROTOCOL_VERSION:
+					return False, (-32022, 'Unsupported protocol version', {
+						'supported': list(mcp.PROTOCOL_VERSIONS), 'requested': version})
+				if not isinstance(req, dict):
+					return False, (-32020, 'Modern MCP requests must contain one JSON-RPC message', None)
+
+				method = req.get('method')
+				params = req.get('params') or {}
+				meta = params.get('_meta') if isinstance(params, dict) else None
+				if self.headers.get('Mcp-Method') != method:
+					return False, (-32020, 'Mcp-Method header does not match the request', None)
+				if method == 'tools/call' and self.headers.get('Mcp-Name') != params.get('name'):
+					return False, (-32020, 'Mcp-Name header does not match the tool name', None)
+				if not isinstance(meta, dict) or meta.get(
+						'io.modelcontextprotocol/protocolVersion') != version:
+					return False, (-32020, 'Protocol version metadata does not match the header', None)
+				if not isinstance(meta.get('io.modelcontextprotocol/clientCapabilities'), dict):
+					return False, (-32602, 'clientCapabilities metadata must be an object', None)
+				return True, None
 
 			def do_GET(self):
 				self._reply(405)
 
 			def do_POST(self):
+				if not self._valid_origin():
+					return self._reply(403)
 				if not self._authorized():
 					return self._reply(401)
 				length = int(self.headers.get('Content-Length') or 0)
@@ -6638,11 +6695,14 @@ class MCPServer:
 					return self._reply(200, json.dumps(
 						{'jsonrpc': '2.0', 'id': None,
 						 'error': {'code': -32700, 'message': 'Parse error'}}).encode())
+				modern, error = self._validate_modern(req)
+				if error:
+					return self._modern_error(req, *error)
 				if isinstance(req, list):
 					out = [r for r in (mcp._jsonrpc(x) for x in req) if r is not None]
 					payload = json.dumps(out).encode() if out else b''
 				else:
-					resp = mcp._jsonrpc(req)
+					resp = mcp._jsonrpc(req, modern=modern)
 					payload = json.dumps(resp).encode() if resp is not None else b''
 				self._reply(200 if payload else 202, payload)
 
@@ -6663,6 +6723,10 @@ class MCPServer:
 		url = f"http://{self.host}:{self.port}/"
 		logger.info(f"MCP server listening on {url}. Register with:")
 		print(f'claude mcp add --transport http penelope {url} --header "Authorization: Bearer {self.token}"')
+		print("Codex (~/.codex/config.toml):")
+		print(f'[mcp_servers.penelope]\nurl = "{url}"\n'
+		      f'http_headers = {{ Authorization = "Bearer {self.token}" }}')
+		print('Codex 0.147+ modern MCP: set mcp_2026_07_28 = true under [features].')
 		return self
 
 

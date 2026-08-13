@@ -78,7 +78,7 @@ pipx install penelope-shell-handler
 - Serve files and folders over HTTP (`-s`)
 - Can be imported by Python exploits to handle shells in the same terminal (see [extras/exploit_examples](https://github.com/brightio/penelope/tree/main/extras/exploit_examples))
 - Can be used with Metasploit exploits by disabling the default handler with `set DisablePayloadHandler True`
-- Expose live sessions to an MCP client like Claude Code with the `--mcp` switch (local HTTP, token-authenticated), driving the same shells alongside you
+- Expose live sessions to an MCP client like Codex or Claude Code with the `--mcp` switch (local HTTP, token-authenticated), driving the same shells alongside you
 
 ### Modules
 
@@ -106,6 +106,21 @@ penelope -i eth0 -p 5555 -- ssh -l user -p 2222 target  # Get a reverse shell fr
 penelope -s <File/Folder>         # Share a file or folder via HTTP
 ```
 ![Penelope](https://github.com/user-attachments/assets/b8e5cd84-60a5-4d79-b041-68bee901ab19)
+
+### MCP (`--mcp`)
+
+Start Penelope with `--mcp`, then add the printed `[mcp_servers.penelope]`
+block to `~/.codex/config.toml` and restart Codex. The same Streamable HTTP
+endpoint remains compatible with Claude Code. Codex 0.147 and newer can use
+the stateless MCP `2026-07-28` protocol by enabling its opt-in feature:
+
+```toml
+[features]
+mcp_2026_07_28 = true
+```
+
+Penelope keeps the earlier initialization-based protocol revisions enabled,
+so existing Codex and Claude Code configurations continue to work.
 
 ### HTTP File Server (`-s`)
 Penelope can be used also as a quick HTTP file server.
