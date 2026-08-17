@@ -1,35 +1,51 @@
 # Security Policy
 
-## Reporting a Vulnerability
-
-**Do not open a public GitHub issue for security vulnerabilities.**
-
-Send an email to **[brightio.code@gmail.com](mailto:brightio.code@gmail.com)** with the details of the issue. We'll get back to you within 72 hours. If the issue is confirmed, we'll ask you to open a private GitHub security advisory so we can work on a fix together.
-
-
-## What to Include
-
-- Description of the vulnerability and its potential impact
-- Steps to reproduce
-- Affected versions or environments
-- Proof of concept, logs, or screenshots if available
-- Suggested fix
-
-## What to Expect
-
-Once we receive your report, we'll acknowledge it, investigate, and keep you in the loop on progress. If a fix is issued, we're happy to credit you in the release notes, just mention your preference when you write in.
-
-Please don't disclose the vulnerability publicly until a fix is out or we've agreed on a disclosure date.
-
 ## Supported Versions
 
-Only the latest release receives security updates.
+Only the latest release of Penelope is actively supported with security updates.
 
-| Version               | Supported |
-| --------------------- | --------- |
-| Latest release        | ✅        |
-| All previous releases | ❌        |
+| Version | Supported |
+|---|---|
+| Latest release | ✅ |
+| Previous releases | ❌ |
 
-## Other Issues
+## Reporting a Vulnerability
 
-For bugs, feature requests, and everything else, open an issue on the [GitHub issue tracker](https://github.com/brightio/penelope/issues).
+Please **do not open a public GitHub issue** for suspected security vulnerabilities.
+
+The preferred way to report a vulnerability is through GitHub's private vulnerability reporting feature:
+
+**Security → Advisories → Report a vulnerability**
+
+Alternatively, you can contact us at:
+
+**brightio.code@gmail.com**
+
+Please include as much relevant information as possible, such as:
+
+- A description of the vulnerability
+- Affected version(s)
+- Steps to reproduce
+- Proof of concept, if available
+- Potential security impact
+- Suggested fix, if available
+
+We aim to acknowledge security reports within **72 hours**.
+
+If the issue is confirmed, we will coordinate remediation and disclosure with the reporter.
+
+Confirmed vulnerabilities may be published as a GitHub Security Advisory and assigned or requested a CVE when appropriate.
+
+## Security Considerations
+
+Penelope interacts with potentially hostile systems by design.
+
+Some behaviors that may appear security-sensitive are inherent to its operation or are documented risks rather than vulnerabilities.
+
+For known security characteristics, trust assumptions, and operational risks, please review the [Security considerations](../README.md#security-considerations) section of the README before submitting a report.
+
+## Disclosure
+
+Please allow reasonable time for a vulnerability to be investigated and fixed before publicly disclosing technical details.
+
+We appreciate responsible disclosure and will credit reporters in the corresponding security advisory unless they prefer to remain anonymous.
