@@ -42,7 +42,7 @@ Penelope interacts with potentially hostile systems by design.
 
 Some behaviors that may appear security-sensitive are inherent to its operation or are documented risks rather than vulnerabilities.
 
-For known security characteristics, trust assumptions, and operational risks, please review the [Security considerations](../README.md#security-considerations) section of the README before submitting a report.
+For known security characteristics, trust assumptions, and operational risks, please review the [Security considerations](https://github.com/brightio/penelope#security-considerations) section of the README before submitting a report.
 
 ## Disclosure
 
