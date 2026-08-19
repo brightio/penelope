@@ -4192,7 +4192,7 @@ class Session:
 			# Local extraction
 			def cleanup_agent_download():
 				if not self.agent:
-					return
+					return True
 				for action in (
 					lambda: stdin_stream.write(b""),
 					stdin_stream.close_read, stdin_stream.close_write,
@@ -4207,8 +4207,12 @@ class Session:
 					stderr_stream.close_read()
 				except Exception:
 					pass
+				if stderr_thread.is_alive():
+					stderr_thread.join(timeout=2)
+				cleanup_complete = not stderr_thread.is_alive()
 				for stream in (stdin_stream, stdout_stream, stderr_stream):
 					self.streams.pop(stream.id, None)
+				return cleanup_complete
 
 			try:
 				tar = tarfile.open(mode=mode, fileobj=tar_source, bufsize=options.network_buffer_size)
@@ -4229,6 +4233,7 @@ class Session:
 				tar.fileobj.read = _read_pbar
 
 			extraction_error = None
+			cleanup_complete = True
 			try:
 				extracted = safe_tar_extractall(tar, local_download_folder, streaming=self.agent, strip_prefixes=strip_prefixes)
 			except Exception as e:
@@ -4242,8 +4247,11 @@ class Session:
 				try:
 					tar.close()
 				finally:
-					cleanup_agent_download()
+					cleanup_complete = cleanup_agent_download()
 			if extraction_error:
+				return []
+			if not cleanup_complete:
+				logger.error("Download stream cleanup timed out; outcome is indeterminate")
 				return []
 
 			if pbar:
@@ -4492,8 +4500,40 @@ class Session:
 				stdin_stream = self.new_streamID
 				stdout_stream = self.new_streamID
 				stderr_stream = self.new_streamID
+				agent_streams = tuple(stream for stream in (stdin_stream, stdout_stream, stderr_stream) if stream)
+				monitor_thread = None
+				upload_eof_sent = False
+
+				def cleanup_agent_upload(wait_for_remote=True):
+					nonlocal upload_eof_sent
+					if stdin_stream and not upload_eof_sent:
+						try:
+							stdin_stream.write(b"")
+						except Exception:
+							pass
+						upload_eof_sent = True
+
+					if wait_for_remote and monitor_thread:
+						while monitor_thread.is_alive() and self:
+							monitor_thread.join(timeout=0.25)
+
+					for stream in agent_streams:
+						for close in (stream.close_read, stream.close_write):
+							try:
+								close()
+							except Exception:
+								pass
+
+					if monitor_thread and monitor_thread.is_alive():
+						monitor_thread.join(timeout=2)
+					cleanup_complete = not (monitor_thread and monitor_thread.is_alive())
+
+					for stream in agent_streams:
+						self.streams.pop(stream.id, None)
+					return cleanup_complete
 
 				if not all([stdin_stream, stdout_stream, stderr_stream]):
+					cleanup_agent_upload(wait_for_remote=False)
 					return []
 
 				code = rf"""
@@ -4568,9 +4608,15 @@ class Session:
 							watch.append(stdout_stream)
 						if err_open:
 							watch.append(stderr_stream)
-						readable, _, _ = select(watch, [], [])
+						try:
+							readable, _, _ = select(watch, [], [])
+						except (OSError, ValueError):
+							break
 						if stdout_stream in readable:
-							data = stdout_stream.read(options.network_buffer_size)
+							try:
+								data = stdout_stream.read(options.network_buffer_size)
+							except (OSError, ValueError):
+								data = b''
 							if data:
 								out_buf += data
 								while b'\n' in out_buf:
@@ -4581,7 +4627,10 @@ class Session:
 							else:
 								out_open = False
 						if stderr_stream in readable:
-							data = stderr_stream.read(options.network_buffer_size)
+							try:
+								data = stderr_stream.read(options.network_buffer_size)
+							except (OSError, ValueError):
+								data = b''
 							if data:
 								err_buf += data
 								while b'\n' in err_buf:
@@ -4604,52 +4653,56 @@ class Session:
 			_compression = {}
 			if sys.version_info >= (3, 12):
 				_compression['compresslevel'] = level
-			tar = tarfile.open(mode='w|gz', fileobj=tar_destination, dereference=options.link_dereference,
-				bufsize=options.network_buffer_size, **_compression)
-			if not _compression:
-				tar.fileobj.cmp = zlib.compressobj(level, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
-
 			altnames = []
-			for item in resolved_items:
-				try:
-					if isinstance(item, tuple):
-						filename, data = item
+			try:
+				tar = tarfile.open(mode='w|gz', fileobj=tar_destination, dereference=options.link_dereference,
+					bufsize=options.network_buffer_size, **_compression)
+				if not _compression:
+					tar.fileobj.cmp = zlib.compressobj(level, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
 
-						if randomize_fname:
-							filename = Path(filename)
-							altname = f"{filename.stem}-{rand(8)}{filename.suffix}"
+				for item in resolved_items:
+					try:
+						if isinstance(item, tuple):
+							filename, data = item
+
+							if randomize_fname:
+								filename = Path(filename)
+								altname = f"{filename.stem}-{rand(8)}{filename.suffix}"
+							else:
+								altname = filename
+
+							file = tarfile.TarInfo(name=altname)
+							file.size = len(data)
+							file.mode = 0o770
+							file.mtime = int(time.time())
+
+							tar.addfile(file, io.BytesIO(data))
 						else:
-							altname = filename
-
-						file = tarfile.TarInfo(name=altname)
-						file.size = len(data)
-						file.mode = 0o770
-						file.mtime = int(time.time())
-
-						tar.addfile(file, io.BytesIO(data))
-					else:
-						altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
-						tar.add(item, arcname=altname)
-				except Exception as e:
-					logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
-					continue
-				altnames.append(altname)
-			tar.close()
+							altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
+							tar.add(item, arcname=altname)
+					except Exception as e:
+						logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
+						continue
+					altnames.append(altname)
+				tar.close()
+			except Exception as e:
+				logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
+				if self.agent:
+					cleanup_agent_upload()
+				return []
 
 			if self.agent:
-				stdin_stream.write(b"")
-				monitor_thread.join()
+				cleanup_complete = cleanup_agent_upload()
 				if not self:
 					if pbar:
 						pbar.terminate()
 					logger.warning("Upload outcome is indeterminate because the session disconnected")
 					return []
-				stdin_stream.close_read()
-				stdin_stream.close_write()
-				stdout_stream.close_read()
-				self.streams.pop(stdin_stream.id, None)
-				self.streams.pop(stdout_stream.id, None)
-				self.streams.pop(stderr_stream.id, None)
+				if not cleanup_complete:
+					if pbar:
+						pbar.terminate()
+					logger.warning("Upload stream cleanup timed out; outcome is indeterminate")
+					return []
 				if remote_errors:
 					if pbar:
 						pbar.terminate()
@@ -7670,3 +7723,4 @@ load_rc()
 
 if __name__ == "__main__":
 	main()
+
