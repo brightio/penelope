@@ -7424,6 +7424,7 @@ def main():
 		while core.sessions and time.time() < deadline:
 			time.sleep(0.05)
 		_restore_terminal()
+		_cleanup_ephemeral()
 		os._exit(0)
 	for _signame in ("SIGTERM", "SIGHUP"):
 		_sig = getattr(signal, _signame, None)
@@ -7532,11 +7533,16 @@ def restore_tty():
 # Setup for ephemeral mode
 _ephemeral_root = None
 _ram = None
+
+def _cleanup_ephemeral():
+	if _ephemeral_root is not None:
+		shutil.rmtree(_ephemeral_root, ignore_errors=True)
+
 if '--no-disk' in sys.argv:
 	_ram = Path("/dev/shm") if Path("/dev/shm").is_dir() and os.access("/dev/shm", os.W_OK) else None
 	_ephemeral_root = Path(tempfile.mkdtemp(prefix="penelope-", dir=str(_ram) if _ram else None))
 	tempfile.tempdir = str(_ephemeral_root)
-	atexit.register(lambda p=_ephemeral_root: shutil.rmtree(p, ignore_errors=True))
+	atexit.register(_cleanup_ephemeral)
 
 # Apply default options
 options = Options()
