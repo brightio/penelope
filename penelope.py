@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __program__= "penelope"
-__version__ = "0.21.12"
+__version__ = "0.21.13"
 
 import os
 import io
@@ -86,6 +86,10 @@ visible_len   = lambda s: len(re.sub(r'\x1b\[[0-9;]*m|[\x01\x02]', '', str(s)))
 sanitize_meta = lambda s: ''.join(c for c in s if c.isprintable()) if isinstance(s, str) else s
 HTTP_CONTROL_CHAR_TABLE = {char: r'\x{:02x}'.format(char) for char in list(range(32)) + list(range(127, 160))}
 HTTP_CONTROL_CHAR_TABLE[ord('\\')] = r'\\'
+
+_REMOTE_PATH_VARIABLE = re.compile(
+	r'\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})'
+)
 
 def Open(item, terminal=False):
 	if myOS != 'Darwin' and not DISPLAY:
@@ -2841,9 +2845,7 @@ class Session:
 						logger.error(f"{directory}: Permission denied")
 						return False
 				else:
-					if directory.startswith('~'):
-						directory = self.exec(f"echo {directory}", value=True)
-					access = self.exec(f"[ -w \"{directory}\" ];echo $?", value=True)
+					access = self.exec(f"[ -w {shlex.quote(directory)} ];echo $?", value=True)
 					if not (isinstance(access, str) and access.strip().isdigit()):
 						logger.error(f"Cannot check write permissions for {directory}. Aborting...")
 						return None
@@ -2868,6 +2870,17 @@ class Session:
 			return None
 
 		return True
+
+	def resolve_remote_path(self, path):
+		if self.OS != 'Unix':
+			return path
+		resolved = self.exec(
+			f"_p={shell_expand_remote_path(path)} && "
+			f'case "$_p" in /*) cd "$_p";; *) cd {shlex.quote(self.cwd)} 2>/dev/null '
+			f'&& cd "$_p";; esac 2>/dev/null && pwd -P',
+			value=True
+		)
+		return resolved if isinstance(resolved, str) and resolved.startswith('/') else None
 
 	def get_remote_completion(self, text):
 		"""
@@ -4095,8 +4108,11 @@ class Session:
 					dec = codecs.getincrementaldecoder('utf-8')(errors='replace')
 					error_buffer = ''
 					while True:
-						r, _, _ = select([stderr_stream], [], [])
-						data = stderr_stream.read(options.network_buffer_size)
+						try:
+							select([stderr_stream], [], [])
+							data = stderr_stream.read(options.network_buffer_size)
+						except (OSError, ValueError):
+							break
 						if data:
 							error_buffer += dec.decode(data)
 							while '\n' in error_buffer:
@@ -4117,9 +4133,19 @@ class Session:
 					return []
 				temp = remote_tmp + "/" + rand(8)
 				qtemp = shlex.quote(temp)
+				self.uploaded_paths[qtemp] = int(time.time())
+				def remove_remote_download_temp():
+					if not self:
+						return False
+					removed = self.exec(f"rm -f -- {qtemp}; echo $?", value=True)
+					if isinstance(removed, str) and removed.strip() == "0":
+						self.uploaded_paths.pop(qtemp, None)
+						return True
+					return False
 				cmd = rf'tar -czf - {"-h " if options.link_dereference else ""}{remote_items}|base64|tr -d "\n" > {qtemp}'
 				response = self.exec(cmd, timeout=None, value=True)
 				if response is False:
+					remove_remote_download_temp()
 					logger.error("Cannot create archive")
 					return []
 				errors = [line[5:] for line in response.splitlines() if line.startswith('tar: /')]
@@ -4132,6 +4158,7 @@ class Session:
 					value=True
 				)
 				if not (isinstance(send_size, str) and send_size.strip().isdigit()):
+					remove_remote_download_temp()
 					logger.error("Could not determine the remote file size")
 					return []
 				send_size = int(send_size)
@@ -4144,12 +4171,13 @@ class Session:
 					if response is False:
 						pbar.terminate()
 						logger.error("Download interrupted")
-						if self:
-							self.exec(f"rm {qtemp}")
+						if not remove_remote_download_temp():
+							logger.warning(f"Remote temporary file may remain: {temp}")
 						return []
 					b64data.write(response)
 					pbar.update(len(response))
-				self.exec(f"rm {qtemp}")
+				if not remove_remote_download_temp():
+					logger.warning(f"Remote temporary file may remain: {temp}")
 
 				try:
 					raw = base64.b64decode(b64data.getvalue())
@@ -4162,9 +4190,30 @@ class Session:
 				del raw
 
 			# Local extraction
+			def cleanup_agent_download():
+				if not self.agent:
+					return
+				for action in (
+					lambda: stdin_stream.write(b""),
+					stdin_stream.close_read, stdin_stream.close_write,
+					stdout_stream.close_read,
+				):
+					try:
+						action()
+					except Exception:
+						pass
+				stderr_thread.join(timeout=2)
+				try:
+					stderr_stream.close_read()
+				except Exception:
+					pass
+				for stream in (stdin_stream, stdout_stream, stderr_stream):
+					self.streams.pop(stream.id, None)
+
 			try:
 				tar = tarfile.open(mode=mode, fileobj=tar_source, bufsize=options.network_buffer_size)
 			except Exception:
+				cleanup_agent_download()
 				logger.error("Invalid data returned")
 				return []
 
@@ -4179,29 +4228,28 @@ class Session:
 					return data
 				tar.fileobj.read = _read_pbar
 
+			extraction_error = None
 			try:
 				extracted = safe_tar_extractall(tar, local_download_folder, streaming=self.agent, strip_prefixes=strip_prefixes)
 			except Exception as e:
+				extraction_error = e
 				if pbar:
 					pbar.terminate()
 				logger.debug(traceback.format_exc())
 				logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
+				logger.warning("Download failed; partially extracted local files may remain")
+			finally:
+				try:
+					tar.close()
+				finally:
+					cleanup_agent_download()
+			if extraction_error:
 				return []
 
 			if pbar:
 				pbar.update(pbar.end)
-			tar.close()
 
 			if self.agent:
-				stderr_thread.join()
-				stdin_stream.write(b"")
-				stdin_stream.close_read()
-				stdin_stream.close_write()
-				del self.streams[stdin_stream.id]
-				stdout_stream.close_read()
-				del self.streams[stdout_stream.id]
-				del self.streams[stderr_stream.id]
-
 				# Get the remote absolute paths
 				response = self.exec(f"""
 				from glob import glob
@@ -4213,25 +4261,29 @@ class Session:
 					if result:
 						for item in result:
 							if os.path.exists(item):
-								remote_paths += os.path.abspath(item) + "\\n"
+								remote_paths += "1\\t" + os.path.abspath(item) + "\\n"
 					else:
-						remote_paths += part + "\\n"
+						remote_paths += "0\\t" + part + "\\n"
 				stdout_stream << remote_paths.encode()
 				""", python=True, value=True)
 			else:
 				cmd = (
-					'_abspath(){ if [ -d "$1" ]; then (cd "$1" && pwd);'
-					' else echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; fi; };'
 					f' for file in {remote_items}; do if [ -e "$file" ]; then'
-					' readlink -f "$file" 2>/dev/null || _abspath "$file";'
-					' else echo "$file"; fi; done'
+					' printf "1\\t%s\\n" "$file";'
+					' else printf "0\\t%s\\n" "$file"; fi; done'
 				)
 				response = self.exec(cmd, timeout=None, value=True)
 				if not response:
 					logger.error("Cannot get remote paths")
 					return []
 
-			remote_paths = response.splitlines()
+			remote_results = []
+			for line in response.splitlines():
+				status, separator, path = line.partition('\t')
+				if separator and status in ('0', '1'):
+					remote_results.append((status == '1', path))
+				else:
+					remote_results.append((True, line))
 
 			# Present the downloads
 			downloaded = []
@@ -4239,10 +4291,16 @@ class Session:
 				base = os.path.realpath(local_download_folder)
 				tops = {os.path.relpath(p, base).split(os.sep)[0] for p in extracted}
 				downloaded = [local_download_folder / t for t in sorted(tops)]
+				downloaded_names = {path.name for path in downloaded}
+				for exists, path in remote_results:
+					name = os.path.basename(path.rstrip('/'))
+					if not exists or (name and name not in downloaded_names):
+						logger.error(f"{paint('Download Failed').RED_white} {shlex.quote(path)}")
 			else:
-				for path in remote_paths:
+				extracted_realpaths = {os.path.realpath(item) for item in extracted}
+				for exists, path in remote_results:
 					local_path = local_download_folder / path[1:]
-					if os.path.isabs(path) and os.path.exists(local_path):
+					if exists and os.path.isabs(path) and os.path.realpath(local_path) in extracted_realpaths:
 						downloaded.append(local_path)
 					else:
 						logger.error(f"{paint('Download Failed').RED_white} {shlex.quote(path)}")
@@ -4310,6 +4368,11 @@ class Session:
 
 		url_to_bytes_fn = url_to_bytes_fn or url_to_bytes
 		destination = remote_path or self.cwd
+		if self.OS == 'Unix':
+			destination = self.resolve_remote_path(destination)
+			if not destination:
+				logger.error(f"Cannot resolve remote destination: {remote_path or self.cwd}")
+				return []
 
 		if not self.write_access(destination):
 			return []
@@ -4546,35 +4609,30 @@ class Session:
 			if not _compression:
 				tar.fileobj.cmp = zlib.compressobj(level, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
 
-			def handle_exceptions(func):
-				def inner(*args, **kwargs):
-					try:
-						func(*args, **kwargs)
-					except Exception as e:
-						logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
-				return inner
-			tar.add = handle_exceptions(tar.add)
-
 			altnames = []
 			for item in resolved_items:
-				if isinstance(item, tuple):
-					filename, data = item
+				try:
+					if isinstance(item, tuple):
+						filename, data = item
 
-					if randomize_fname:
-						filename = Path(filename)
-						altname = f"{filename.stem}-{rand(8)}{filename.suffix}"
+						if randomize_fname:
+							filename = Path(filename)
+							altname = f"{filename.stem}-{rand(8)}{filename.suffix}"
+						else:
+							altname = filename
+
+						file = tarfile.TarInfo(name=altname)
+						file.size = len(data)
+						file.mode = 0o770
+						file.mtime = int(time.time())
+
+						tar.addfile(file, io.BytesIO(data))
 					else:
-						altname = filename
-
-					file = tarfile.TarInfo(name=altname)
-					file.size = len(data)
-					file.mode = 0o770
-					file.mtime = int(time.time())
-
-					tar.addfile(file, io.BytesIO(data))
-				else:
-					altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
-					tar.add(item, arcname=altname)
+						altname = f"{item.stem}-{rand(8)}{item.suffix}" if randomize_fname else item.name
+						tar.add(item, arcname=altname)
+				except Exception as e:
+					logger.error(str(paint("<LOCAL>").yellow) + " " + str(paint(e).red))
+					continue
 				altnames.append(altname)
 			tar.close()
 
@@ -4584,6 +4642,7 @@ class Session:
 				if not self:
 					if pbar:
 						pbar.terminate()
+					logger.warning("Upload outcome is indeterminate because the session disconnected")
 					return []
 				stdin_stream.close_read()
 				stdin_stream.close_write()
@@ -4594,6 +4653,7 @@ class Session:
 				if remote_errors:
 					if pbar:
 						pbar.terminate()
+					logger.warning("Upload failed; partially extracted files may remain on the target")
 					return []
 				if pbar:
 					pbar.update(pbar.end)
@@ -4608,6 +4668,16 @@ class Session:
 					return []
 				temp = remote_tmp + "/" + rand(8)
 				qtemp = shlex.quote(temp)
+				self.uploaded_paths[qtemp] = int(time.time())
+
+				def remove_remote_upload_temp():
+					if not self:
+						return False
+					removed = self.exec(f"rm -f -- {qtemp}; echo $?", value=True)
+					if isinstance(removed, str) and removed.strip() == "0":
+						self.uploaded_paths.pop(qtemp, None)
+						return True
+					return False
 
 				logger.trace(paint(f"⇥ Uploading to {destination}").cyan)
 				pbar = PBar(raw_size, caption=f" {paint('⤷').softorange} ", barlen=30, metric=Size)
@@ -4621,19 +4691,25 @@ class Session:
 					if response is False:
 						pbar.terminate()
 						logger.error("Upload interrupted")
-						self.exec(f"rm {qtemp}")
+						if not remove_remote_upload_temp():
+							logger.warning(f"Remote temporary file may remain: {temp}")
 						return []
 					sent = min(offset + slice_size, raw_size)
 					pbar.update(sent - pbar.pos)
 
 				logger.debug(paint("--- Remote unpacking...").blue)
-				dest = f"-C {shlex.quote(remote_path)}" if remote_path else ""
+				dest = f"-C {shlex.quote(destination)}"
 				cmd = f"{{ base64 -d 2>/dev/null || base64 -D; }} < {qtemp} | tar xz {dest} 2>&1; temp=$?"
 				response = self.exec(cmd, value=True)
 				exit_code = self.exec("echo $temp", value=True)
-				self.exec(f"rm {qtemp}")
+				if not remove_remote_upload_temp():
+					logger.warning(f"Remote temporary file may remain: {temp}")
 				if not (isinstance(exit_code, str) and exit_code.strip() == "0"):
 					logger.error(response if response else "Remote unpacking failed or timed out")
+					if not self:
+						logger.warning("Upload outcome is indeterminate because the session disconnected")
+					else:
+						logger.warning("Upload failed; partially extracted files may remain on the target")
 					return []
 
 		elif self.OS == 'Windows':
@@ -6718,6 +6794,24 @@ def _is_within_directory(directory, target):
 	except ValueError:
 		return False
 
+def shell_expand_remote_path(path):
+	word, cursor = [], 0
+	tilde = re.match(r'~[A-Za-z0-9._-]*(?=/|$)', path)
+	if tilde:
+		word.append('"${HOME?}"' if tilde.group() == '~' else tilde.group())
+		cursor = tilde.end()
+
+	for variable in _REMOTE_PATH_VARIABLE.finditer(path, cursor):
+		if variable.start() > cursor:
+			word.append(shlex.quote(path[cursor:variable.start()]))
+		name = variable.group(1) or variable.group(2)
+		word.append(f'"${{{name}?}}"')
+		cursor = variable.end()
+
+	if cursor < len(path):
+		word.append(shlex.quote(path[cursor:]))
+	return ''.join(word) or "''"
+
 def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 	dest_real = os.path.realpath(dest)
 	orig_extract_member = tar._extract_member
@@ -6761,6 +6855,7 @@ def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 						os.symlink(tarinfo.linkname, targetpath)
 					else:
 						os.link(link_path, targetpath)
+					extracted.append(targetpath)
 				except OSError as e:
 					logger.error(str(paint("<LOCAL>").yellow) + " " +
 						str(paint(f"Skipping link {tarinfo.name}: {e}").red))
