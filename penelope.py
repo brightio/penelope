@@ -130,31 +130,30 @@ def Open(item, terminal=False):
 		logger.error(f"Cannot open window: '{program}' binary does not exist")
 		return False
 
-	process = subprocess.Popen(
-		(program, *args),
-		stdin=subprocess.DEVNULL,
-		stdout=subprocess.DEVNULL,
-		stderr=subprocess.PIPE
-	)
+	with tempfile.TemporaryFile() as stderr_file:
+		process = subprocess.Popen(
+			(program, *args),
+			stdin=subprocess.DEVNULL,
+			stdout=subprocess.DEVNULL,
+			stderr=stderr_file
+		)
 
-	if not terminal:
 		try:
-			process.wait(timeout=2)
+			process.wait(timeout=.01 if terminal else 2)
 		except subprocess.TimeoutExpired:
+			if terminal:
+				stderr_file.seek(0)
+				error = stderr_file.read(1024)
+				if error:
+					logger.error(error.decode(errors="replace"))
+					return False
 			return True
 		if process.returncode != 0:
-			error = process.stderr.read().decode(errors="replace").strip()
+			stderr_file.seek(0)
+			error = stderr_file.read().decode(errors="replace").strip()
 			logger.error(f"Could not open '{item}'" + (f": {error}" if error else f" (exit code {process.returncode})"))
 			return False
 		return True
-
-	r, _, _ = select([process.stderr], [], [], .01)
-	if process.stderr in r:
-		error = os.read(process.stderr.fileno(), 1024)
-		if error:
-			logger.error(error.decode(errors="replace"))
-			return False
-	return True
 
 
 class Interfaces:
@@ -1337,59 +1336,13 @@ class MainMenu(BetterCMD):
 			download /etc/cron*		Download multiple remote files and directories using glob
 			download /etc/issue /var/spool	Download multiple remote files and directories at once
 		"""
-		download_folder = None
-		remote_items = remote_items or ''
 		windows_paths = getattr(core.sessions[self.sid], 'OS', None) == 'Windows'
-
-		spans = []
-		start = None
-		quote = None
-		escaped = False
-		for i, char in enumerate(remote_items):
-			if start is None:
-				if char.isspace():
-					continue
-				start = i
-			if escaped:
-				escaped = False
-			elif char == '\\' and not windows_paths:
-				escaped = True
-			elif quote:
-				if char == quote:
-					quote = None
-			elif char in ('"' if windows_paths else "'\""):
-				quote = char
-			elif char.isspace():
-				spans.append((start, i))
-				start = None
-		if start is not None:
-			spans.append((start, len(remote_items)))
-
-		remove = None
-		for index, (begin, end) in enumerate(spans):
-			token = remote_items[begin:end]
-			if token == '--':
-				remove = (begin, end)
-				break
-			if token in ('-o', '--output') and index + 1 < len(spans):
-				folder_begin, folder_end = spans[index + 1]
-				folder = remote_items[folder_begin:folder_end]
-				try:
-					parts = shlex.split(folder, posix=True)
-				except ValueError:
-					parts = None
-				if parts and len(parts) == 1:
-					download_folder = parts[0]
-					remove = (begin, folder_end)
-				break
-		if remove:
-			begin, end = remove
-			remote_items = remote_items[:begin] + remote_items[end:]
+		remote_items, download_folder = parse_transfer_output(
+			remote_items, source_windows=windows_paths)
 
 		if download_folder is None and options.download_folder:
 			download_folder = options.download_folder
 		reroot = download_folder is not None
-		remote_items = remote_items.strip()
 		if remote_items:
 			core.sessions[self.sid].download(remote_items, download_folder=download_folder, reroot=reroot)
 		else:
@@ -1427,10 +1380,12 @@ class MainMenu(BetterCMD):
 	@session_operation(current=True)
 	def do_upload(self, local_items):
 		"""
-		<path|glob|URL>...
+		<path|glob|URL>... [-o|--output <remote folder>]
 		Upload local files, directories, or HTTP(S)/FTP URLs to the target
 		URLs are downloaded by Penelope and then uploaded to the target, allowing transfers when
 		the target has no direct Internet access.
+
+		-o <folder>   Upload into the remote <folder>
 
 		Examples:
 
@@ -1440,8 +1395,13 @@ class MainMenu(BetterCMD):
 			upload https://github.com/x/y/z.sh		  Download the file locally and then push it to the target
 			upload https://www.exploit-db.com/exploits/40611  Download the underlying exploit code locally and upload it to the target
 		"""
+		remote_folder = None
+		windows_destination = getattr(core.sessions[self.sid], 'OS', None) == 'Windows'
+		local_items, remote_folder = parse_transfer_output(
+			local_items, destination_windows=windows_destination)
 		if local_items:
-			core.sessions[self.sid].upload(local_items, randomize_fname=options.upload_random_suffix)
+			core.sessions[self.sid].upload(local_items, remote_path=remote_folder,
+				randomize_fname=options.upload_random_suffix)
 		else:
 			cmdlogger.warning("No files or directories specified")
 
@@ -1854,6 +1814,13 @@ class MainMenu(BetterCMD):
 		return [iface for iface in Interfaces().list if iface.startswith(text)]
 
 	def complete_upload(self, text, line, begidx, endidx):
+		# REMOTE path completion right after -o/--output, LOCAL paths otherwise
+		if re.search(r'(?:^|\s)(?:-o|--output)\s*$', line[:begidx]):
+			session = core.sessions.get(self.sid)
+			if session is None:
+				return []
+			return self.complete_path(line, begidx, endidx, session.get_remote_completion,
+				windows=(session.OS == 'Windows'))
 		return self.complete_path(line, begidx, endidx, self._local_lister, expand=lambda p: os.path.expandvars(os.path.expanduser(p)))
 
 	complete_script = complete_upload
@@ -5021,11 +4988,25 @@ class Session:
 			def handle(self):
 
 				self.request.setblocking(False)
+				allocated_streams = []
+
+				def cleanup_allocated_streams():
+					for stream in allocated_streams:
+						stream.close()
+						session.streams.pop(stream.id, None)
+
 				stdin_stream = session.new_streamID
+				if stdin_stream:
+					allocated_streams.append(stdin_stream)
 				stdout_stream = session.new_streamID
+				if stdout_stream:
+					allocated_streams.append(stdout_stream)
 				stderr_stream = session.new_streamID
+				if stderr_stream:
+					allocated_streams.append(stderr_stream)
 
 				if not all([stdin_stream, stdout_stream, stderr_stream]):
+					cleanup_allocated_streams()
 					return
 
 				code = rf"""
@@ -5157,6 +5138,8 @@ class Session:
 		self.subchannel.close()
 		for stream in list(self.streams.values()):
 			stream << b""
+			stream.close()
+		self.streams.clear()
 
 		core.rlist.remove(self)
 		if self in core.wlist:
@@ -6864,6 +6847,56 @@ def shell_expand_remote_path(path):
 	if cursor < len(path):
 		word.append(shlex.quote(path[cursor:]))
 	return ''.join(word) or "''"
+
+def parse_transfer_output(arguments, source_windows=False, destination_windows=False):
+	arguments = arguments or ''
+	spans = []
+	start = None
+	quote = None
+	escaped = False
+	for i, char in enumerate(arguments):
+		if start is None:
+			if char.isspace():
+				continue
+			start = i
+		if escaped:
+			escaped = False
+		elif char == '\\' and not source_windows:
+			escaped = True
+		elif quote:
+			if char == quote:
+				quote = None
+		elif char in ('"' if source_windows else "'\""):
+			quote = char
+		elif char.isspace():
+			spans.append((start, i))
+			start = None
+	if start is not None:
+		spans.append((start, len(arguments)))
+
+	for index, (begin, end) in enumerate(spans):
+		token = arguments[begin:end]
+		if token == '--':
+			return (arguments[:begin] + arguments[end:]).strip(), None
+		if token not in ('-o', '--output') or index + 1 >= len(spans):
+			continue
+
+		folder_begin, folder_end = spans[index + 1]
+		folder = arguments[folder_begin:folder_end]
+		if destination_windows:
+			if len(folder) >= 2 and folder[0] == folder[-1] and folder[0] in "'\"":
+				folder = folder[1:-1]
+			parts = [folder] if folder else None
+		else:
+			try:
+				parts = shlex.split(folder, posix=True)
+			except ValueError:
+				parts = None
+		if parts and len(parts) == 1:
+			return (arguments[:begin] + arguments[folder_end:]).strip(), parts[0]
+		break
+
+	return arguments.strip(), None
 
 def safe_tar_extractall(tar, dest, streaming=False, strip_prefixes=None):
 	dest_real = os.path.realpath(dest)
