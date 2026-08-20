@@ -1813,32 +1813,47 @@ class MainMenu(BetterCMD):
 	def complete_payloads(self, text, line, begidx, endidx):
 		return [iface for iface in Interfaces().list if iface.startswith(text)]
 
-	def complete_upload(self, text, line, begidx, endidx):
-		# REMOTE path completion right after -o/--output, LOCAL paths otherwise
-		if re.search(r'(?:^|\s)(?:-o|--output)\s*$', line[:begidx]):
-			session = core.sessions.get(self.sid)
-			if session is None:
-				return []
-			return self.complete_path(line, begidx, endidx, session.get_remote_completion,
-				windows=(session.OS == 'Windows'))
-		return self.complete_path(line, begidx, endidx, self._local_lister, expand=lambda p: os.path.expandvars(os.path.expanduser(p)))
+	def _complete_local_path(self, line, begidx, endidx):
+		return self.complete_path(line, begidx, endidx, self._local_lister,
+			expand=lambda p: os.path.expandvars(os.path.expanduser(p)), windows=(myOS == 'Windows'))
 
-	complete_script = complete_upload
-	complete_lcd = complete_upload
-
-	def complete_download(self, text, line, begidx, endidx):
-		# LOCAL path completion right after -o/--output, REMOTE paths otherwise
-		if re.search(r'(?:^|\s)(?:-o|--output)\s*$', line[:begidx]):
-			return self.complete_path(line, begidx, endidx, self._local_lister,
-				expand=lambda p: os.path.expandvars(os.path.expanduser(p)))
-		session = core.sessions.get(self.sid)
-		if session is None:
-			return []
+	def _complete_remote_path(self, line, begidx, endidx, session):
 		return self.complete_path(line, begidx, endidx, session.get_remote_completion,
 			windows=(session.OS == 'Windows'))
 
-	complete_open = complete_download
-	complete_cd = complete_download
+	def _complete_transfer(self, line, begidx, endidx, upload):
+		session = core.sessions.get(self.sid)
+		if session is None:
+			return []
+
+		local_windows = myOS == 'Windows'
+		remote_windows = session.OS == 'Windows'
+		completing_output = completing_transfer_output(
+			line, begidx,
+			source_windows=local_windows if upload else remote_windows,
+			destination_windows=remote_windows if upload else local_windows,
+		)
+		complete_remote = completing_output == upload
+		if complete_remote:
+			return self._complete_remote_path(line, begidx, endidx, session)
+		return self._complete_local_path(line, begidx, endidx)
+
+	def complete_upload(self, text, line, begidx, endidx):
+		return self._complete_transfer(line, begidx, endidx, upload=True)
+
+	def complete_script(self, text, line, begidx, endidx):
+		return self._complete_local_path(line, begidx, endidx)
+
+	complete_lcd = complete_script
+
+	def complete_download(self, text, line, begidx, endidx):
+		return self._complete_transfer(line, begidx, endidx, upload=False)
+
+	def complete_open(self, text, line, begidx, endidx):
+		session = core.sessions.get(self.sid)
+		return self._complete_remote_path(line, begidx, endidx, session) if session else []
+
+	complete_cd = complete_open
 
 	def complete_use(self, text, line, begidx, endidx):
 		return self.get_core_id_completion(text, "none")
@@ -2515,6 +2530,7 @@ class Session:
 			self.streamID = 0
 			self.streams = dict()
 			self.stream_lock = threading.Lock()
+			self._closing = False
 			self.stream_code = Messenger.STREAM_CODE
 			self.streams_max = 2 ** (8 * Messenger.STREAM_BYTES)
 
@@ -2646,7 +2662,7 @@ class Session:
 			return
 
 	def __bool__(self):
-		return self.socket.fileno() != -1 # and self.OS)
+		return not getattr(self, '_closing', False) and self.socket.fileno() != -1 # and self.OS)
 
 	def __repr__(self):
 		try:
@@ -2660,6 +2676,8 @@ class Session:
 	def __getattr__(self, name):
 		if name == 'new_streamID':
 			with self.stream_lock:
+				if getattr(self, '_closing', False):
+					return None
 				if len(self.streams) == self.streams_max:
 					logger.error("Too many open streams...")
 					return None
@@ -2680,6 +2698,13 @@ class Session:
 				return self.streams[_stream_ID_hex]
 		else:
 			raise AttributeError(name)
+
+	def remove_stream(self, stream):
+		with self.stream_lock:
+			if self.streams.get(stream.id) is not stream:
+				return False
+			del self.streams[stream.id]
+			return True
 
 	def fileno(self):
 		return self.socket.fileno()
@@ -3262,7 +3287,7 @@ class Session:
 				def cleanup_allocated_streams():
 					for stream in allocated_streams:
 						stream.close()
-						self.streams.pop(stream.id, None)
+						self.remove_stream(stream)
 
 				if not stdin_stream:
 					stdin_stream = self.new_streamID
@@ -3393,7 +3418,7 @@ class Session:
 									closing.add(stdout_dst)
 							if not data:
 								rlist.remove(readable)
-								del self.streams[readable.id]
+								self.remove_stream(readable)
 
 						if readable is stderr_stream:
 							data = readable.read(options.network_buffer_size)
@@ -3409,7 +3434,7 @@ class Session:
 									closing.add(stderr_dst)
 							if not data:
 								rlist.remove(readable)
-								del self.streams[readable.id]
+								self.remove_stream(readable)
 					else:
 						continue
 					break
@@ -3420,7 +3445,7 @@ class Session:
 					pass
 				for stream in (stdin_stream, stdout_stream, stderr_stream):
 					stream.close()
-					self.streams.pop(stream.id, None)
+					self.remove_stream(stream)
 
 				return buffer.getvalue().rstrip().decode(errors="replace") if value else True
 			return None
@@ -4178,7 +4203,7 @@ class Session:
 					stderr_thread.join(timeout=2)
 				cleanup_complete = not stderr_thread.is_alive()
 				for stream in (stdin_stream, stdout_stream, stderr_stream):
-					self.streams.pop(stream.id, None)
+					self.remove_stream(stream)
 				return cleanup_complete
 
 			try:
@@ -4496,7 +4521,7 @@ class Session:
 					cleanup_complete = not (monitor_thread and monitor_thread.is_alive())
 
 					for stream in agent_streams:
-						self.streams.pop(stream.id, None)
+						self.remove_stream(stream)
 					return cleanup_complete
 
 				if not all([stdin_stream, stdout_stream, stderr_stream]):
@@ -4993,7 +5018,7 @@ class Session:
 				def cleanup_allocated_streams():
 					for stream in allocated_streams:
 						stream.close()
-						session.streams.pop(stream.id, None)
+						session.remove_stream(stream)
 
 				stdin_stream = session.new_streamID
 				if stdin_stream:
@@ -5068,16 +5093,19 @@ class Session:
 				else:
 					client.close()
 				"""
-				session.exec(
-					code,
-					python=True,
-					stdin_stream=stdin_stream,
-					stdout_stream=stdout_stream,
-					stderr_stream=stderr_stream,
-					stdin_src=self.request,
-					stdout_dst=self.request,
-					agent_control=control
-				)
+				try:
+					session.exec(
+						code,
+						python=True,
+						stdin_stream=stdin_stream,
+						stdout_stream=stdout_stream,
+						stderr_stream=stderr_stream,
+						stdin_src=self.request,
+						stdout_dst=self.request,
+						agent_control=control
+					)
+				finally:
+					cleanup_allocated_streams()
 
 		class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 			allow_reuse_address = True
@@ -5136,10 +5164,13 @@ class Session:
 
 		self.subchannel.control.close()
 		self.subchannel.close()
-		for stream in list(self.streams.values()):
+		with self.stream_lock:
+			self._closing = True
+			streams = list(self.streams.values())
+			self.streams.clear()
+		for stream in streams:
 			stream << b""
 			stream.close()
-		self.streams.clear()
 
 		core.rlist.remove(self)
 		if self in core.wlist:
@@ -6848,40 +6879,78 @@ def shell_expand_remote_path(path):
 		word.append(shlex.quote(path[cursor:]))
 	return ''.join(word) or "''"
 
-def parse_transfer_output(arguments, source_windows=False, destination_windows=False):
-	arguments = arguments or ''
-	spans = []
-	start = None
+def _transfer_token_span(arguments, cursor, windows=False, single_quotes=True):
+	while cursor < len(arguments) and arguments[cursor].isspace():
+		cursor += 1
+	if cursor == len(arguments):
+		return None
+
+	start = cursor
 	quote = None
 	escaped = False
-	for i, char in enumerate(arguments):
-		if start is None:
-			if char.isspace():
-				continue
-			start = i
+	quote_chars = "'\"" if single_quotes else '"'
+	while cursor < len(arguments):
+		char = arguments[cursor]
 		if escaped:
 			escaped = False
-		elif char == '\\' and not source_windows:
+		elif char == '\\' and not windows and quote != "'":
 			escaped = True
 		elif quote:
 			if char == quote:
 				quote = None
-		elif char in ('"' if source_windows else "'\""):
+		elif char in quote_chars:
 			quote = char
 		elif char.isspace():
-			spans.append((start, i))
-			start = None
-	if start is not None:
-		spans.append((start, len(arguments)))
+			break
+		cursor += 1
+	return start, cursor, quote is None
 
-	for index, (begin, end) in enumerate(spans):
-		token = arguments[begin:end]
+def completing_transfer_output(line, cursor, source_windows=False, destination_windows=False):
+	prefix = (line or '')[:cursor]
+	position = 0
+	while True:
+		span = _transfer_token_span(prefix, position, source_windows,
+			single_quotes=not source_windows)
+		if span is None:
+			return False
+		begin, end, _ = span
+		token = prefix[begin:end]
+		position = end
 		if token == '--':
-			return (arguments[:begin] + arguments[end:]).strip(), None
-		if token not in ('-o', '--output') or index + 1 >= len(spans):
+			return False
+		if token not in ('-o', '--output'):
 			continue
 
-		folder_begin, folder_end = spans[index + 1]
+		value = _transfer_token_span(prefix, position, destination_windows)
+		if value is None:
+			return True
+		_, value_end, closed = value
+		if not closed or value_end == len(prefix):
+			return True
+		return False
+
+def parse_transfer_output(arguments, source_windows=False, destination_windows=False):
+	arguments = arguments or ''
+	position = 0
+	while True:
+		span = _transfer_token_span(arguments, position, source_windows,
+			single_quotes=not source_windows)
+		if span is None:
+			break
+		begin, end, _ = span
+		token = arguments[begin:end]
+		position = end
+		if token == '--':
+			return (arguments[:begin] + arguments[end:]).strip(), None
+		if token not in ('-o', '--output'):
+			continue
+
+		folder_span = _transfer_token_span(arguments, position, destination_windows)
+		if folder_span is None:
+			break
+		folder_begin, folder_end, closed = folder_span
+		if not closed:
+			break
 		folder = arguments[folder_begin:folder_end]
 		if destination_windows:
 			if len(folder) >= 2 and folder[0] == folder[-1] and folder[0] in "'\"":
