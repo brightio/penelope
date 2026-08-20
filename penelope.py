@@ -1212,15 +1212,19 @@ class MainMenu(BetterCMD):
 
 	def do_portfwd(self, line):
 		"""
-		[<host:port> (->|<-) <host:port> | stop <id>]
-		Local and Remote port forwarding
+		[<local host:port> -> <remote host:port> | stop <id|*>]
+		Forward a local port through the session to a host the target can reach
+		The left side is on your machine and the right side is resolved by the target: Penelope
+		listens on the left, and each connection is tunneled through the session so that the
+		target is the one connecting to the right. Select a session first with "use <ID>".
 
 		Examples:
 
-			portfwd					Show active Port Forwards
-			portfwd -> 192.168.0.1:80		Forward 127.0.0.1:80 to 192.168.0.1:80
-			portfwd 8888 -> 192.168.0.1:80		Forward 127.0.0.1:8888 to 192.168.0.1:80
-			portfwd 0.0.0.0:8080 -> 192.168.0.1:80	Forward 0.0.0.0:8080 to 192.168.0.1:80
+			portfwd -> 127.0.0.1:3306		Reach the target's own MySQL on your 127.0.0.1:3306
+			portfwd 3307 -> 127.0.0.1:3306		Same, but listen on your 127.0.0.1:3307
+			portfwd -> 192.168.0.1:80		Reach 192.168.0.1:80 from the target's network, on your 127.0.0.1:80
+			portfwd 0.0.0.0:8080 -> 192.168.0.1:80	Same, but listen on 0.0.0.0:8080 so others can use it too
+			portfwd					List the active Port Forwards and their IDs
 			portfwd stop 1				Stop the Port Forward with ID 1
 			portfwd stop *				Stop all Port Forwards
 		"""
