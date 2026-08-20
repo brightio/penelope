@@ -588,17 +588,44 @@ def ask(text):
 			print("^C")
 			return ' '
 
+def ask_listener():
+	"""Pick which Listener the payloads should point at. Returns the chosen Listeners,
+	or None if the question was not answered. Does not ask when there is only one."""
+	listeners = list(core.listeners.values())
+	if len(listeners) < 2:
+		return listeners
+
+	table = Table(joinchar=' | ')
+	table.header = [paint(header).orange for header in ('ID', 'Host', 'Port')]
+	for listener in listeners:
+		table += [listener.id, listener.host, listener.port]
+	print('\n', indent(str(table), '  '), '\n', sep='')
+
+	while True:
+		answer = ask("Listener ID? (<id>/*): ").strip()
+		if not answer:
+			return None
+		if answer == '*':
+			return listeners
+		try:
+			return [core.listeners[int(answer)]]
+		except (KeyError, ValueError):
+			logger.warning("Invalid Listener ID")
+
 def ask_target_os():
 	"""Ask which OS the target runs, so we only show payloads that can run there.
 	Returns None if the question was not answered (empty input, Ctrl-C, or no tty)."""
+	numbered = {'1': 'linux', '2': 'windows', '3': 'both'}
 	while True:
-		answer = ask("Target OS? (linux/windows/both): ").strip().lower()
+		answer = ask("Target OS? (1/linux, 2/windows, 3/both): ").strip().lower()
 		if not answer:
 			return None
+		if answer in numbered:
+			return numbered[answer]
 		for choice in ('linux', 'windows', 'both'):
 			if choice.startswith(answer):
 				return choice
-		logger.warning("Answer 'linux', 'windows' or 'both'")
+		logger.warning("Answer 1/linux, 2/windows or 3/both")
 
 def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
 	readline_quote_chars_saved = None
@@ -1688,11 +1715,16 @@ class MainMenu(BetterCMD):
 		"""
 		[interface_name]
 		Show example reverse-shell commands for the active listeners
-		Asks whether the target runs Linux or Windows first, so you only get the payloads that
-		can actually run there. Answer "both" for the full list.
+		Asks which Listener to point at, and whether the target runs Linux or Windows, so you
+		only get the payloads that can actually run there. Answer "*" for every Listener and
+		"both" for every payload.
 		"""
 		if not core.listeners:
 			cmdlogger.warning("No Listeners to show payloads")
+			return
+
+		listeners = ask_listener()
+		if not listeners:
 			return
 
 		target_os = ask_target_os()
@@ -1700,7 +1732,7 @@ class MainMenu(BetterCMD):
 			return
 
 		print()
-		for listener in list(core.listeners.values()):
+		for listener in listeners:
 			print(listener.payloads(line, target_os))
 
 	def do_Interfaces(self, line):
@@ -7302,10 +7334,11 @@ def listener_menu():
 				break
 			elif command == 'p':
 				restore_tty()
-				target_os = ask_target_os()
+				listeners = ask_listener()
+				target_os = ask_target_os() if listeners else None
 				if target_os:
 					print()
-					for listener in list(core.listeners.values()):
+					for listener in listeners:
 						print(listener.payloads(None, target_os), end='\n\n')
 			elif command == '\x0C':
 				os.system("clear")
