@@ -1996,6 +1996,28 @@ def signal_bars(level):
 		for i, g in enumerate(glyphs)
 	)
 
+# --- bracketed paste filtering ---------------------------------------------
+# Terminals with bracketed paste enabled wrap pasted text in
+# \x1b[200~ ... \x1b[201~. Remote shells that do not understand these markers
+# echo them as literal garbage (the classic "0~" prefix / "~1" suffix around
+# pasted text), so strip them before forwarding stdin to the session.
+BRACKETED_PASTE_RE = re.compile(rb'\x1b\[20[01]~')
+_BP_MARKER_PREFIXES = tuple(b'\x1b[201~'[:n] for n in range(5, 0, -1)) \
+	+ tuple(b'\x1b[200~'[:n] for n in range(5, 0, -1))
+
+def strip_bracketed_paste(data, state):
+	"""Remove paste markers from `data`. `state` is a one-element list holding
+	bytes carried over from the previous read (a marker split across reads)."""
+	data = state[0] + data
+	state[0] = b''
+	data = BRACKETED_PASTE_RE.sub(b'', data)
+	for prefix in _BP_MARKER_PREFIXES:
+		if data.endswith(prefix):
+			state[0] = prefix
+			data = data[:-len(prefix)]
+			break
+	return data
+
 class Core:
 
 	def __init__(self):
@@ -2019,6 +2041,7 @@ class Core:
 		self.forwardings = {}
 
 		self.output_line_buffer = LineBuffer(1)
+		self._paste_state = [b'']
 		self.wait_input = False
 
 	def __getattr__(self, name):
@@ -2142,6 +2165,11 @@ class Core:
 							continue
 
 						data = os.read(sys.stdin.fileno(), options.network_buffer_size)
+
+						if not options.keep_bracketed_paste:
+							data = strip_bracketed_paste(data, self._paste_state)
+							if not data:
+								continue
 
 						if session.subtype == 'cmd':
 							self._cmd = data
@@ -3987,6 +4015,7 @@ class Session:
 		print(paint('─' * shutil.get_terminal_size()[0]).darkgrey)
 
 		core.attached_session = self
+		core._paste_state[0] = b''
 		self.attaching = False
 		menu.active.clear()
 		core.rlist.append(sys.stdin)
@@ -7406,6 +7435,7 @@ class Options:
 		self.no_attach = False
 		self.no_upgrade = False
 		self.keep_history = False
+		self.keep_bracketed_paste = False
 		self.debug = False
 		self.dev_mode = False
 		self.latency = .01
@@ -7560,6 +7590,7 @@ def main():
 	misc.add_argument("-ms", "--max-sessions", help="Max active sessions per host (default 5, 0 = reject all new)", type=int, metavar='')
 	misc.add_argument("-C", "--no-attach", help="Do not auto-attach on new sessions", action="store_true")
 	misc.add_argument("-U", "--no-upgrade", help="Disable shell auto-upgrade", action="store_true")
+	misc.add_argument("--keep-bracketed-paste", help="Do not strip bracketed paste markers (\\x1b[200~ / \\x1b[201~) from pasted input", action="store_true")
 	misc.add_argument("-H", "--keep-history", help="Keep target shell history (do not set HISTFILE=/dev/null)", action="store_true")
 	misc.add_argument("-O", "--oscp-safe", help="Enable OSCP-safe mode", action="store_true")
 	misc.add_argument("--no-disk", help="Keep all state in RAM (tmpfs); nothing persists to disk", action="store_true")
