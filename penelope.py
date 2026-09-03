@@ -2000,7 +2000,9 @@ def signal_bars(level):
 # Terminals with bracketed paste enabled wrap pasted text in
 # \x1b[200~ ... \x1b[201~. Remote shells that do not understand these markers
 # echo them as literal garbage (the classic "0~" prefix / "~1" suffix around
-# pasted text), so strip them before forwarding stdin to the session.
+# pasted text), so strip them before forwarding stdin to a Raw session.
+# PTY sessions are deliberately left alone: the remote turns bracketed paste
+# on itself and relies on the markers arriving intact.
 BRACKETED_PASTE_RE = re.compile(rb'\x1b\[20[01]~')
 _BP_MARKER_PREFIXES = tuple(b'\x1b[201~'[:n] for n in range(5, 0, -1)) \
 	+ tuple(b'\x1b[200~'[:n] for n in range(5, 0, -1))
@@ -2166,7 +2168,10 @@ class Core:
 
 						data = os.read(sys.stdin.fileno(), options.network_buffer_size)
 
-						if not options.keep_bracketed_paste:
+						# Only Raw sessions need this. A PTY target turns bracketed paste
+						# on itself and relies on the markers arriving intact, e.g. vim
+						# suppressing auto-indent, bash not running a pasted newline.
+						if session.type == 'Raw' and not options.keep_bracketed_paste:
 							data = strip_bracketed_paste(data, self._paste_state)
 							if not data:
 								continue
@@ -7590,7 +7595,7 @@ def main():
 	misc.add_argument("-ms", "--max-sessions", help="Max active sessions per host (default 5, 0 = reject all new)", type=int, metavar='')
 	misc.add_argument("-C", "--no-attach", help="Do not auto-attach on new sessions", action="store_true")
 	misc.add_argument("-U", "--no-upgrade", help="Disable shell auto-upgrade", action="store_true")
-	misc.add_argument("--keep-bracketed-paste", help="Do not strip bracketed paste markers (\\x1b[200~ / \\x1b[201~) from pasted input", action="store_true")
+	misc.add_argument("--keep-bracketed-paste", help="Do not strip bracketed paste markers (\\x1b[200~ / \\x1b[201~) from pasted input in Raw sessions", action="store_true")
 	misc.add_argument("-H", "--keep-history", help="Keep target shell history (do not set HISTFILE=/dev/null)", action="store_true")
 	misc.add_argument("-O", "--oscp-safe", help="Enable OSCP-safe mode", action="store_true")
 	misc.add_argument("--no-disk", help="Keep all state in RAM (tmpfs); nothing persists to disk", action="store_true")
