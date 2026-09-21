@@ -4907,7 +4907,12 @@ class Session:
 					f' || powershell -nop -c "(New-Object Net.WebClient).DownloadFile(\'{_zip_url}\',\'{_zip_dest}\')")'
 					f' && echo DOWNLOAD OK'
 				)
-				unzip_cmd = f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso = new ActiveXObject(\'Scripting.FileSystemObject\'); sh.Namespace(\'{dst_escaped}\').CopyHere(sh.Namespace(\'{tmp_escaped}\\\\{temp_remote_file_zip}\').Items(), 16); while(sh.Busy) {{WScript.Sleep(100);}} fso.DeleteFile(\'{tmp_escaped}\\\\{temp_remote_file_zip}\');close()" && echo UNZIP OK'
+				unzip_cmd = (
+					f'mshta "javascript:var sh=new ActiveXObject(\'shell.application\'); var fso=new ActiveXObject(\'Scripting.FileSystemObject\'); var z=\'{tmp_escaped}\\\\{temp_remote_file_zip}\'; var src=sh.Namespace(z); var dst=sh.Namespace(\'{dst_escaped}\'); if(src&&dst){{var need=dst.Items().Count+src.Items().Count; dst.CopyHere(src.Items(),1556); for(var i=0;i<600;i++){{if(dst.Items().Count>=need)break; var t=new Date().getTime()+100; while(new Date().getTime()<t){{}}}} try{{fso.DeleteFile(z);}}catch(e){{}}}} close()"'
+					f' & (if exist "{_zip_dest}" (tar.exe -xf "{_zip_dest}" -C "{destination}" 2>NUL && del /q "{_zip_dest}"))'
+					f' & (if exist "{_zip_dest}" (powershell -nop -w hidden -c "Expand-Archive -LiteralPath \'{_zip_dest}\' -DestinationPath \'{destination}\' -Force" && del /q "{_zip_dest}"))'
+					f' & (if not exist "{_zip_dest}" echo UNZIP OK)'
+				)
 
 				with open(tempfile_bat, "w") as f:
 					f.write(fetch_cmd + "\n")
