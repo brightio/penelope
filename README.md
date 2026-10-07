@@ -73,6 +73,9 @@ pipx install penelope-shell-handler
 (*) Can be manually upgraded to PTY with the `upgrade` command
 > ⚠️  Windows support is experimental and under active development.
 
+In Windows PowerShell sessions, Tab completes the first command name and remote paths in command arguments.
+Special characters in completed names are escaped for PowerShell. Variable, expression, and parameter completion are not supported.
+
 ### Global Features
 - Streamlined interaction with targets through modules
 - Multiple sessions

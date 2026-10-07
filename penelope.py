@@ -3038,6 +3038,41 @@ class Session:
 
 		return []
 
+	@staticmethod
+	def powershell_string(text):
+		# Encode data rather than interpolating it into PowerShell source.
+		encoded = base64.b64encode(text.encode('utf-8')).decode('ascii')
+		return f"([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')))"
+
+	def get_remote_powershell_path_completion(self, text):
+		# This lookup is for attached PowerShell input; Main Menu completion still uses dir.
+		cut = max(text.rfind('/'), text.rfind('\\')) + 1
+		if not cut and len(text) >= 2 and text[1] == ':':
+			cut = 2
+		head = text[:cut]
+		directory = self.powershell_string(head or '.')
+		pattern = self.powershell_string(text[cut:] + '*')
+		result = self.exec(
+			f"Microsoft.PowerShell.Management\\Get-ChildItem -LiteralPath {directory} -Filter {pattern} -Force -ErrorAction SilentlyContinue"
+			" | Microsoft.PowerShell.Core\\ForEach-Object { if ($_ -is [IO.FileSystemInfo]) {"
+			" if ($_.PSIsContainer) { $_.Name + '\\' } else { $_.Name } } }",
+			value=True
+		)
+		return [head + name for name in result.splitlines()] if isinstance(result, str) else []
+
+	def get_remote_command_completion(self, text):
+		if not text:
+			return []
+		pattern = f"([Management.Automation.WildcardPattern]::Escape({self.powershell_string(text)}) + '*')"
+		result = self.exec(
+			f"Microsoft.PowerShell.Core\\Get-Command -Name {pattern} -ErrorAction SilentlyContinue"
+			" | Microsoft.PowerShell.Utility\\Select-Object -ExpandProperty Name",
+			value=True
+		)
+		if not isinstance(result, str):
+			return []
+		return list(dict.fromkeys(name for name in result.splitlines() if name.lower().startswith(text.lower())))
+
 	def get_tty(self, silent=False):
 		response = self.exec("tty", agent_typing=True, value=True) # TODO check binary
 		if not (isinstance(response, str) and response.startswith('/')):
@@ -3957,10 +3992,108 @@ class Session:
 		elif self.OS == 'Windows': # TODO
 			pass
 
+	@staticmethod
+	def powershell_completion_context(line, begidx, endidx):
+		# Read literal words only; never evaluate expressions to obtain a path.
+		# fixed is the decoded prefix before readline's replacement range.
+		single_quotes, double_quotes = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
+		word, quote, start, i, closed, initial_quote = '', '', 0, 0, False, ''
+		fixed, fixed_quote = None, ''
+		while i < endidx:
+			if i == begidx:
+				fixed, fixed_quote = word, quote
+			c = line[i]
+			if closed and not c.isspace():
+				return None
+			if c in '\r\n' or (ord(c) < 32 and c != '\t'):
+				return None
+			if c == '`' and quote != "'":
+				if i + 1 == endidx:
+					break # Readline can stop a common prefix midway through an escape.
+				if line[i + 1] in '0abefnrtvu':
+					return None
+				word += line[i + 1]
+				i += 2
+				continue
+			quotes = single_quotes if quote == "'" else double_quotes
+			if quote and c in quotes:
+				if i + 1 < endidx and line[i + 1] in quotes:
+					word += c
+					i += 2
+					continue
+				quote, closed = '', True
+			elif not quote and c in single_quotes + double_quotes:
+				if i != start:
+					return None
+				quote = "'" if c in single_quotes else '"'
+				initial_quote = quote
+			elif not quote and c.isspace():
+				word, start, closed, initial_quote = '', i + 1, False, ''
+			elif (quote != "'" and c == '$') or (not quote and (c in ';|&()<>{},' or (not word and c in '@#'))):
+				return None
+			else:
+				word += c
+			i += 1
+		if begidx == endidx:
+			fixed, fixed_quote = word, quote
+		if fixed is None or begidx < start:
+			return None
+		return word, fixed, fixed_quote, quote, start, initial_quote, closed
+
+	@staticmethod
+	def escape_powershell_completion(text, quote=''):
+		single_quotes, double_quotes = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
+		if quote == "'":
+			return ''.join(c * 2 if c in single_quotes else c for c in text)
+		special = '`$' + double_quotes
+		if not quote:
+			special += single_quotes + ';|&()<>{},@#'
+		return ''.join('`' + c if c in special or (not quote and (c.isspace() or (i == 0 and c in '-\u2013\u2014\u2015')))
+			else c for i, c in enumerate(text))
+
+	def powershell_completion_matches(self, line, begidx, endidx):
+		context = self.powershell_completion_context(line, begidx, endidx)
+		if context is None:
+			return []
+		word, fixed, quote, _, start, initial_quote, closed = context
+		command = not line[:start].strip()
+		if command and initial_quote:
+			return []
+		lister = self.get_remote_command_completion if command else self.get_remote_powershell_path_completion
+		matches = []
+		for name in lister(word):
+			if not name.lower().startswith(word.lower()) or any(ord(c) < 32 or ord(c) == 127 for c in name):
+				continue
+			suffix, rendering_quote, opening = name[len(fixed):], quote, ''
+			auto_quote = not command and begidx == start and not initial_quote and any(c.isspace() for c in name)
+			if begidx == start and (initial_quote or auto_quote):
+				rendering_quote = opening = initial_quote or '"'
+			rendered = opening + self.escape_powershell_completion(suffix, rendering_quote)
+			if rendering_quote and (auto_quote or closed or not name.endswith(('\\', '/'))):
+				closing_quotes = "'\u2018\u2019\u201a\u201b" if rendering_quote == "'" else '"\u201c\u201d\u201e'
+				if not line[endidx:] or line[endidx] not in closing_quotes:
+					rendered += rendering_quote
+			matches.append(rendered)
+		return matches
+
+	def complete_remote_path(self, text, state):
+		if state == 0:
+			line = readline.get_line_buffer()
+			begidx = readline.get_begidx()
+			endidx = readline.get_endidx()
+			self.completion_matches = self.powershell_completion_matches(line, begidx, endidx)
+		try:
+			return self.completion_matches[state]
+		except IndexError:
+			return None
+
 	def readline_loop(self):
 		while core.attached_session == self:
 			try:
-				cmd = input("\033[s\033[u", self.histfile, options.histlength, None, "\t") # TODO
+				completer = self.complete_remote_path if readline and self.OS == 'Windows' and self.subtype == 'psh' else None
+				completer_delims = " \t\n" if completer else "\t"
+				cmd = input("\033[s\033[u", self.histfile, options.histlength, completer,
+					completer_delims)
 				if self.subtype == 'cmd':
 					assert len(cmd) <= MAX_CMD_PROMPT_LEN
 				#self.record(b"\n" + cmd.encode(), _input=True)
