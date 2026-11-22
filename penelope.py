@@ -2716,8 +2716,19 @@ class Session:
 					f"{paint(' Session ID').green} {paint('<' + str(self.id) + '>').yellow}"
 				)
 
-				self.directory = options.basedir / "sessions" / self.name.replace("/", "_")
-				self.directory.mkdir(parents=True, exist_ok=True)
+				# Cap the path component so even an unexpected name can't exceed the
+				# filesystem's per-component limit (255 bytes on ext4/most Linux FSes).
+				dir_component = self.name.replace("/", "_").encode()[:200].decode(errors="ignore")
+				self.directory = options.basedir / "sessions" / dir_component
+				try:
+					self.directory.mkdir(parents=True, exist_ok=True)
+				except OSError as e:
+					# Never let one bad session take down the listener and every other
+					# session: drop just this shell and keep serving.
+					logger.error(f"Cannot create session directory ({e}); dropping shell from {self.ip}")
+					core.sessions.pop(self.id, None)
+					self.socket.close()
+					return
 				self.histfile = self.directory / "readline_history"
 				if not options.no_log:
 					log_user = re.sub(r"[\\/]", "_", self.user).replace("(", "_").replace(")", "")
