@@ -95,6 +95,13 @@ def sanitize_name(s, maxlen=48):
 	s = re.sub(r'\s+', '_', ''.join(c for c in s if c.isprintable())).strip('_')
 	return s[:maxlen]
 
+def looks_like_fingerprint_echo(field, maxlen=64):
+	"""A genuine `uname -n/-s/-m` value is a single short token. Anything with
+	whitespace, control chars, or excessive length means the target shell echoed our
+	command back (e.g. a dumb PTY with broken readline) instead of running it."""
+	f = sanitize_meta(field)
+	return (not f) or len(f) > maxlen or re.search(r'\s', f) is not None
+
 HTTP_CONTROL_CHAR_TABLE = {char: r'\x{:02x}'.format(char) for char in list(range(32)) + list(range(127, 160))}
 HTTP_CONTROL_CHAR_TABLE[ord('\\')] = r'\\'
 
@@ -2906,6 +2913,10 @@ class Session:
 
 			try:
 				fields = response.split("\t")
+				if len(fields) != 3 or any(looks_like_fingerprint_echo(x) for x in fields):
+					logger.debug("Discarding fingerprint: response looks like a shell echo, not uname output")
+					self.hostname = self.system = self.arch = ''
+					return False
 				self.hostname, self.system, self.arch = (sanitize_name(x) for x in fields)
 			except Exception:
 				return False
