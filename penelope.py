@@ -84,6 +84,24 @@ shell_escape   = lambda s: ''.join((chr(92) + c if c in (' ' + chr(39) + chr(34)
 shell_escape_glob = lambda s: re.sub(r'[^\w@%+=:,./~*?\[\]-]', lambda m: '\\' + m.group(0), s)
 visible_len   = lambda s: len(re.sub(r'\x1b\[[0-9;]*m|[\x01\x02]', '', str(s)))
 sanitize_meta = lambda s: ''.join(c for c in s if c.isprintable()) if isinstance(s, str) else s
+
+def sanitize_name(s, maxlen=48):
+	"""Sanitize a fingerprint field (hostname/system/arch) for use in the session
+	name and its filesystem path: printable chars only, whitespace collapsed to '_',
+	and a hard length cap so an unexpected value can never produce an over-long path
+	component (OSError: [Errno 36] File name too long)."""
+	if not isinstance(s, str):
+		return s
+	s = re.sub(r'\s+', '_', ''.join(c for c in s if c.isprintable())).strip('_')
+	return s[:maxlen]
+
+def looks_like_fingerprint_echo(field, maxlen=64):
+	"""A genuine `uname -n/-s/-m` value is a single short token. Anything with
+	whitespace, control chars, or excessive length means the target shell echoed our
+	command back (e.g. a dumb PTY with broken readline) instead of running it."""
+	f = sanitize_meta(field)
+	return (not f) or len(f) > maxlen or re.search(r'\s', f) is not None
+
 HTTP_CONTROL_CHAR_TABLE = {char: r'\x{:02x}'.format(char) for char in list(range(32)) + list(range(127, 160))}
 HTTP_CONTROL_CHAR_TABLE[ord('\\')] = r'\\'
 
@@ -2686,7 +2704,7 @@ class Session:
 					else:
 						self.hostname = target
 
-				self.hostname = sanitize_meta(self.hostname)
+				self.hostname = sanitize_name(self.hostname)
 				hostname = self.hostname
 				c1 = '~' if hostname else ''
 				ip = self.ip
@@ -2716,8 +2734,19 @@ class Session:
 					f"{paint(' Session ID').green} {paint('<' + str(self.id) + '>').yellow}"
 				)
 
-				self.directory = options.basedir / "sessions" / self.name.replace("/", "_")
-				self.directory.mkdir(parents=True, exist_ok=True)
+				# Cap the path component so even an unexpected name can't exceed the
+				# filesystem's per-component limit (255 bytes on ext4/most Linux FSes).
+				dir_component = self.name.replace("/", "_").encode()[:200].decode(errors="ignore")
+				self.directory = options.basedir / "sessions" / dir_component
+				try:
+					self.directory.mkdir(parents=True, exist_ok=True)
+				except OSError as e:
+					# Never let one bad session take down the listener and every other
+					# session: drop just this shell and keep serving.
+					logger.error(f"Cannot create session directory ({e}); dropping shell from {self.ip}")
+					core.sessions.pop(self.id, None)
+					self.socket.close()
+					return
 				self.histfile = self.directory / "readline_history"
 				if not options.no_log:
 					log_user = re.sub(r"[\\/]", "_", self.user).replace("(", "_").replace(")", "")
@@ -2883,7 +2912,12 @@ class Session:
 			)
 
 			try:
-				self.hostname, self.system, self.arch = (sanitize_meta(x) for x in response.split("\t"))
+				fields = response.split("\t")
+				if len(fields) != 3 or any(looks_like_fingerprint_echo(x) for x in fields):
+					logger.debug("Discarding fingerprint: response looks like a shell echo, not uname output")
+					self.hostname = self.system = self.arch = ''
+					return False
+				self.hostname, self.system, self.arch = (sanitize_name(x) for x in fields)
 			except Exception:
 				return False
 
