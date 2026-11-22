@@ -84,6 +84,17 @@ shell_escape   = lambda s: ''.join((chr(92) + c if c in (' ' + chr(39) + chr(34)
 shell_escape_glob = lambda s: re.sub(r'[^\w@%+=:,./~*?\[\]-]', lambda m: '\\' + m.group(0), s)
 visible_len   = lambda s: len(re.sub(r'\x1b\[[0-9;]*m|[\x01\x02]', '', str(s)))
 sanitize_meta = lambda s: ''.join(c for c in s if c.isprintable()) if isinstance(s, str) else s
+
+def sanitize_name(s, maxlen=48):
+	"""Sanitize a fingerprint field (hostname/system/arch) for use in the session
+	name and its filesystem path: printable chars only, whitespace collapsed to '_',
+	and a hard length cap so an unexpected value can never produce an over-long path
+	component (OSError: [Errno 36] File name too long)."""
+	if not isinstance(s, str):
+		return s
+	s = re.sub(r'\s+', '_', ''.join(c for c in s if c.isprintable())).strip('_')
+	return s[:maxlen]
+
 HTTP_CONTROL_CHAR_TABLE = {char: r'\x{:02x}'.format(char) for char in list(range(32)) + list(range(127, 160))}
 HTTP_CONTROL_CHAR_TABLE[ord('\\')] = r'\\'
 
@@ -2686,7 +2697,7 @@ class Session:
 					else:
 						self.hostname = target
 
-				self.hostname = sanitize_meta(self.hostname)
+				self.hostname = sanitize_name(self.hostname)
 				hostname = self.hostname
 				c1 = '~' if hostname else ''
 				ip = self.ip
@@ -2894,7 +2905,8 @@ class Session:
 			)
 
 			try:
-				self.hostname, self.system, self.arch = (sanitize_meta(x) for x in response.split("\t"))
+				fields = response.split("\t")
+				self.hostname, self.system, self.arch = (sanitize_name(x) for x in fields)
 			except Exception:
 				return False
 
